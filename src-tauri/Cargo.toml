@@ -1,0 +1,27 @@
+[package]
+name = "kvm-share"
+version = "0.1.1"
+description = "Cross-platform mouse and keyboard sharing software"
+authors = ["KVM Share Team"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "1.8", features = ["api-all"] }
+tokio = { version = "1.0", features = ["full"] }
+lazy_static = "1.4"
+
+# 平台特定依赖将在后续任务中添加
+# libusb = "0.3"
+# winapi = { version = "0.3", features = ["winuser", "winbase"] }
+# core-foundation = "0.9"
+# core-graphics = "0.22"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = []

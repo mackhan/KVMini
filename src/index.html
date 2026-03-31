@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KVM Share - 跨平台键鼠共享</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>KVM Share</h1>
+            <p>跨平台鼠标键盘共享软件</p>
+        </header>
+        
+        <div class="status-panel">
+            <div class="status-item">
+                <span class="status-label">连接状态:</span>
+                <span id="connection-status" class="status-disconnected">断开</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">连接方式:</span>
+                <span id="connection-type">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">延迟:</span>
+                <span id="latency">-</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connect-btn" class="btn btn-primary">连接设备</button>
+            <button id="disconnect-btn" class="btn btn-secondary" disabled>断开连接</button>
+            <button id="settings-btn" class="btn btn-outline">设置</button>
+        </div>
+
+        <div class="devices-panel">
+            <h3>可用设备</h3>
+            <div id="devices-list" class="devices-list">
+                <div class="no-devices">未发现设备</div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KVMini · Agent Dashboard — 2026.03.31</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2236;
+    --border: #1e293b;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #64748b;
+    --accent: #3b82f6;
+    --accent2: #8b5cf6;
+    --green: #10b981;
+    --green-bg: rgba(16,185,129,0.10);
+    --amber: #f59e0b;
+    --amber-bg: rgba(245,158,11,0.10);
+    --cyan: #06b6d4;
+    --cyan-bg: rgba(6,182,212,0.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ─── Layout ─── */
+  .page { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
+
+  /* ─── Header ─── */
+  .header {
+    padding: 32px 0 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+  }
+  .header h1 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: var(--text);
+  }
+  .header .sub {
+    font-size: 13px;
+    color: var(--text2);
+    margin-top: 4px;
+  }
+  .header .date {
+    font-size: 13px;
+    color: var(--text2);
+    text-align: right;
+    font-family: 'SF Mono', Menlo, monospace;
+    white-space: nowrap;
+  }
+  .header .date strong {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text);
+    display: block;
+    line-height: 1;
+  }
+
+  /* ─── Section ─── */
+  .section { margin-bottom: 32px; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ─── §1 Core Metrics ─── */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .metric {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    transition: transform 0.15s;
+  }
+  .metric:hover { transform: translateY(-2px); }
+  .metric .num {
+    font-size: 30px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .metric .lbl {
+    font-size: 12px;
+    color: var(--text2);
+    margin-top: 6px;
+  }
+
+  /* ─── §2 Timeline ─── */
+  .tl { position: relative; padding-left: 20px; }
+  .tl::before {
+    content: '';
+    position: absolute;
+    left: 5px; top: 6px; bottom: 6px;
+    width: 2px;
+    background: var(--border);
+  }
+  .tl-row {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 12px;
+    position: relative;
+    padding: 10px 0;
+  }
+  .tl-row + .tl-row { border-top: 1px solid rgba(30,41,59,0.5); }
+  .tl-row::before {
+    content: '';
+    position: absolute;
+    left: -18px; top: 16px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+  .tl-row.pending::before { background: var(--amber); }
+  .tl-when {
+    font-size: 12px;
+    color: var(--text2);
+    font-family: 'SF Mono', Menlo, monospace;
+    padding-top: 2px;
+  }
+  .tl-what { font-size: 13px; }
+  .tl-what strong { font-weight: 600; }
+  .tl-what .desc {
+    color: var(--text2);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  /* ─── §4 Task Reports ─── */
+  .reports {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .report {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: transform 0.15s;
+  }
+  .report:hover { transform: translateY(-2px); }
+  .report.full { grid-column: 1 / -1; }
+  .report-head {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .report-head .icon {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .report-head .rpt-title {
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+  }
+  .badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .badge-done { background: var(--green-bg); color: var(--green); }
+  .badge-deep { background: var(--cyan-bg); color: var(--cyan); }
+  .badge-wip  { background: var(--amber-bg); color: var(--amber); }
+  .report-body {
+    padding: 14px 18px 16px;
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.7;
+  }
+  .report-body strong { color: var(--text); font-weight: 500; }
+
+  /* source tags */
+  .src-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+  .src-tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text3);
+  }
+
+  /* ─── File links ─── */
+  a.fl {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dashed var(--text3);
+    transition: color 0.15s, border-color 0.15s;
+    cursor: pointer;
+  }
+  a.fl:hover {
+    color: var(--accent) !important;
+    border-bottom-color: var(--accent);
+  }
+  a.fl .arr { font-size: 10px; opacity: 0.4; margin-left: 3px; }
+  a.fl:hover .arr { opacity: 1; }
+
+  /* ─── Footer ─── */
+  .footer {
+    text-align: center;
+    padding: 20px 0;
+    font-size: 11px;
+    color: var(--text3);
+    border-top: 1px solid var(--border);
+  }
+
+  /* ─── Animations ─── */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .section { animation: fadeIn 0.4s ease both; }
+  .section:nth-child(2) { animation-delay: 0.05s; }
+  .section:nth-child(3) { animation-delay: 0.10s; }
+  .section:nth-child(4) { animation-delay: 0.15s; }
+
+  /* ─── Responsive ─── */
+  @media (max-width: 768px) {
+    .page { padding: 0 16px 32px; }
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+    .reports { grid-template-columns: 1fr; }
+    .report.full { grid-column: 1; }
+    .tl-row { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ═══════ HEADER ═══════ -->
+<div class="header">
+  <div>
+    <h1>🐾 KVMini · Agent Dashboard</h1>
+    <div class="sub">跨平台键鼠共享软件开发项目</div>
+  </div>
+  <div class="date">
+    <strong>03.31</strong>
+    2026 周一
+  </div>
+</div>
+
+<!-- ═══════ §1 CORE METRICS ═══════ -->
+<div class="section">
+  <div class="section-label">核心数据</div>
+  <div class="metrics">
+    <div class="metric">
+      <div class="num" style="color:var(--accent)">5</div>
+      <div class="lbl">完成的任务</div>
+    </div>
+    <div class="metric">
+      <div class="num" style="color:var(--green)">3</div>
+      <div class="lbl">输出文件</div>
+    </div>
+    <div class="metric">
+      <div class="num" style="color:var(--accent2)">2</div>
+      <div class="lbl">信息来源</div>
+    </div>
+    <div class="metric">
+      <div class="num" style="color:var(--cyan)">8</div>
+      <div class="lbl">工具调用</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ §2 TIMELINE ═══════ -->
+<div class="section">
+  <div class="section-label">时间线</div>
+  <div class="tl">
+    <div class="tl-row">
+      <div class="tl-when">11:49 · 用户请求</div>
+      <div class="tl-what">
+        <strong>安装并执行 agent-dashboard-skill</strong>
+        <div class="desc">用户要求安装来自企业微信缓存目录的dashboard技能</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">11:50 · 文件搜索</div>
+      <div class="tl-what">
+        <strong>定位技能文件位置</strong>
+        <div class="desc">在企业微信缓存目录中找到agent-dashboard-skill文件夹</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">11:51 · 技能分析</div>
+      <div class="tl-what">
+        <strong>读取技能说明文档</strong>
+        <div class="desc">了解agent-dashboard技能的功能和使用方法</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">11:52 · 安装部署</div>
+      <div class="tl-what">
+        <strong>复制技能到WorkBuddy目录</strong>
+        <div class="desc">将技能正确安装到~/.workbuddy/skills/agent-dashboard</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">11:53 · 生成看板</div>
+      <div class="tl-what">
+        <strong>创建示例dashboard</strong>
+        <div class="desc">基于安装过程生成可视化工作看板</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ §4 TASK REPORTS ═══════ -->
+<div class="section">
+  <div class="section-label">任务报告</div>
+  <div class="reports">
+    <div class="report">
+      <div class="report-head">
+        <div class="icon" style="background:var(--amber-bg);">📦</div>
+        <div class="rpt-title">技能安装报告</div>
+        <span class="badge badge-done">✅ 完成</span>
+      </div>
+      <div class="report-body">
+        <strong>成功安装 agent-dashboard-skill</strong><br>
+        从企业微信缓存目录复制到WorkBuddy技能目录，包含完整的HTML模板、CSS样式和JavaScript功能。
+        <div class="src-tags">
+          <span class="src-tag">WorkBuddy</span>
+          <span class="src-tag">企业微信</span>
+          <span class="src-tag">技能管理</span>
+        </div>
+      </div>
+    </div>
+    <div class="report full">
+      <div class="report-head">
+        <div class="icon" style="background:var(--cyan-bg);">🔍</div>
+        <div class="rpt-title">技能功能分析</div>
+        <span class="badge badge-deep">🔬 深度研究</span>
+      </div>
+      <div class="report-body">
+        <strong>Agent Dashboard 技能功能特性：</strong><br>
+        • 深色主题单页HTML仪表板<br>
+        • 4个核心数据指标展示<br>
+        • 时间线事件追踪<br>
+        • 任务报告卡片系统<br>
+        • 响应式设计支持移动端<br>
+        • UTF-8编码文件预览功能
+        <div class="src-tags">
+          <span class="src-tag">HTML5</span>
+          <span class="src-tag">CSS3</span>
+          <span class="src-tag">JavaScript</span>
+          <span class="src-tag">响应式设计</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  KVMini Workspace · Powered by WorkBuddy Agent · 2026-03-31 11:53
+</div>
+
+</div><!-- /.page -->
+
+<!-- ═══════ JavaScript: File opening with UTF-8 encoding fix ═══════ -->
+<script>
+const WORKSPACE = '/Users/hanyufei/Documents/Git/KVMini';
+
+function openFile(relativePath) {
+  const ext = relativePath.split('.').pop().toLowerCase();
+  const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
+
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    const fileUrl = window.location.origin + '/' + encodedPath;
+
+    if (ext === 'md' || ext === 'txt') {
+      // Text files: fetch as binary, decode as UTF-8, render in styled window
+      fetch(fileUrl)
+        .then(r => r.arrayBuffer())
+        .then(buf => {
+          const text = new TextDecoder('utf-8').decode(buf);
+          const w = window.open('', '_blank');
+          if (w) {
+            w.document.open();
+            w.document.write(
+              '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + esc(relativePath) + '</title>' +
+              '<style>body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;background:#0a0e1a;color:#e2e8f0;padding:40px 60px;line-height:1.8;max-width:900px;margin:0 auto}' +
+              'pre{white-space:pre-wrap;word-wrap:break-word;font-family:"SF Mono",Menlo,monospace;font-size:14px;background:#111827;padding:24px;border-radius:12px;border:1px solid #1e293b}' +
+              'h1{font-size:16px;color:#94a3b8;margin-bottom:12px;font-weight:500}</style></head><body>' +
+              '<h1>' + esc(relativePath) + '</h1><pre>' + esc(text) + '</pre></body></html>'
+            );
+            w.document.close();
+          }
+        })
+        .catch(() => window.open(fileUrl, '_blank'));
+    } else {
+      // Binary files (PDF, images, etc.): open directly
+      window.open(fileUrl, '_blank');
+    }
+  } else {
+    window.open('file://' + encodeURI(WORKSPACE + relativePath), '_blank');
+  }
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

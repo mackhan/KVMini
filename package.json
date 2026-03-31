@@ -1,0 +1,27 @@
+{
+  "name": "kvm-share",
+  "version": "0.1.1",
+  "description": "Cross-platform mouse and keyboard sharing software",
+  "main": "src/index.html",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "preview": "vite preview",
+    "version:update": "node scripts/version-update.js",
+    "pre-commit": "npm run test && npm run version:update",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.6.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@types/jest": "^29.5.8",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^30.3.0",
+    "ts-jest": "^29.1.2"
+  },
+  "author": "KVM Share Team",
+  "license": "MIT"
+}
