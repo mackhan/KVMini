@@ -561,6 +561,9 @@ async function saveSettings() {
                 return;
             }
         }
+
+        // 保存显示器布局配置
+        await saveLayoutConfig();
     }
 
     closeSettings();
@@ -848,3 +851,262 @@ window.closeSettings = closeSettings;
 window.saveSettings = saveSettings;
 window.clearHotkey = clearHotkey;
 window.hideError = hideError;
+
+// ─── 显示器布局配置 ───────────────────────────────────────────────────────
+
+/**
+ * 布局方向到触发边缘的映射
+ */
+const LAYOUT_TRIGGER_EDGE = {
+    'LocalLeftOfRemote':  '右边缘',
+    'LocalRightOfRemote': '左边缘',
+    'LocalAboveRemote':   '下边缘',
+    'LocalBelowRemote':   '上边缘',
+};
+
+/**
+ * 布局方向到预览 CSS 类的映射
+ */
+const LAYOUT_PREVIEW_CLASS = {
+    'LocalLeftOfRemote':  'layout-left',
+    'LocalRightOfRemote': 'layout-right',
+    'LocalAboveRemote':   'layout-above',
+    'LocalBelowRemote':   'layout-below',
+};
+
+/**
+ * 初始化显示器布局配置 UI
+ */
+async function initDisplayLayout() {
+    const select = document.getElementById('display-layout-select');
+    const preview = document.getElementById('display-layout-preview');
+    const hintEdge = document.getElementById('trigger-edge-text');
+    const localDisplay = document.getElementById('local-display');
+    const localSizeEl = document.getElementById('local-display-size');
+
+    if (!select || !preview) return;
+
+    // 加载已保存的布局配置
+    try {
+        if (invoke) {
+            const config = await invoke('get_layout_config');
+            if (config && config.layout) {
+                select.value = config.layout;
+                updateLayoutPreview(config.layout, preview, hintEdge);
+            }
+            // 显示本机屏幕尺寸
+            if (config && config.local_screen_width && localSizeEl) {
+                localSizeEl.textContent = `${config.local_screen_width}×${config.local_screen_height}`;
+            }
+        }
+    } catch (e) {
+        // 加载失败使用默认值
+    }
+
+    // 监听下拉框变化
+    select.addEventListener('change', () => {
+        updateLayoutPreview(select.value, preview, hintEdge);
+    });
+
+    // 拖拽支持（本机显示器方块）
+    if (localDisplay) {
+        localDisplay.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', 'local-display');
+            preview.classList.add('drag-over');
+        });
+
+        localDisplay.addEventListener('dragend', () => {
+            preview.classList.remove('drag-over');
+        });
+    }
+
+    // 预览区域接受拖拽
+    if (preview) {
+        preview.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        preview.addEventListener('drop', (e) => {
+            e.preventDefault();
+            preview.classList.remove('drag-over');
+
+            // 根据拖拽落点位置决定布局方向
+            const rect = preview.getBoundingClientRect();
+            const relX = e.clientX - rect.left;
+            const relY = e.clientY - rect.top;
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            let newLayout;
+            const dx = relX - centerX;
+            const dy = relY - centerY;
+
+            if (Math.abs(dx) > Math.abs(dy)) {
+                // 水平方向
+                newLayout = dx < 0 ? 'LocalRightOfRemote' : 'LocalLeftOfRemote';
+            } else {
+                // 垂直方向
+                newLayout = dy < 0 ? 'LocalBelowRemote' : 'LocalAboveRemote';
+            }
+
+            select.value = newLayout;
+            updateLayoutPreview(newLayout, preview, hintEdge);
+        });
+    }
+}
+
+/**
+ * 更新布局预览和提示文字
+ */
+function updateLayoutPreview(layout, preview, hintEdge) {
+    // 移除所有布局类
+    preview.classList.remove('layout-left', 'layout-right', 'layout-above', 'layout-below');
+
+    // 添加对应布局类
+    const cls = LAYOUT_PREVIEW_CLASS[layout];
+    if (cls) preview.classList.add(cls);
+
+    // 更新提示文字
+    if (hintEdge) {
+        hintEdge.textContent = LAYOUT_TRIGGER_EDGE[layout] || '右边缘';
+    }
+}
+
+/**
+ * 保存布局配置（在 saveSettings 中调用）
+ */
+async function saveLayoutConfig() {
+    const select = document.getElementById('display-layout-select');
+    if (!select || !invoke) return;
+
+    const config = {
+        layout: select.value,
+        local_screen_width: window.screen.width,
+        local_screen_height: window.screen.height,
+    };
+
+    try {
+        await invoke('set_layout_config', { config });
+    } catch (e) {
+        console.error('保存布局配置失败:', e);
+    }
+}
+
+// 在 DOMContentLoaded 后初始化布局配置
+document.addEventListener('DOMContentLoaded', () => {
+    // 延迟初始化，等待 invoke 可用
+    setTimeout(initDisplayLayout, 500);
+    setTimeout(initRoleSwitch, 600);
+    setTimeout(checkAccessibilityPermission, 800);
+});
+
+// ─── macOS 辅助功能权限检测 ───────────────────────────────────────────────
+
+/**
+ * 检测辅助功能权限，未授权时显示引导横幅
+ */
+async function checkAccessibilityPermission() {
+    const banner = document.getElementById('accessibility-banner');
+    if (!banner || !invoke) return;
+
+    try {
+        const status = await invoke('check_accessibility');
+        if (status === 'Denied') {
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+    } catch (e) {
+        // 检测失败，隐藏横幅（不影响主功能）
+        banner.classList.add('hidden');
+    }
+}
+
+/**
+ * 打开辅助功能设置页面
+ */
+async function openAccessibilitySettings() {
+    if (!invoke) return;
+
+    try {
+        await invoke('open_accessibility_prefs');
+        // 3 秒后重新检测权限（用户可能已授权）
+        setTimeout(checkAccessibilityPermission, 3000);
+    } catch (e) {
+        showError(`无法打开系统偏好设置: ${e}`);
+    }
+}
+
+// 暴露全局函数
+window.openAccessibilitySettings = openAccessibilitySettings;
+
+// ─── 角色切换 ─────────────────────────────────────────────────────────────
+
+/**
+ * 当前角色状态
+ */
+let currentRole = 'Server'; // 'Server' | 'Client'
+
+/**
+ * 初始化角色切换 UI
+ */
+async function initRoleSwitch() {
+    const switchBtn = document.getElementById('switch-role-btn');
+    if (!switchBtn) return;
+
+    // 加载当前角色
+    try {
+        if (invoke) {
+            const role = await invoke('get_current_role');
+            currentRole = role;
+            updateRoleUI(role);
+        }
+    } catch (e) {
+        // 使用默认值
+    }
+
+    // 监听切换按钮
+    switchBtn.addEventListener('click', async () => {
+        const newRole = currentRole === 'Server' ? 'Client' : 'Server';
+        await switchRole(newRole);
+    });
+}
+
+/**
+ * 切换角色
+ */
+async function switchRole(newRole) {
+    if (!invoke) return;
+
+    try {
+        await invoke('set_role', { newRole });
+        currentRole = newRole;
+        updateRoleUI(newRole);
+
+        const roleName = newRole === 'Server' ? '被控端' : '主控端';
+        showSuccess(`已切换为${roleName}模式`);
+
+        // 断开当前连接
+        if (appState.connected) {
+            await disconnectDevices();
+        }
+    } catch (e) {
+        showError(`角色切换失败: ${e}`);
+    }
+}
+
+/**
+ * 更新角色 UI 显示
+ */
+function updateRoleUI(role) {
+    const roleBadge = document.getElementById('current-role');
+    if (!roleBadge) return;
+
+    if (role === 'Server') {
+        roleBadge.textContent = '被控端';
+        roleBadge.className = 'role-badge role-server';
+    } else {
+        roleBadge.textContent = '主控端';
+        roleBadge.className = 'role-badge role-client';
+    }
+}
