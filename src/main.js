@@ -56,6 +56,8 @@ function initApp() {
         latency: document.getElementById('latency'),
         connectBtn: document.getElementById('connect-btn'),
         disconnectBtn: document.getElementById('disconnect-btn'),
+        startSharingBtn: document.getElementById('start-sharing-btn'),
+        permissionWarning: document.getElementById('permission-warning'),
         settingsBtn: document.getElementById('settings-btn'),
         devicesList: document.getElementById('devices-list'),
         scanBtn: document.getElementById('scan-btn'),
@@ -140,6 +142,7 @@ function setupEventListeners() {
             appState.connectionType = null;
             setConnectionStatus('disconnected');
             stopLatencyCheck();
+            hidePermissionWarning();
             showError(`⚠️ ${message}`);
             // 隐藏手动连接成功状态
             hideManualConnectStatus();
@@ -178,6 +181,7 @@ async function handleConnect() {
             setConnectionStatus('connected');
             startLatencyCheck();
             showSuccess('设备连接成功');
+            await checkPermissionAfterConnect();
         } else {
             setConnectionStatus('disconnected');
             showError('连接失败: ' + result.error);
@@ -201,6 +205,7 @@ async function handleDisconnect() {
         appState.connectionType = null;
         setConnectionStatus('disconnected');
         stopLatencyCheck();
+        hidePermissionWarning();
         showSuccess('已断开连接');
     } catch (error) {
         showError('断开连接错误: ' + error);
@@ -223,6 +228,7 @@ async function connectToDevice(deviceId) {
             const device = appState.devices.find(d => d.id === deviceId);
             if (device) saveToHistory(device);
             showSuccess(`已连接到 ${device?.name || deviceId}`);
+            await checkPermissionAfterConnect();
         } else {
             setConnectionStatus('disconnected');
             showError('连接失败: ' + result.error);
@@ -313,6 +319,7 @@ async function handleManualConnect() {
             } catch (e) {
                 console.warn('心跳监控启动失败（不影响连接）:', e);
             }
+            await checkPermissionAfterConnect();
         } else {
             // 根据错误类型显示不同提示
             let errorMsg = result.error_message || result.errorMessage || '连接失败';
@@ -1051,21 +1058,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ─── macOS 辅助功能权限检测 ───────────────────────────────────────────────
 
-/** 本次会话内是否已被用户关闭横幅 */
-let accessibilityBannerDismissed = false;
-
 /** 权限轮询定时器 ID */
 let accessibilityPollTimer = null;
 
 /**
  * 检测辅助功能权限，未授权时显示引导横幅
+ * Windows 平台不需要此权限，直接跳过
  */
 async function checkAccessibilityPermission() {
     const banner = document.getElementById('accessibility-banner');
     if (!banner || !invoke) return;
 
-    // 用户本次会话内已关闭横幅，不再显示
-    if (accessibilityBannerDismissed) return;
+    // Windows 平台不需要辅助功能权限，隐藏横幅并返回
+    const isWindows = navigator.userAgent.includes('Windows') ||
+        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
+    if (isWindows) {
+        banner.classList.add('hidden');
+        return;
+    }
 
     try {
         const status = await invoke('check_accessibility');
@@ -1089,10 +1099,6 @@ async function checkAccessibilityPermission() {
 function startAccessibilityPolling() {
     if (accessibilityPollTimer) return; // 已在轮询中
     accessibilityPollTimer = setInterval(async () => {
-        if (accessibilityBannerDismissed) {
-            stopAccessibilityPolling();
-            return;
-        }
         try {
             const status = await invoke('check_accessibility');
             if (status !== 'Denied') {
@@ -1100,11 +1106,75 @@ function startAccessibilityPolling() {
                 const banner = document.getElementById('accessibility-banner');
                 if (banner) banner.classList.add('hidden');
                 stopAccessibilityPolling();
+                // 任务4：权限授予后，若已连接则隐藏权限提示并恢复开始共享按钮
+                if (appState.connected) {
+                    hidePermissionWarning();
+                }
             }
         } catch (e) {
             // 忽略轮询错误
         }
     }, 2000);
+}
+
+/**
+ * 任务3：连接成功后检查辅助功能权限
+ * - macOS 且权限 Denied：显示提示，禁用开始共享按钮
+ * - macOS 且权限 Granted / Windows：隐藏提示，启用开始共享按钮
+ */
+async function checkPermissionAfterConnect() {
+    // 显示开始共享按钮
+    if (elements.startSharingBtn) {
+        elements.startSharingBtn.classList.remove('hidden');
+    }
+
+    // Windows 平台不需要权限检查
+    const isWindows = navigator.userAgent.includes('Windows') ||
+        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
+    if (isWindows || !invoke) {
+        hidePermissionWarning();
+        return;
+    }
+
+    try {
+        const status = await invoke('check_accessibility');
+        if (status === 'Denied') {
+            showPermissionWarning();
+        } else {
+            hidePermissionWarning();
+        }
+    } catch (e) {
+        // 检测失败，不影响主功能
+        hidePermissionWarning();
+    }
+}
+
+/**
+ * 显示连接后权限不足提示，禁用开始共享按钮
+ */
+function showPermissionWarning() {
+    if (elements.permissionWarning) {
+        elements.permissionWarning.classList.remove('hidden');
+    }
+    if (elements.startSharingBtn) {
+        elements.startSharingBtn.disabled = true;
+    }
+}
+
+/**
+ * 隐藏连接后权限不足提示，恢复开始共享按钮
+ */
+function hidePermissionWarning() {
+    if (elements.permissionWarning) {
+        elements.permissionWarning.classList.add('hidden');
+    }
+    if (elements.startSharingBtn) {
+        elements.startSharingBtn.disabled = false;
+        // 断开连接时也隐藏开始共享按钮
+        if (!appState.connected) {
+            elements.startSharingBtn.classList.add('hidden');
+        }
+    }
 }
 
 /**
@@ -1132,19 +1202,8 @@ async function openAccessibilitySettings() {
     }
 }
 
-/**
- * 关闭权限引导横幅（本次会话内不再显示）
- */
-function dismissAccessibilityBanner() {
-    accessibilityBannerDismissed = true;
-    stopAccessibilityPolling();
-    const banner = document.getElementById('accessibility-banner');
-    if (banner) banner.classList.add('hidden');
-}
-
 // 暴露全局函数
 window.openAccessibilitySettings = openAccessibilitySettings;
-window.dismissAccessibilityBanner = dismissAccessibilityBanner;
 
 // ─── 角色切换 ─────────────────────────────────────────────────────────────
 

@@ -30,6 +30,16 @@ body {
     overflow: hidden;
 }
 
+/* 可滚动内容区域（设备面板 + 历史面板） */
+.scrollable-content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
 /* 头部样式 */
 header {
     text-align: center;
@@ -192,13 +202,11 @@ header p {
     background: white;
     border-radius: 12px;
     padding: 20px;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    flex: 1;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
 }
 
 .devices-panel-header {
@@ -313,8 +321,9 @@ header p {
     background: white;
     border-radius: 12px;
     padding: 20px;
-    margin-bottom: 20px;
+    margin-bottom: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
 }
 
 .history-panel-header {
@@ -998,6 +1007,7 @@ header p {
 .display-layout-preview.drag-over {
     border-color: #3b82f6;
     background: #eff6ff;
+}
 
 /* 设备详情分隔符 */
 .device-sep {
@@ -1031,4 +1041,51 @@ header p {
     padding: 1px 5px;
     font-family: monospace;
     font-size: 11px;
+}
+
+/* 连接成功后权限不足提示 */
+.permission-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #9a3412;
+}
+
+.permission-warning-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.permission-warning-text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+/* 开始共享按钮 */
+.btn-success {
+    padding: 8px 20px;
+    background: #10b981;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.btn-success:hover {
+    background: #059669;
+}
+
+.btn-success:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: #6b7280;
 }

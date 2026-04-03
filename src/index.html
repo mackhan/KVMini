@@ -30,7 +30,6 @@
             <button id="open-accessibility-btn" class="btn btn-accessibility" onclick="openAccessibilitySettings()">
                 前往授权
             </button>
-            <button class="accessibility-banner-close" onclick="dismissAccessibilityBanner()" title="本次会话内不再提示">✕</button>
         </div>
 
         <!-- 状态面板 -->
@@ -62,12 +61,22 @@
             </div>
         </div>
 
+        <!-- 连接成功后权限不足提示（仅 macOS 且权限未授予时显示） -->
+        <div id="permission-warning" class="permission-warning hidden">
+            <span class="permission-warning-icon">⚠️</span>
+            <span class="permission-warning-text">需要辅助功能权限才能开始键鼠共享，请先前往授权</span>
+        </div>
+
         <!-- 控制按钮 -->
         <div class="controls">
             <button id="connect-btn" class="btn btn-primary">扫描设备</button>
             <button id="disconnect-btn" class="btn btn-secondary" disabled>断开连接</button>
+            <button id="start-sharing-btn" class="btn btn-success hidden">▶ 开始共享</button>
             <button id="settings-btn" class="btn btn-outline">⚙ 设置</button>
         </div>
+
+        <!-- 可滚动内容区域（设备面板 + 历史面板） -->
+        <div class="scrollable-content">
 
         <!-- 设备发现面板 -->
         <div class="devices-panel">
@@ -116,6 +125,8 @@
                 <div class="no-history">暂无连接历史</div>
             </div>
         </div>
+
+        </div><!-- /.scrollable-content -->
 
         <!-- 错误提示（非 alert） -->
         <div id="error-toast" class="error-toast hidden">
