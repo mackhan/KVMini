@@ -526,6 +526,23 @@ header p {
     cursor: pointer;
 }
 
+.settings-input-number {
+    width: 100px;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #374151;
+    background: white;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.settings-input-number:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
 /* 快捷键输入 */
 .hotkey-input-group {
     display: flex;
@@ -593,6 +610,128 @@ header p {
 
 .toggle input:checked + .toggle-slider::before {
     transform: translateX(20px);
+}
+
+/* 手动连接区域（跨网段直连） */
+.manual-connect-section {
+    margin-top: 16px;
+    padding: 14px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 8px;
+}
+
+.manual-connect-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.manual-connect-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0369a1;
+}
+
+.manual-connect-hint {
+    font-size: 11px;
+    color: #7dd3fc;
+}
+
+.manual-connect-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.manual-ip-input {
+    flex: 1;
+    min-width: 140px;
+    padding: 7px 10px;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: monospace;
+    background: white;
+    color: #0c4a6e;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.manual-ip-input:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+}
+
+.manual-ip-input.input-error {
+    border-color: #f87171;
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.2);
+}
+
+.manual-port-input {
+    width: 80px;
+    padding: 7px 8px;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: white;
+    color: #0c4a6e;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.manual-port-input:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+}
+
+.btn-manual-connect {
+    padding: 7px 16px;
+    background: #0ea5e9;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+
+.btn-manual-connect:hover {
+    background: #0284c7;
+}
+
+.btn-manual-connect:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.manual-connect-status {
+    margin-top: 8px;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+
+.manual-connect-status.status-error {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fca5a5;
+}
+
+.manual-connect-status.status-success {
+    background: #f0fdf4;
+    color: #16a34a;
+    border: 1px solid #86efac;
+}
+
+.manual-connect-status.status-connecting {
+    background: #fffbeb;
+    color: #d97706;
+    border: 1px solid #fcd34d;
 }
 
 /* 响应式设计 */

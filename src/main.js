@@ -74,6 +74,15 @@ function initApp() {
         autoReconnect: document.getElementById('auto-reconnect'),
         autoStart: document.getElementById('auto-start'),
         startMinimized: document.getElementById('start-minimized'),
+        // 手动连接
+        manualIpInput: document.getElementById('manual-ip-input'),
+        manualPortInput: document.getElementById('manual-port-input'),
+        manualConnectBtn: document.getElementById('manual-connect-btn'),
+        manualConnectStatus: document.getElementById('manual-connect-status'),
+        // 监听地址配置
+        listenIpSelect: document.getElementById('listen-ip-select'),
+        listenPortInput: document.getElementById('listen-port-input'),
+        listenAddressDisplay: document.getElementById('listen-address-display'),
     };
 
     setupEventListeners();
@@ -90,6 +99,12 @@ function setupEventListeners() {
     elements.settingsBtn.addEventListener('click', openSettings);
     elements.scanBtn.addEventListener('click', handleScan);
     elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
+    elements.manualConnectBtn.addEventListener('click', handleManualConnect);
+
+    // 手动 IP 输入框回车触发连接
+    elements.manualIpInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleManualConnect();
+    });
 
     // 快捷键录入
     elements.hotkeyInput.addEventListener('keydown', handleHotkeyCapture);
@@ -187,6 +202,91 @@ async function connectToDevice(deviceId) {
     }
 }
 
+// ─── 手动 IP 连接 ───
+
+/**
+ * 校验 IPv4 地址格式（前端校验，与后端保持一致）
+ */
+function isValidIpv4(ip) {
+    const parts = ip.split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(p => {
+        const n = Number(p);
+        return /^\d+$/.test(p) && n >= 0 && n <= 255;
+    });
+}
+
+/**
+ * 显示手动连接状态提示
+ */
+function showManualConnectStatus(type, message) {
+    const el = elements.manualConnectStatus;
+    el.textContent = message;
+    el.className = `manual-connect-status status-${type}`;
+    el.classList.remove('hidden');
+}
+
+function hideManualConnectStatus() {
+    elements.manualConnectStatus.classList.add('hidden');
+}
+
+/**
+ * 处理手动 IP 连接
+ */
+async function handleManualConnect() {
+    const ip = elements.manualIpInput.value.trim();
+    const port = parseInt(elements.manualPortInput.value, 10) || 8889;
+
+    // 前端 IPv4 格式校验
+    if (!ip) {
+        elements.manualIpInput.classList.add('input-error');
+        showManualConnectStatus('error', '请输入目标设备的 IP 地址');
+        elements.manualIpInput.focus();
+        return;
+    }
+    if (!isValidIpv4(ip)) {
+        elements.manualIpInput.classList.add('input-error');
+        showManualConnectStatus('error', `IP 格式不正确："${ip}"，请输入合法的 IPv4 地址（如 192.168.1.100）`);
+        elements.manualIpInput.focus();
+        return;
+    }
+    elements.manualIpInput.classList.remove('input-error');
+
+    // 端口范围校验
+    if (port < 1024 || port > 65535) {
+        showManualConnectStatus('error', '端口范围应为 1024-65535');
+        elements.manualPortInput.focus();
+        return;
+    }
+
+    // 开始连接
+    elements.manualConnectBtn.disabled = true;
+    showManualConnectStatus('connecting', `⏳ 正在连接 ${ip}:${port}，最长等待 5 秒...`);
+
+    try {
+        const result = await window.Platform.connectByIp(ip, port);
+        if (result.success) {
+            appState.connected = true;
+            appState.connectionType = 'Network';
+            appState.currentDevice = `manual:${ip}:${port}`;
+            setConnectionStatus('connected');
+            startLatencyCheck();
+            showManualConnectStatus('success', `✅ 已成功连接到 ${ip}:${port}`);
+            showSuccess(`已连接到 ${ip}`);
+            // 保存到历史记录（手动 IP 类型）
+            saveManualIpToHistory(ip, port);
+        } else {
+            showManualConnectStatus('error', result.error_message || result.errorMessage || '连接失败');
+            setConnectionStatus('disconnected');
+        }
+    } catch (e) {
+        showManualConnectStatus('error', `连接出错：${e}`);
+        setConnectionStatus('disconnected');
+    } finally {
+        elements.manualConnectBtn.disabled = false;
+    }
+}
+
 // ─── 设备扫描 ───
 
 // 处理扫描按钮
@@ -252,6 +352,7 @@ async function saveToHistory(device) {
         os: device.os,
         ip: device.ip,
         connectionType: device.connectionType,
+        entryType: 'auto',  // 自动发现
         lastConnected: new Date().toISOString(),
     };
 
@@ -266,7 +367,37 @@ async function saveToHistory(device) {
     const history = getHistoryFromStorage();
     const filtered = history.filter(h => h.id !== device.id);
     filtered.unshift(entry);
-    const trimmed = filtered.slice(0, 10);
+    const trimmed = filtered.slice(0, 20);
+    localStorage.setItem('kvm_connection_history', JSON.stringify(trimmed));
+    renderHistoryList(trimmed);
+}
+
+/**
+ * 保存手动 IP 连接到历史记录
+ */
+async function saveManualIpToHistory(ip, port) {
+    const id = `manual:${ip}:${port}`;
+    const entry = {
+        id,
+        name: ip,
+        os: '',
+        ip,
+        connectionType: 'Network',
+        entryType: 'manual',  // 手动 IP
+        port,
+        lastConnected: new Date().toISOString(),
+    };
+
+    try {
+        await window.Platform.saveConnectionHistory(entry);
+    } catch (e) {
+        console.warn('后端历史保存失败，降级到 localStorage:', e);
+    }
+
+    const history = getHistoryFromStorage();
+    const filtered = history.filter(h => h.id !== id);
+    filtered.unshift(entry);
+    const trimmed = filtered.slice(0, 20);
     localStorage.setItem('kvm_connection_history', JSON.stringify(trimmed));
     renderHistoryList(trimmed);
 }
@@ -307,13 +438,20 @@ function renderHistoryList(history) {
     elements.historyList.innerHTML = history.map(item => {
         const date = new Date(item.lastConnected);
         const dateStr = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+        // 区分手动 IP 和自动发现设备
+        const isManual = item.entryType === 'manual';
+        const icon = isManual ? '🔗' : '📡';
+        const typeLabel = isManual ? '手动 IP' : (item.connectionType || 'Network');
+        const reconnectAttr = isManual
+            ? `onclick="reconnectManualIp('${escapeHtml(item.ip)}', ${item.port || 8889})"`
+            : `onclick="reconnectToDevice('${escapeHtml(item.id)}', '${escapeHtml(item.name)}')"`;
         return `
             <div class="history-item">
                 <div class="history-info">
-                    <div class="history-device-name">${escapeHtml(item.name)}</div>
-                    <div class="history-meta">${escapeHtml(item.ip)} · ${escapeHtml(item.connectionType)} · ${dateStr}</div>
+                    <div class="history-device-name">${icon} ${escapeHtml(item.name)}</div>
+                    <div class="history-meta">${escapeHtml(item.ip)} · ${escapeHtml(typeLabel)} · ${dateStr}</div>
                 </div>
-                <button class="reconnect-btn" onclick="reconnectToDevice('${escapeHtml(item.id)}', '${escapeHtml(item.name)}')">
+                <button class="reconnect-btn" ${reconnectAttr}>
                     重连
                 </button>
             </div>
@@ -321,7 +459,7 @@ function renderHistoryList(history) {
     }).join('');
 }
 
-// 快速重连
+// 快速重连（自动发现设备）
 async function reconnectToDevice(deviceId, deviceName) {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
     try {
@@ -344,6 +482,16 @@ async function reconnectToDevice(deviceId, deviceName) {
     }
 }
 
+/**
+ * 手动 IP 历史记录快速重连
+ */
+async function reconnectManualIp(ip, port) {
+    // 填充手动连接输入框并触发连接
+    elements.manualIpInput.value = ip;
+    elements.manualPortInput.value = port || 8889;
+    await handleManualConnect();
+}
+
 // 清除历史记录
 async function handleClearHistory() {
     try {
@@ -360,6 +508,7 @@ async function handleClearHistory() {
 // 打开设置
 function openSettings() {
     loadSettingsToUI();
+    loadListenConfig();
     elements.settingsModal.classList.remove('hidden');
 }
 
@@ -396,6 +545,22 @@ async function saveSettings() {
         } catch (e) {
             console.warn('后端设置保存失败（功能待实现）:', e);
         }
+
+        // 保存监听地址配置
+        if (elements.listenIpSelect && elements.listenPortInput) {
+            const listenIp = elements.listenIpSelect.value || '0.0.0.0';
+            const listenPort = parseInt(elements.listenPortInput.value, 10) || 8889;
+            if (listenPort >= 1024 && listenPort <= 65535) {
+                try {
+                    await window.Platform.setListenAddress(listenIp, listenPort);
+                } catch (e) {
+                    console.warn('保存监听配置失败:', e);
+                }
+            } else {
+                showError('监听端口范围应为 1024-65535');
+                return;
+            }
+        }
     }
 
     closeSettings();
@@ -411,6 +576,62 @@ function loadSettings() {
         }
     } catch {
         // 忽略解析错误
+    }
+}
+
+// ─── 监听地址配置 ───
+
+/**
+ * 加载网卡列表和当前监听配置到设置面板
+ */
+async function loadListenConfig() {
+    if (!elements.listenIpSelect) return;
+
+    // 加载网卡列表
+    try {
+        const interfaces = await window.Platform.getNetworkInterfaces();
+        // 保留默认的"所有网卡"选项，追加具体网卡
+        const defaultOption = '<option value="0.0.0.0">所有网卡（0.0.0.0，推荐）</option>';
+        const ifaceOptions = interfaces.map(iface =>
+            `<option value="${escapeHtml(iface.ip)}">${escapeHtml(iface.name)} (${escapeHtml(iface.ip)})</option>`
+        ).join('');
+        elements.listenIpSelect.innerHTML = defaultOption + ifaceOptions;
+    } catch (e) {
+        console.warn('获取网卡列表失败:', e);
+    }
+
+    // 加载当前监听配置
+    try {
+        const config = await window.Platform.getListenConfig();
+        if (config) {
+            elements.listenIpSelect.value = config.ip;
+            elements.listenPortInput.value = config.port;
+            updateListenAddressDisplay(config.ip, config.port);
+        }
+    } catch (e) {
+        console.warn('获取监听配置失败:', e);
+    }
+
+    // 监听变化，实时更新显示
+    elements.listenIpSelect.addEventListener('change', updateListenAddressFromInputs);
+    elements.listenPortInput.addEventListener('input', updateListenAddressFromInputs);
+}
+
+function updateListenAddressFromInputs() {
+    const ip = elements.listenIpSelect?.value || '0.0.0.0';
+    const port = parseInt(elements.listenPortInput?.value, 10) || 8889;
+    updateListenAddressDisplay(ip, port);
+}
+
+function updateListenAddressDisplay(ip, port) {
+    if (!elements.listenAddressDisplay) return;
+    const localIps = elements.localIp?.textContent;
+    if (ip === '0.0.0.0' && localIps && localIps !== '获取中...' && localIps !== '无法获取') {
+        elements.listenAddressDisplay.textContent = `${localIps.split(' / ')[0]}:${port}（或其他本机 IP）`;
+    } else if (ip !== '0.0.0.0') {
+        elements.listenAddressDisplay.textContent = `${ip}:${port}`;
+    } else {
+        elements.listenAddressDisplay.textContent = `本机IP:${port}`;
     }
 }
 
@@ -469,20 +690,93 @@ function setConnectionStatus(status) {
     elements.disconnectBtn.disabled = status !== 'connected';
 }
 
-// 启动延迟检查
+// 启动延迟检查（含警告色和断线重连）
 let latencyTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_INTERVAL_MS = 2000;
+
 function startLatencyCheck() {
     elements.latency.textContent = '检测中...';
+    elements.latency.className = '';
+    reconnectAttempts = 0;
     latencyTimer = setInterval(async () => {
         if (!invoke || !appState.connected) return;
         try {
             const latency = await invoke('get_latency');
-            elements.latency.textContent = latency != null ? `${latency}ms` : '-';
-        } catch {
-            // get_latency 命令待实现，暂时模拟
-            elements.latency.textContent = '< 5ms';
+            if (latency != null) {
+                elements.latency.textContent = `${latency}ms`;
+                // 延迟 > 50ms 显示黄色警告
+                if (latency > 50) {
+                    elements.latency.style.color = '#d97706';
+                    elements.latency.title = '网络延迟较高，可能影响使用体验';
+                } else {
+                    elements.latency.style.color = '#10b981';
+                    elements.latency.title = '';
+                }
+                // 连接正常，重置重连计数
+                reconnectAttempts = 0;
+            } else {
+                elements.latency.textContent = '-';
+                elements.latency.style.color = '';
+            }
+        } catch (e) {
+            // get_latency 失败可能意味着连接中断
+            if (appState.connected) {
+                handleConnectionLost();
+            }
         }
     }, 2000);
+}
+
+/**
+ * 处理连接中断，自动重连（最多 3 次，间隔 2 秒）
+ */
+async function handleConnectionLost() {
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        // 重连失败，通知用户
+        stopLatencyCheck();
+        appState.connected = false;
+        setConnectionStatus('disconnected');
+        showError(`连接已断开，自动重连 ${MAX_RECONNECT_ATTEMPTS} 次均失败，请手动重连`);
+        window.Platform.showNotification('KVM Share', '连接已断开，请手动重连').catch(() => {});
+        return;
+    }
+
+    reconnectAttempts++;
+    elements.latency.textContent = `重连中(${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`;
+    elements.latency.style.color = '#f59e0b';
+
+    await new Promise(resolve => setTimeout(resolve, RECONNECT_INTERVAL_MS));
+
+    if (!appState.connected || !appState.currentDevice) return;
+
+    try {
+        let result;
+        if (appState.currentDevice.startsWith('manual:')) {
+            // 手动 IP 重连
+            const parts = appState.currentDevice.split(':');
+            const ip = parts[1];
+            const port = parseInt(parts[2], 10) || 8889;
+            result = await window.Platform.connectByIp(ip, port);
+            if (result.success) {
+                reconnectAttempts = 0;
+                elements.latency.style.color = '#10b981';
+                showSuccess(`已重连到 ${ip}`);
+            }
+        } else {
+            // 自动发现设备重连
+            result = await invoke('connect_to_device', { deviceId: appState.currentDevice });
+            if (result.success) {
+                reconnectAttempts = 0;
+                elements.latency.style.color = '#10b981';
+                showSuccess('连接已恢复');
+            }
+        }
+    } catch (e) {
+        // 重连失败，继续等待下次检查触发
+        console.warn(`重连尝试 ${reconnectAttempts} 失败:`, e);
+    }
 }
 
 // 停止延迟检查
@@ -492,6 +786,9 @@ function stopLatencyCheck() {
         latencyTimer = null;
     }
     elements.latency.textContent = '-';
+    elements.latency.style.color = '';
+    elements.latency.title = '';
+    reconnectAttempts = 0;
 }
 
 // ─── 通知提示 ───
@@ -546,6 +843,7 @@ document.addEventListener('DOMContentLoaded', initApp);
 // 暴露全局函数用于 HTML 内联调用
 window.connectToDevice = connectToDevice;
 window.reconnectToDevice = reconnectToDevice;
+window.reconnectManualIp = reconnectManualIp;
 window.closeSettings = closeSettings;
 window.saveSettings = saveSettings;
 window.clearHotkey = clearHotkey;

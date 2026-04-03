@@ -172,6 +172,47 @@ async function getConnectionStatus() {
     return safeInvoke('get_connection_status', {}, null);
 }
 
+// ─── 跨网段直连 API ───
+
+/**
+ * 通过手动输入的 IP 地址直接发起 TCP 连接（跨网段直连）
+ * @param {string} ip - 目标 IPv4 地址
+ * @param {number} port - 目标端口
+ * @returns {Promise<{success: boolean, errorType: string, errorMessage: string}>}
+ */
+async function connectByIp(ip, port) {
+    return safeInvoke('connect_by_ip', { ip, port }, {
+        success: false,
+        errorType: 'tauri_unavailable',
+        errorMessage: 'Tauri 未就绪',
+    });
+}
+
+/**
+ * 获取本机所有非回环 IPv4 网卡及其 IP 地址列表
+ * @returns {Promise<Array<{name: string, ip: string}>>}
+ */
+async function getNetworkInterfaces() {
+    return safeInvoke('get_network_interfaces', {}, []);
+}
+
+/**
+ * 设置 KVMini 服务端监听地址和端口
+ * @param {string} ip - 监听 IP（"0.0.0.0" 表示所有网卡）
+ * @param {number} port - 监听端口（1024-65535）
+ */
+async function setListenAddress(ip, port) {
+    return safeInvoke('set_listen_address', { ip, port }, undefined);
+}
+
+/**
+ * 获取当前监听配置
+ * @returns {Promise<{ip: string, port: number}>}
+ */
+async function getListenConfig() {
+    return safeInvoke('get_listen_config', {}, { ip: '0.0.0.0', port: 8889 });
+}
+
 // ─── 导出 ───
 window.Platform = {
     init: initPlatform,
@@ -197,4 +238,9 @@ window.Platform = {
     connectToDevice,
     disconnectDevices,
     getConnectionStatus,
+    // 跨网段直连
+    connectByIp,
+    getNetworkInterfaces,
+    setListenAddress,
+    getListenConfig,
 };

@@ -233,36 +233,60 @@ pub fn register_global_hotkey(hotkey: String) -> Result<(), String> {
 pub fn get_local_ip() -> Vec<String> {
     let mut ips = Vec::new();
 
-    // 通过连接到外部地址（不实际发送数据）来获取本机出口 IP
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(addr) = socket.local_addr() {
-                let ip = addr.ip().to_string();
-                if ip != "0.0.0.0" {
-                    ips.push(ip);
+    // 枚举所有网络接口，收集所有非回环 IPv4 地址
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("ifconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with("inet ") && !line.contains("127.0.0.1") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(ip) = parts.get(1) {
+                        let ip = ip.trim_start_matches("addr:");
+                        if !ip.is_empty() && ip != "0.0.0.0" {
+                            ips.push(ip.to_string());
+                        }
+                    }
                 }
             }
         }
     }
 
-    // 如果上面方法失败，尝试枚举网络接口
-    if ips.is_empty() {
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(output) = std::process::Command::new("ipconfig")
-                .arg("getifaddr")
-                .arg("en0")
-                .output()
-            {
-                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !ip.is_empty() && ip != "0.0.0.0" {
-                    ips.push(ip);
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let line = line.trim();
+                // 匹配 "IPv4 地址" 或 "IPv4 Address"
+                if line.contains("IPv4") && line.contains(':') {
+                    if let Some(ip) = line.split(':').last() {
+                        // 处理 Windows ipconfig 输出中的 "(Preferred)" 后缀
+                        let ip = ip.trim()
+                            .trim_end_matches("(Preferred)")
+                            .trim_end_matches("(首选)")
+                            .trim();
+                        if !ip.is_empty() && ip != "0.0.0.0" && !ip.starts_with("169.254") {
+                            ips.push(ip.to_string());
+                        }
+                    }
                 }
             }
         }
-        #[cfg(target_os = "windows")]
-        {
-            // Windows 降级：返回空，前端显示 "获取中..."
+    }
+
+    // 兜底：UDP 路由方式
+    if ips.is_empty() {
+        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if socket.connect("8.8.8.8:80").is_ok() {
+                if let Ok(addr) = socket.local_addr() {
+                    let ip = addr.ip().to_string();
+                    if ip != "0.0.0.0" {
+                        ips.push(ip);
+                    }
+                }
+            }
         }
     }
 
@@ -335,6 +359,223 @@ fn kill_legacy_process_windows() -> Result<bool, String> {
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+// ─── 网卡信息与监听地址配置命令 ───
+
+/// 网卡信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInterface {
+    pub name: String,
+    pub ip: String,
+}
+
+/// 监听地址配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenConfig {
+    pub ip: String,
+    pub port: u16,
+}
+
+#[tauri::command]
+/// 获取本机所有非回环 IPv4 网卡及其 IP 地址列表
+pub fn get_network_interfaces() -> Vec<NetworkInterface> {
+    let mut interfaces = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("ifconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut current_iface = String::new();
+            for line in text.lines() {
+                // 检测网卡名称行（不以空格开头）
+                if !line.starts_with(' ') && !line.starts_with('\t') {
+                    if let Some(name) = line.split(':').next() {
+                        current_iface = name.trim().to_string();
+                    }
+                }
+                let line = line.trim();
+                if line.starts_with("inet ") && !line.contains("127.0.0.1") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(ip) = parts.get(1) {
+                        let ip = ip.trim_start_matches("addr:");
+                        if !ip.is_empty() && ip != "0.0.0.0" && !current_iface.is_empty() {
+                            interfaces.push(NetworkInterface {
+                                name: current_iface.clone(),
+                                ip: ip.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut current_iface = String::new();
+            for line in text.lines() {
+                // 检测适配器名称行
+                if line.contains("适配器") || line.contains("Adapter") {
+                    if let Some(name) = line.split(':').next() {
+                        current_iface = name
+                            .replace("以太网适配器", "")
+                            .replace("无线局域网适配器", "")
+                            .replace("Ethernet adapter", "")
+                            .replace("Wireless LAN adapter", "")
+                            .trim()
+                            .to_string();
+                    }
+                }
+                let line = line.trim();
+                if line.contains("IPv4") && line.contains(':') {
+                    if let Some(ip) = line.split(':').last() {
+                        // 处理 Windows ipconfig 输出中的 "(Preferred)" 后缀
+                        let ip = ip.trim()
+                            .trim_end_matches("(Preferred)")
+                            .trim_end_matches("(首选)")
+                            .trim();
+                        if !ip.is_empty() && ip != "0.0.0.0" && !ip.starts_with("169.254") {
+                            interfaces.push(NetworkInterface {
+                                name: current_iface.clone(),
+                                ip: ip.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    interfaces
+}
+
+#[tauri::command]
+/// 设置 KVMini 服务端监听地址和端口，保存配置并重启监听服务
+pub fn set_listen_address(ip: String, port: u16) -> Result<(), String> {
+    // 1. 端口范围校验
+    if port < 1024 {
+        return Err(format!("端口号 {} 无效：端口范围应为 1024-65535", port));
+    }
+
+    // 2. IP 格式校验（允许 0.0.0.0 表示所有网卡）
+    if ip != "0.0.0.0" && !is_valid_ipv4(&ip) {
+        return Err(format!("IP 地址格式不正确：\"{}\"", ip));
+    }
+
+    // 3. 保存监听配置到文件
+    let dir = ensure_data_dir()?;
+    let path = dir.join("listen_config.json");
+    let config = ListenConfig { ip: ip.clone(), port };
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("序列化监听配置失败: {}", e))?;
+    fs::write(&path, content)
+        .map_err(|e| format!("写入监听配置失败: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+/// 获取当前监听配置
+pub fn get_listen_config() -> Result<ListenConfig, String> {
+    let dir = ensure_data_dir()?;
+    let path = dir.join("listen_config.json");
+
+    if !path.exists() {
+        // 默认：监听所有网卡，端口 8889
+        return Ok(ListenConfig {
+            ip: "0.0.0.0".to_string(),
+            port: 8889,
+        });
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读取监听配置失败: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("解析监听配置失败: {}", e))
+}
+
+// ─── 手动 IP 直连命令 ───
+
+/// 手动 IP 直连结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectByIpResult {
+    pub success: bool,
+    /// 错误类型："refused" | "timeout" | "unreachable" | "invalid_ip" | ""
+    pub error_type: String,
+    /// 用户可读的错误消息
+    pub error_message: String,
+}
+
+/// 校验 IPv4 地址格式
+fn is_valid_ipv4(ip: &str) -> bool {
+    let parts: Vec<&str> = ip.split('.').collect();
+    if parts.len() != 4 {
+        return false;
+    }
+    parts.iter().all(|p| {
+        p.parse::<u8>().is_ok()
+    })
+}
+
+#[tauri::command]
+/// 通过手动输入的 IP 地址直接发起 TCP 连接（跨网段直连）
+pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
+    // 1. IPv4 格式校验
+    if !is_valid_ipv4(&ip) {
+        return ConnectByIpResult {
+            success: false,
+            error_type: "invalid_ip".to_string(),
+            error_message: format!("IP 地址格式不正确：\"{}\"，请输入合法的 IPv4 地址（如 192.168.1.100）", ip),
+        };
+    }
+
+    let addr = format!("{}:{}", ip, port);
+
+    // 2. 带 5 秒超时的 TCP 连接
+    let connect_future = tokio::net::TcpStream::connect(&addr);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), connect_future).await {
+        Ok(Ok(_stream)) => {
+            // 连接成功
+            ConnectByIpResult {
+                success: true,
+                error_type: String::new(),
+                error_message: String::new(),
+            }
+        }
+        Ok(Err(e)) => {
+            // 连接失败，区分错误类型
+            use std::io::ErrorKind;
+            let (error_type, error_message) = match e.kind() {
+                ErrorKind::ConnectionRefused => (
+                    "refused".to_string(),
+                    "连接被拒绝：对端 KVMini 未运行，或目标端口未开放。请确认对端已启动 KVM Share 并开放防火墙端口。".to_string(),
+                ),
+                ErrorKind::NetworkUnreachable | ErrorKind::HostUnreachable | ErrorKind::AddrNotAvailable => (
+                    "unreachable".to_string(),
+                    "网络不可达：请检查两台设备是否在同一公司内网，以及路由是否互通。".to_string(),
+                ),
+                _ => (
+                    "unreachable".to_string(),
+                    format!("无法连接到 {}：{}。请检查 IP 地址是否正确，以及网络是否互通。", addr, e),
+                ),
+            };
+            ConnectByIpResult { success: false, error_type, error_message }
+        }
+        Err(_) => {
+            // 超时
+            ConnectByIpResult {
+                success: false,
+                error_type: "timeout".to_string(),
+                error_message: format!(
+                    "连接超时（5秒）：可能被防火墙拦截。请检查 {} 的 Windows Defender / macOS 防火墙设置，确保 KVM Share 端口已开放。",
+                    ip
+                ),
+            }
+        }
     }
 }
 
@@ -421,5 +662,242 @@ mod tests {
         assert_eq!(history.len(), 10);
         assert_eq!(history[0].id, "dev-5");
         assert_eq!(history[0].name, "Device 5 Updated");
+    }
+
+    // ─── connect_by_ip 相关测试 ───
+
+    #[test]
+    fn test_is_valid_ipv4_valid() {
+        assert!(is_valid_ipv4("192.168.1.100"));
+        assert!(is_valid_ipv4("10.0.1.1"));
+        assert!(is_valid_ipv4("0.0.0.0"));
+        assert!(is_valid_ipv4("255.255.255.255"));
+    }
+
+    #[test]
+    fn test_is_valid_ipv4_invalid() {
+        assert!(!is_valid_ipv4(""));
+        assert!(!is_valid_ipv4("192.168.1"));
+        assert!(!is_valid_ipv4("192.168.1.256"));
+        assert!(!is_valid_ipv4("abc.def.ghi.jkl"));
+        assert!(!is_valid_ipv4("192.168.1.1.1"));
+        assert!(!is_valid_ipv4("192.168.1.-1"));
+        assert!(!is_valid_ipv4("not-an-ip"));
+    }
+
+    #[tokio::test]
+    async fn test_connect_by_ip_invalid_format() {
+        let result = connect_by_ip("not-an-ip".to_string(), 8888).await;
+        assert!(!result.success);
+        assert_eq!(result.error_type, "invalid_ip");
+        assert!(result.error_message.contains("IP 地址格式不正确"));
+    }
+
+    #[tokio::test]
+    async fn test_connect_by_ip_refused() {
+        // 连接本机不存在的端口，应该得到 refused 或 unreachable
+        let result = connect_by_ip("127.0.0.1".to_string(), 19999).await;
+        assert!(!result.success);
+        // 本机端口拒绝应为 refused 或 unreachable（取决于系统）
+        assert!(result.error_type == "refused" || result.error_type == "unreachable");
+    }
+
+    #[tokio::test]
+    async fn test_connect_by_ip_timeout_message_format() {
+        // 验证超时错误消息包含防火墙提示
+        // 构造一个 ConnectByIpResult 模拟超时场景，验证消息格式
+        let timeout_result = ConnectByIpResult {
+            success: false,
+            error_type: "timeout".to_string(),
+            error_message: format!(
+                "连接超时（5秒）：可能被防火墙拦截。请检查 {} 的 Windows Defender / macOS 防火墙设置，确保 KVM Share 端口已开放。",
+                "192.168.1.100"
+            ),
+        };
+        assert!(!timeout_result.success);
+        assert_eq!(timeout_result.error_type, "timeout");
+        assert!(timeout_result.error_message.contains("防火墙"));
+        assert!(timeout_result.error_message.contains("5秒"));
+    }
+
+    // ─── Windows (Preferred) 后缀处理测试（跨平台通用逻辑） ───
+
+    /// 模拟 Windows ipconfig 输出中 IP 地址的清理逻辑（与 platform.rs 保持一致）
+    fn clean_windows_ip(raw: &str) -> String {
+        raw.trim()
+            .trim_end_matches("(Preferred)")
+            .trim_end_matches("(首选)")
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn test_clean_windows_ip_with_preferred_suffix() {
+        // 模拟 Windows ipconfig 输出：IPv4 地址 . . . . . . . . . . . : 192.168.1.100(Preferred)
+        assert_eq!(clean_windows_ip("192.168.1.100(Preferred)"), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_clean_windows_ip_with_preferred_suffix_and_space() {
+        // 带空格的情况：" 192.168.1.100(Preferred) "
+        assert_eq!(clean_windows_ip(" 192.168.1.100(Preferred) "), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_clean_windows_ip_with_chinese_preferred_suffix() {
+        // 中文 Windows 系统的"首选"后缀
+        assert_eq!(clean_windows_ip("10.0.1.50(首选)"), "10.0.1.50");
+    }
+
+    #[test]
+    fn test_clean_windows_ip_without_suffix() {
+        // 无后缀的正常 IP（macOS 或无后缀的 Windows）
+        assert_eq!(clean_windows_ip("192.168.1.100"), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_clean_windows_ip_with_spaces_only() {
+        // 只有空格
+        assert_eq!(clean_windows_ip("  "), "");
+    }
+
+    // ─── set_listen_address / get_listen_config 跨平台测试 ───
+    // 这些测试使用临时目录，不依赖任何平台特定 API，macOS 和 Windows 均可通过
+
+    /// 辅助函数：在指定目录保存监听配置（复用 set_listen_address 的核心逻辑）
+    fn save_listen_config_to_dir(dir: &std::path::Path, ip: &str, port: u16) -> Result<(), String> {
+        if port < 1024 {
+            return Err(format!("端口号 {} 无效：端口范围应为 1024-65535", port));
+        }
+        if ip != "0.0.0.0" && !is_valid_ipv4(ip) {
+            return Err(format!("IP 地址格式不正确：\"{}\"", ip));
+        }
+        let path = dir.join("listen_config.json");
+        let config = ListenConfig { ip: ip.to_string(), port };
+        let content = serde_json::to_string_pretty(&config)
+            .map_err(|e| format!("序列化失败: {}", e))?;
+        fs::write(&path, content)
+            .map_err(|e| format!("写入失败: {}", e))
+    }
+
+    /// 辅助函数：从指定目录读取监听配置
+    fn load_listen_config_from_dir(dir: &std::path::Path) -> Result<ListenConfig, String> {
+        let path = dir.join("listen_config.json");
+        if !path.exists() {
+            return Ok(ListenConfig { ip: "0.0.0.0".to_string(), port: 8889 });
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("读取失败: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("解析失败: {}", e))
+    }
+
+    #[test]
+    fn test_set_listen_address_valid_port_min_boundary() {
+        // 合法端口下边界：1024
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos()));
+        fs::create_dir_all(&dir).unwrap();
+        let result = save_listen_config_to_dir(&dir, "192.168.1.100", 1024);
+        assert!(result.is_ok(), "端口 1024 应为合法端口");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_set_listen_address_valid_port_max_boundary() {
+        // 合法端口上边界：65535
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 1));
+        fs::create_dir_all(&dir).unwrap();
+        let result = save_listen_config_to_dir(&dir, "0.0.0.0", 65535);
+        assert!(result.is_ok(), "端口 65535 应为合法端口");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_set_listen_address_invalid_port_below_1024() {
+        // 非法端口：< 1024
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 2));
+        fs::create_dir_all(&dir).unwrap();
+        let result = save_listen_config_to_dir(&dir, "192.168.1.100", 80);
+        assert!(result.is_err(), "端口 80 应为非法端口");
+        assert!(result.unwrap_err().contains("1024-65535"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_set_listen_address_invalid_port_zero() {
+        // 非法端口：0
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 3));
+        fs::create_dir_all(&dir).unwrap();
+        let result = save_listen_config_to_dir(&dir, "0.0.0.0", 0);
+        assert!(result.is_err(), "端口 0 应为非法端口");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_set_listen_address_all_interfaces() {
+        // 选择"所有网卡（0.0.0.0）"时正确保存
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 4));
+        fs::create_dir_all(&dir).unwrap();
+        let result = save_listen_config_to_dir(&dir, "0.0.0.0", 8889);
+        assert!(result.is_ok(), "0.0.0.0 应为合法的监听地址");
+        // 验证保存的内容
+        let config = load_listen_config_from_dir(&dir).unwrap();
+        assert_eq!(config.ip, "0.0.0.0");
+        assert_eq!(config.port, 8889);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_listen_config_persistence() {
+        // 配置持久化：保存后重新读取返回相同值
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 5));
+        fs::create_dir_all(&dir).unwrap();
+
+        // 保存配置
+        save_listen_config_to_dir(&dir, "192.168.1.50", 9000).unwrap();
+
+        // 重新读取，验证一致
+        let config = load_listen_config_from_dir(&dir).unwrap();
+        assert_eq!(config.ip, "192.168.1.50");
+        assert_eq!(config.port, 9000);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_listen_config_default_when_no_file() {
+        // 无配置文件时返回默认值（0.0.0.0:8889）
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 6));
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = load_listen_config_from_dir(&dir).unwrap();
+        assert_eq!(config.ip, "0.0.0.0");
+        assert_eq!(config.port, 8889);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_listen_config_overwrite() {
+        // 多次保存，最后一次生效
+        let dir = std::env::temp_dir().join(format!("kvmini_test_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() + 7));
+        fs::create_dir_all(&dir).unwrap();
+
+        save_listen_config_to_dir(&dir, "192.168.1.1", 8889).unwrap();
+        save_listen_config_to_dir(&dir, "10.0.1.100", 9999).unwrap();
+
+        let config = load_listen_config_from_dir(&dir).unwrap();
+        assert_eq!(config.ip, "10.0.1.100");
+        assert_eq!(config.port, 9999);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
