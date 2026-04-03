@@ -1,1 +1,13 @@
 node_modules
+
+# Rust 编译产物
+target/
+src-tauri/target/
+kvm-agent/target/
+
+# 日志与临时文件
+*.log
+debug.log
+
+# 下载的运行时
+webview2.exe
