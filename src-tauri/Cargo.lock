@@ -1816,6 +1816,7 @@ dependencies = [
 name = "kvm-share"
 version = "0.1.3"
 dependencies = [
+ "core-foundation",
  "dirs",
  "lazy_static",
  "serde",

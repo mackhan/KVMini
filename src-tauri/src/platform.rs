@@ -504,10 +504,12 @@ pub fn get_listen_config() -> Result<ListenConfig, String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectByIpResult {
     pub success: bool,
-    /// 错误类型："refused" | "timeout" | "unreachable" | "invalid_ip" | ""
+    /// 错误类型："refused" | "timeout" | "unreachable" | "invalid_ip" | "handshake_failed" | "version_mismatch" | ""
     pub error_type: String,
     /// 用户可读的错误消息
     pub error_message: String,
+    /// 对端平台（握手成功时填充）
+    pub remote_platform: String,
 }
 
 /// 校验 IPv4 地址格式
@@ -521,8 +523,27 @@ fn is_valid_ipv4(ip: &str) -> bool {
     })
 }
 
+/// 全局活动 TCP 连接状态
+pub struct ActiveTcpConnection {
+    /// 对端地址
+    pub peer_addr: String,
+    /// 对端平台
+    pub remote_platform: String,
+    /// 连接建立时间
+    pub connected_at: std::time::SystemTime,
+    /// TCP stream（用于后续键鼠事件传输）
+    pub stream: Option<std::net::TcpStream>,
+}
+
+lazy_static::lazy_static! {
+    /// 全局活动 TCP 连接（握手成功后保存）
+    pub static ref ACTIVE_TCP_CONNECTION: std::sync::Mutex<Option<ActiveTcpConnection>> =
+        std::sync::Mutex::new(None);
+}
+
 #[tauri::command]
 /// 通过手动输入的 IP 地址直接发起 TCP 连接（跨网段直连）
+/// 连接成功后执行 KVMini 握手协议验证，确保对端是 KVMini 服务
 pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
     // 1. IPv4 格式校验
     if !is_valid_ipv4(&ip) {
@@ -530,6 +551,7 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
             success: false,
             error_type: "invalid_ip".to_string(),
             error_message: format!("IP 地址格式不正确：\"{}\"，请输入合法的 IPv4 地址（如 192.168.1.100）", ip),
+            remote_platform: String::new(),
         };
     }
 
@@ -537,17 +559,9 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
 
     // 2. 带 5 秒超时的 TCP 连接
     let connect_future = tokio::net::TcpStream::connect(&addr);
-    match tokio::time::timeout(std::time::Duration::from_secs(5), connect_future).await {
-        Ok(Ok(_stream)) => {
-            // 连接成功
-            ConnectByIpResult {
-                success: true,
-                error_type: String::new(),
-                error_message: String::new(),
-            }
-        }
+    let tcp_stream = match tokio::time::timeout(std::time::Duration::from_secs(5), connect_future).await {
+        Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
-            // 连接失败，区分错误类型
             use std::io::ErrorKind;
             let (error_type, error_message) = match e.kind() {
                 ErrorKind::ConnectionRefused => (
@@ -563,20 +577,214 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
                     format!("无法连接到 {}：{}。请检查 IP 地址是否正确，以及网络是否互通。", addr, e),
                 ),
             };
-            ConnectByIpResult { success: false, error_type, error_message }
+            return ConnectByIpResult { success: false, error_type, error_message, remote_platform: String::new() };
         }
         Err(_) => {
-            // 超时
-            ConnectByIpResult {
+            return ConnectByIpResult {
                 success: false,
                 error_type: "timeout".to_string(),
                 error_message: format!(
                     "连接超时（5秒）：可能被防火墙拦截。请检查 {} 的 Windows Defender / macOS 防火墙设置，确保 KVM Share 端口已开放。",
                     ip
                 ),
+                remote_platform: String::new(),
+            };
+        }
+    };
+
+    // 3. TCP 连接成功，转换为标准库 TcpStream 执行握手协议
+    let std_stream = match tcp_stream.into_std() {
+        Ok(s) => s,
+        Err(e) => {
+            return ConnectByIpResult {
+                success: false,
+                error_type: "unreachable".to_string(),
+                error_message: format!("连接转换失败：{}", e),
+                remote_platform: String::new(),
+            };
+        }
+    };
+
+    // 4. 设置握手超时（3 秒）
+    if let Err(e) = crate::handshake::set_handshake_timeout(&std_stream) {
+        return ConnectByIpResult {
+            success: false,
+            error_type: "unreachable".to_string(),
+            error_message: format!("设置超时失败：{}", e),
+            remote_platform: String::new(),
+        };
+    }
+
+    // 5. 执行 KVMini 握手协议验证
+    let mut stream_clone = match std_stream.try_clone() {
+        Ok(s) => s,
+        Err(e) => {
+            return ConnectByIpResult {
+                success: false,
+                error_type: "unreachable".to_string(),
+                error_message: format!("连接克隆失败：{}", e),
+                remote_platform: String::new(),
+            };
+        }
+    };
+
+    let handshake_result = crate::handshake::perform_client_handshake(&mut stream_clone);
+
+    match handshake_result {
+        Ok(info) => {
+            // 6. 握手成功，保存 TCP stream 到全局状态
+            let remote_platform = format!("{:?}", info.remote_platform);
+            let peer_addr = addr.clone();
+
+            // 清除旧连接，保存新连接
+            if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
+                *conn = Some(ActiveTcpConnection {
+                    peer_addr: peer_addr.clone(),
+                    remote_platform: remote_platform.clone(),
+                    connected_at: std::time::SystemTime::now(),
+                    stream: Some(std_stream),
+                });
+            }
+
+            ConnectByIpResult {
+                success: true,
+                error_type: String::new(),
+                error_message: format!("已成功连接到 {}", peer_addr),
+                remote_platform,
+            }
+        }
+        Err(crate::handshake::HandshakeError::NotKvmService) => {
+            ConnectByIpResult {
+                success: false,
+                error_type: "handshake_failed".to_string(),
+                error_message: "连接失败：对端不是 KVMini 服务。请确认对端已启动 KVM Share。".to_string(),
+                remote_platform: String::new(),
+            }
+        }
+        Err(crate::handshake::HandshakeError::VersionMismatch { local, remote }) => {
+            ConnectByIpResult {
+                success: false,
+                error_type: "version_mismatch".to_string(),
+                error_message: format!(
+                    "版本不兼容：本端版本 {}，对端版本 {}。请确保两端使用相同版本的 KVM Share。",
+                    local, remote
+                ),
+                remote_platform: String::new(),
+            }
+        }
+        Err(crate::handshake::HandshakeError::Timeout) => {
+            ConnectByIpResult {
+                success: false,
+                error_type: "timeout".to_string(),
+                error_message: "握手超时（3秒）：对端可能不是 KVMini 服务，或网络延迟过高。".to_string(),
+                remote_platform: String::new(),
+            }
+        }
+        Err(crate::handshake::HandshakeError::IoError(msg)) => {
+            ConnectByIpResult {
+                success: false,
+                error_type: "unreachable".to_string(),
+                error_message: format!("握手失败：{}", msg),
+                remote_platform: String::new(),
             }
         }
     }
+}
+
+/// Tauri 命令：断开当前 TCP 连接
+#[tauri::command]
+pub fn disconnect_tcp() -> Result<(), String> {
+    if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
+        if let Some(active) = conn.take() {
+            // 关闭 TCP stream
+            if let Some(stream) = active.stream {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Tauri 命令：获取当前 TCP 连接状态
+#[tauri::command]
+pub fn get_tcp_connection_status() -> Option<serde_json::Value> {
+    if let Ok(conn) = ACTIVE_TCP_CONNECTION.lock() {
+        conn.as_ref().map(|c| {
+            serde_json::json!({
+                "peer_addr": c.peer_addr,
+                "remote_platform": c.remote_platform,
+                "connected": c.stream.is_some(),
+            })
+        })
+    } else {
+        None
+    }
+}
+
+/// Tauri 命令：启动心跳检测（连接成功后调用）
+///
+/// 在后台任务中每 10 秒发送一次心跳帧，30 秒内无响应则认为连接断开。
+/// 断开时通过 Tauri 事件通知前端。
+#[tauri::command]
+pub async fn start_heartbeat_monitor(window: tauri::Window) {
+    tokio::spawn(async move {
+        let mut consecutive_failures = 0u32;
+        const MAX_FAILURES: u32 = 3; // 3 次失败（约 30 秒）后断开
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // 检查连接是否还存在
+            let has_connection = {
+                if let Ok(conn) = ACTIVE_TCP_CONNECTION.lock() {
+                    conn.is_some()
+                } else {
+                    false
+                }
+            };
+
+            if !has_connection {
+                // 连接已被主动断开，停止心跳
+                break;
+            }
+
+            // 尝试发送心跳帧
+            let heartbeat_ok = {
+                if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
+                    if let Some(ref mut active) = *conn {
+                        if let Some(ref mut stream) = active.stream {
+                            use std::io::Write;
+                            let heartbeat_bytes = crate::protocol::encode(&crate::protocol::KvmFrame::Heartbeat);
+                            stream.write_all(&heartbeat_bytes).is_ok()
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if heartbeat_ok {
+                consecutive_failures = 0;
+            } else {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_FAILURES {
+                    // 心跳失败超过阈值，清除连接状态并通知前端
+                    if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
+                        *conn = None;
+                    }
+                    let _ = window.emit("connection-lost", serde_json::json!({
+                        "reason": "heartbeat_timeout",
+                        "message": "连接超时，已断开（心跳检测失败）"
+                    }));
+                    break;
+                }
+            }
+        }
+    });
 }
 
 // ─── 单元测试 ───
@@ -713,6 +921,7 @@ mod tests {
                 "连接超时（5秒）：可能被防火墙拦截。请检查 {} 的 Windows Defender / macOS 防火墙设置，确保 KVM Share 端口已开放。",
                 "192.168.1.100"
             ),
+            remote_platform: String::new(),
         };
         assert!(!timeout_result.success);
         assert_eq!(timeout_result.error_type, "timeout");

@@ -831,6 +831,25 @@ header p {
     background: #d97706;
 }
 
+/* 辅助功能横幅关闭按钮 */
+.accessibility-banner-close {
+    background: none;
+    border: none;
+    color: #92400e;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+}
+
+.accessibility-banner-close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.05);
+}
+
 /* 角色切换 */
 .role-badge {
     display: inline-block;

@@ -53,7 +53,6 @@ function initApp() {
         localIp: document.getElementById('local-ip'),
         connectionStatus: document.getElementById('connection-status'),
         connectionType: document.getElementById('connection-type'),
-        connectedDevice: document.getElementById('connected-device'),
         latency: document.getElementById('latency'),
         connectBtn: document.getElementById('connect-btn'),
         disconnectBtn: document.getElementById('disconnect-btn'),
@@ -84,7 +83,7 @@ function initApp() {
         listenIpSelect: document.getElementById('listen-ip-select'),
         listenPortInput: document.getElementById('listen-port-input'),
         listenAddressDisplay: document.getElementById('listen-address-display'),
-// Windows 特有
+        // Windows 特有
         errorBanner: document.getElementById('error-banner'),
         errorMsg: document.getElementById('error-msg'),
         errorClose: document.getElementById('error-close'),
@@ -105,6 +104,49 @@ function initApp() {
     }
 }
 
+// 设置事件监听器
+function setupEventListeners() {
+    elements.connectBtn.addEventListener('click', handleConnect);
+    elements.disconnectBtn.addEventListener('click', handleDisconnect);
+    elements.settingsBtn.addEventListener('click', openSettings);
+    elements.scanBtn.addEventListener('click', handleScan);
+    elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
+    elements.manualConnectBtn.addEventListener('click', handleManualConnect);
+
+    // 手动 IP 输入框回车触发连接
+    elements.manualIpInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleManualConnect();
+    });
+
+    // 快捷键录入
+    elements.hotkeyInput.addEventListener('keydown', handleHotkeyCapture);
+    elements.hotkeyInput.addEventListener('focus', () => {
+        elements.hotkeyInput.value = '请按下快捷键组合...';
+    });
+    elements.hotkeyInput.addEventListener('blur', () => {
+        if (!elements.hotkeyInput.dataset.hotkey) {
+            elements.hotkeyInput.value = '';
+        } else {
+            elements.hotkeyInput.value = elements.hotkeyInput.dataset.hotkey;
+        }
+    });
+
+    // 监听后端断线事件（心跳超时或对端主动断开）
+    if (window.__TAURI__) {
+        window.__TAURI__.event.listen('connection-lost', (event) => {
+            const payload = event.payload || {};
+            const message = payload.message || '连接已断开';
+            appState.connected = false;
+            appState.connectionType = null;
+            setConnectionStatus('disconnected');
+            stopLatencyCheck();
+            showError(`⚠️ ${message}`);
+            // 隐藏手动连接成功状态
+            hideManualConnectStatus();
+        }).catch(e => console.warn('断线事件监听注册失败:', e));
+    }
+}
+
 // ─── 本机 IP ───
 
 // 加载并显示本机 IP
@@ -122,47 +164,27 @@ async function loadLocalIp() {
     }
 }
 
-// 设置事件监听器
-function setupEventListeners() {
-    elements.connectBtn.addEventListener('click', handleConnect);
-    elements.disconnectBtn.addEventListener('click', handleDisconnect);
-    elements.settingsBtn.addEventListener('click', openSettings);
-    elements.scanBtn.addEventListener('click', handleScan);
-    elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
-
-    // Windows 特有：旧版错误横幅关闭按钮
-    if (elements.errorClose) {
-        elements.errorClose.addEventListener('click', () => {
-            if (elements.errorBanner) elements.errorBanner.style.display = 'none';
-        });
-    }
-
-    // 快捷键录入
-    elements.hotkeyInput.addEventListener('keydown', handleHotkeyCapture);
-    elements.hotkeyInput.addEventListener('focus', () => {
-        elements.hotkeyInput.value = '请按下快捷键组合...';
-    });
-    elements.hotkeyInput.addEventListener('blur', () => {
-        if (!elements.hotkeyInput.dataset.hotkey) {
-            elements.hotkeyInput.value = '';
-        } else {
-            elements.hotkeyInput.value = elements.hotkeyInput.dataset.hotkey;
-        }
-    });
-}
-
 // ─── 连接管理 ───
 
-// 处理连接按钮点击（顶部按钮，触发一次扫描）
+// 处理连接按钮点击
 async function handleConnect() {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
-    elements.connectBtn.disabled = true;
-    elements.connectBtn.textContent = '扫描中...';
     try {
-        await runScan();
-    } finally {
-        elements.connectBtn.disabled = false;
-        elements.connectBtn.textContent = '扫描设备';
+        setConnectionStatus('connecting');
+        const result = await invoke('connect_devices');
+        if (result.success) {
+            appState.connected = true;
+            appState.connectionType = result.connectionType;
+            setConnectionStatus('connected');
+            startLatencyCheck();
+            showSuccess('设备连接成功');
+        } else {
+            setConnectionStatus('disconnected');
+            showError('连接失败: ' + result.error);
+        }
+    } catch (error) {
+        setConnectionStatus('disconnected');
+        showError('连接错误: ' + error);
     }
 }
 
@@ -170,73 +192,44 @@ async function handleConnect() {
 async function handleDisconnect() {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
     try {
-        await invoke('disconnect_devices');
+        // 断开 TCP 连接（包括握手建立的连接）
+        await invoke('disconnect_tcp').catch(() => {});
+        await invoke('disconnect_devices').catch(() => {});
         // 停止输入捕获（Windows 特有）
         try { await invoke('stop_input_capture'); } catch (_) {}
         appState.connected = false;
         appState.connectionType = null;
-        appState.currentDevice = null;
         setConnectionStatus('disconnected');
         stopLatencyCheck();
-        updateConnectedDeviceInfo(null);
         showSuccess('已断开连接');
     } catch (error) {
         showError('断开连接错误: ' + error);
     }
 }
 
-// 连接到特定设备（含进度显示）
+// 连接到特定设备
 async function connectToDevice(deviceId) {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
     try {
-        // 步骤1：发现
-        setConnectionStatus('discovering', '正在定位设备...');
-        await sleep(200); // 给用户视觉反馈
-
-        // 步骤2：握手
-        setConnectionStatus('handshaking', '正在握手...');
-
+        setConnectionStatus('connecting');
         const result = await invoke('connect_to_device', { deviceId });
-
         if (result.success) {
-            // 步骤3：已连接
             appState.connected = true;
             appState.connectionType = result.connectionType;
             appState.currentDevice = deviceId;
             setConnectionStatus('connected');
-
-            // 安装输入捕获钩子（Windows 特有，Mac 端会静默忽略）
-            try {
-                await invoke('start_input_capture');
-                console.log('[InputCapture] 全局输入钩子已安装');
-            } catch (e) {
-                console.warn('[InputCapture] 安装钩子失败:', e);
-            }
-
-            // 获取已连接设备信息
-            try {
-                const info = await invoke('get_connected_device_info');
-                updateConnectedDeviceInfo(info);
-            } catch (_) {
-                // 降级：直接用设备列表里的信息更新
-                const device = appState.devices.find(d => d.id === deviceId);
-                updateConnectedDeviceInfo(device || { ip: deviceId });
-            }
-
             startLatencyCheck();
-
             // 保存到历史记录
             const device = appState.devices.find(d => d.id === deviceId);
             if (device) saveToHistory(device);
             showSuccess(`已连接到 ${device?.name || deviceId}`);
         } else {
             setConnectionStatus('disconnected');
-            const errMsg = result.error || '连接失败';
-            showError(formatConnectionError(errMsg));
+            showError('连接失败: ' + result.error);
         }
     } catch (error) {
         setConnectionStatus('disconnected');
-        showError(formatConnectionError(String(error)));
+        showError('连接错误: ' + error);
     }
 }
 
@@ -309,12 +302,30 @@ async function handleManualConnect() {
             appState.currentDevice = `manual:${ip}:${port}`;
             setConnectionStatus('connected');
             startLatencyCheck();
-            showManualConnectStatus('success', `✅ 已成功连接到 ${ip}:${port}`);
+            const platformInfo = result.remote_platform ? ` (${result.remote_platform})` : '';
+            showManualConnectStatus('success', `✅ 已成功连接到 ${ip}:${port}${platformInfo}`);
             showSuccess(`已连接到 ${ip}`);
             // 保存到历史记录（手动 IP 类型）
             saveManualIpToHistory(ip, port);
+            // 启动心跳监控（连接成功后）
+            try {
+                await invoke('start_heartbeat_monitor');
+            } catch (e) {
+                console.warn('心跳监控启动失败（不影响连接）:', e);
+            }
         } else {
-            showManualConnectStatus('error', result.error_message || result.errorMessage || '连接失败');
+            // 根据错误类型显示不同提示
+            let errorMsg = result.error_message || result.errorMessage || '连接失败';
+            if (result.error_type === 'handshake_failed') {
+                errorMsg = '❌ 连接失败：对端不是 KVMini 服务。请确认对端已启动 KVM Share。';
+            } else if (result.error_type === 'version_mismatch') {
+                errorMsg = `❌ 版本不兼容：请确保两端使用相同版本的 KVM Share。`;
+            } else if (result.error_type === 'timeout') {
+                errorMsg = `⏱ 连接超时：请检查 ${ip} 的防火墙设置，确保 KVM Share 端口已开放。`;
+            } else if (result.error_type === 'refused') {
+                errorMsg = `🚫 连接被拒绝：请确认对端已启动 KVM Share 并开放防火墙端口。`;
+            }
+            showManualConnectStatus('error', errorMsg);
             setConnectionStatus('disconnected');
         }
     } catch (e) {
@@ -331,13 +342,10 @@ async function handleManualConnect() {
 async function handleScan() {
     if (appState.scanning) return;
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
-    await runScan();
-}
 
-// 执行扫描
-async function runScan() {
     appState.scanning = true;
     setScanningState(true);
+
     try {
         const devices = await invoke('discover_devices');
         updateDevicesList(devices);
@@ -361,35 +369,26 @@ function setScanningState(scanning) {
 
 // 更新设备列表
 function updateDevicesList(devices) {
-    appState.devices = devices || [];
+    appState.devices = devices;
 
-    if (!devices || devices.length === 0) {
+    if (devices.length === 0) {
         elements.devicesList.innerHTML = '<div class="no-devices">未发现设备，请确保目标设备在同一局域网内</div>';
         return;
     }
 
-    elements.devicesList.innerHTML = devices.map(device => {
-        const name = device.name || device.hostname || '未知设备';
-        const os = device.os || '未知系统';
-        const ip = device.ip || '未知IP';
-        const connType = formatConnectionType(device.connectionType);
-        return `
+    elements.devicesList.innerHTML = devices.map(device => `
         <div class="device-item">
             <div class="device-info">
-                <div class="device-name">${escapeHtml(name)}</div>
+                <div class="device-name">${escapeHtml(device.name)}</div>
                 <div class="device-details">
-                    <span class="device-os">${escapeHtml(os)}</span>
-                    <span class="device-sep">|</span>
-                    <span class="device-ip">${escapeHtml(ip)}</span>
-                    <span class="device-sep">|</span>
-                    <span class="device-type">${connType}</span>
+                    ${escapeHtml(device.os)} | ${escapeHtml(device.ip)} | ${escapeHtml(device.connectionType)}
                 </div>
             </div>
             <button class="connect-device-btn" onclick="connectToDevice('${escapeHtml(device.id)}')">
                 连接
             </button>
-        </div>`;
-    }).join('');
+        </div>
+    `).join('');
 }
 
 // ─── 连接历史 ───
@@ -467,6 +466,7 @@ async function loadConnectionHistory() {
     try {
         history = await window.Platform.getConnectionHistory();
         if (history && history.length > 0) {
+            // 同步到 localStorage
             localStorage.setItem('kvm_connection_history', JSON.stringify(history));
         } else {
             history = getHistoryFromStorage();
@@ -523,11 +523,11 @@ async function reconnectToDevice(deviceId, deviceName) {
             showSuccess(`已重连到 ${deviceName}`);
         } else {
             setConnectionStatus('disconnected');
-            showError(formatConnectionError(result.error || '重连失败'));
+            showError('重连失败: ' + result.error);
         }
     } catch (error) {
         setConnectionStatus('disconnected');
-        showError(formatConnectionError(String(error)));
+        showError('重连错误: ' + error);
     }
 }
 
@@ -717,33 +717,28 @@ function handleHotkeyCapture(e) {
 // ─── 状态管理 ───
 
 // 设置连接状态
-function setConnectionStatus(status, detail) {
+function setConnectionStatus(status) {
     const statusMap = {
         connected: '已连接',
         connecting: '连接中...',
-        discovering: '发现中...',
-        handshaking: '握手中...',
         disconnected: '断开',
     };
     const classMap = {
         connected: 'status-connected',
         connecting: 'status-connecting',
-        discovering: 'status-connecting',
-        handshaking: 'status-connecting',
         disconnected: 'status-disconnected',
     };
 
-    const text = statusMap[status] || '断开';
-    elements.connectionStatus.textContent = detail ? `${text} - ${detail}` : text;
+    elements.connectionStatus.textContent = statusMap[status] || '断开';
     elements.connectionStatus.className = classMap[status] || 'status-disconnected';
 
     if (status === 'connected' && appState.connectionType) {
-        if (elements.connectionType) elements.connectionType.textContent = formatConnectionType(appState.connectionType);
+        elements.connectionType.textContent = appState.connectionType;
     } else if (status === 'disconnected') {
-        if (elements.connectionType) elements.connectionType.textContent = '-';
+        elements.connectionType.textContent = '-';
     }
 
-    elements.connectBtn.disabled = status === 'connected';
+    elements.connectBtn.disabled = status !== 'disconnected';
     elements.disconnectBtn.disabled = status !== 'connected';
 }
 
@@ -854,41 +849,34 @@ let errorTimer = null;
 // 显示错误提示（替代 alert）
 function showError(message) {
     console.error('Error:', message);
-    if (elements.errorMessage) {
-        elements.errorMessage.textContent = message;
-        elements.errorToast.classList.remove('hidden');
-        if (errorTimer) clearTimeout(errorTimer);
-        errorTimer = setTimeout(hideError, 5000);
-    }
+    elements.errorMessage.textContent = message;
+    elements.errorToast.classList.remove('hidden');
+    if (errorTimer) clearTimeout(errorTimer);
+    errorTimer = setTimeout(hideError, 5000);
 }
 
 // 隐藏错误提示
 function hideError() {
-    if (elements.errorToast) elements.errorToast.classList.add('hidden');
+    elements.errorToast.classList.add('hidden');
 }
 
 let successTimer = null;
 // 显示成功提示
 function showSuccess(message) {
-    if (elements.successMessage) {
-        elements.successMessage.textContent = message;
-        elements.successToast.classList.remove('hidden');
-        if (successTimer) clearTimeout(successTimer);
-        successTimer = setTimeout(() => {
-            elements.successToast.classList.add('hidden');
-        }, 3000);
-    }
+    elements.successMessage.textContent = message;
+    elements.successToast.classList.remove('hidden');
+    if (successTimer) clearTimeout(successTimer);
+    successTimer = setTimeout(() => {
+        elements.successToast.classList.add('hidden');
+    }, 3000);
 }
 
-// ─── 工具函数 ───
-
+// 更新UI状态
 function updateUI() {
     setConnectionStatus('disconnected');
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+// ─── 工具函数 ───
 
 // HTML 转义，防止 XSS
 function escapeHtml(str) {
@@ -1063,6 +1051,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ─── macOS 辅助功能权限检测 ───────────────────────────────────────────────
 
+/** 本次会话内是否已被用户关闭横幅 */
+let accessibilityBannerDismissed = false;
+
+/** 权限轮询定时器 ID */
+let accessibilityPollTimer = null;
+
 /**
  * 检测辅助功能权限，未授权时显示引导横幅
  */
@@ -1070,16 +1064,56 @@ async function checkAccessibilityPermission() {
     const banner = document.getElementById('accessibility-banner');
     if (!banner || !invoke) return;
 
+    // 用户本次会话内已关闭横幅，不再显示
+    if (accessibilityBannerDismissed) return;
+
     try {
         const status = await invoke('check_accessibility');
         if (status === 'Denied') {
             banner.classList.remove('hidden');
+            // 启动轮询：每 2 秒检测一次，授权后自动隐藏
+            startAccessibilityPolling();
         } else {
             banner.classList.add('hidden');
+            stopAccessibilityPolling();
         }
     } catch (e) {
         // 检测失败，隐藏横幅（不影响主功能）
         banner.classList.add('hidden');
+    }
+}
+
+/**
+ * 启动权限轮询（每 2 秒检测一次）
+ */
+function startAccessibilityPolling() {
+    if (accessibilityPollTimer) return; // 已在轮询中
+    accessibilityPollTimer = setInterval(async () => {
+        if (accessibilityBannerDismissed) {
+            stopAccessibilityPolling();
+            return;
+        }
+        try {
+            const status = await invoke('check_accessibility');
+            if (status !== 'Denied') {
+                // 权限已授权，隐藏横幅并停止轮询
+                const banner = document.getElementById('accessibility-banner');
+                if (banner) banner.classList.add('hidden');
+                stopAccessibilityPolling();
+            }
+        } catch (e) {
+            // 忽略轮询错误
+        }
+    }, 2000);
+}
+
+/**
+ * 停止权限轮询
+ */
+function stopAccessibilityPolling() {
+    if (accessibilityPollTimer) {
+        clearInterval(accessibilityPollTimer);
+        accessibilityPollTimer = null;
     }
 }
 
@@ -1098,8 +1132,19 @@ async function openAccessibilitySettings() {
     }
 }
 
+/**
+ * 关闭权限引导横幅（本次会话内不再显示）
+ */
+function dismissAccessibilityBanner() {
+    accessibilityBannerDismissed = true;
+    stopAccessibilityPolling();
+    const banner = document.getElementById('accessibility-banner');
+    if (banner) banner.classList.add('hidden');
+}
+
 // 暴露全局函数
 window.openAccessibilitySettings = openAccessibilitySettings;
+window.dismissAccessibilityBanner = dismissAccessibilityBanner;
 
 // ─── 角色切换 ─────────────────────────────────────────────────────────────
 

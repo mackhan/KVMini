@@ -19,6 +19,7 @@ mod network;
 mod usb;
 mod connection_manager;
 mod platform;
+mod handshake;
 #[cfg(test)]
 mod integration_tests;
 
@@ -30,6 +31,7 @@ use platform::{
     get_connection_history, save_connection_history, clear_connection_history,
     show_tray_notification, register_global_hotkey, get_latency, kill_legacy_process,
     get_local_ip, connect_by_ip, get_network_interfaces, set_listen_address, get_listen_config,
+    disconnect_tcp, get_tcp_connection_status, start_heartbeat_monitor,
 };
 
 #[tauri::command]
@@ -122,6 +124,9 @@ fn main() {
             get_network_interfaces,
             set_listen_address,
             get_listen_config,
+            disconnect_tcp,
+            get_tcp_connection_status,
+            start_heartbeat_monitor,
             // 显示器布局配置
             layout_config::get_layout_config,
             layout_config::set_layout_config,
