@@ -1,0 +1,15 @@
+#!/bin/bash
+# .git/hooks/post-merge
+# git pull 后自动运行跨平台功能一致性检查
+# 安装方式：此文件由 scripts/install-hooks.sh 自动安装
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CHECK_SCRIPT="$REPO_ROOT/scripts/check-platform-parity.sh"
+
+if [ -f "$CHECK_SCRIPT" ]; then
+    echo ""
+    echo "🔄 正在运行跨平台功能一致性检查..."
+    bash "$CHECK_SCRIPT" || true
+else
+    echo "⚠️  未找到检查脚本：$CHECK_SCRIPT"
+fi
