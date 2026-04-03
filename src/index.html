@@ -20,8 +20,25 @@
             <p>跨平台鼠标键盘共享软件</p>
         </header>
 
+        <!-- macOS 辅助功能权限引导（仅在未授权时显示） -->
+        <div id="accessibility-banner" class="accessibility-banner hidden">
+            <div class="accessibility-banner-icon">🔐</div>
+            <div class="accessibility-banner-content">
+                <strong>需要辅助功能权限</strong>
+                <p>键鼠捕获和注入功能需要辅助功能（Accessibility）权限。</p>
+            </div>
+            <button id="open-accessibility-btn" class="btn btn-accessibility" onclick="openAccessibilitySettings()">
+                去开启
+            </button>
+        </div>
+
         <!-- 状态面板 -->
         <div class="status-panel">
+            <div class="status-item">
+                <span class="status-label">当前角色:</span>
+                <span id="current-role" class="role-badge role-server">被控端</span>
+                <button id="switch-role-btn" class="btn btn-role-switch" title="切换主控端/被控端">切换</button>
+            </div>
             <div class="status-item">
                 <span class="status-label">连接状态:</span>
                 <span id="connection-status" class="status-disconnected">断开</span>
@@ -69,6 +86,22 @@
             </div>
             <div id="devices-list" class="devices-list">
                 <div class="no-devices">点击"扫描设备"发现局域网内的设备</div>
+            </div>
+            <!-- 手动连接区域（跨网段直连） -->
+            <div class="manual-connect-section">
+                <div class="manual-connect-header">
+                    <span class="manual-connect-title">🔗 手动连接（跨网段）</span>
+                    <span class="manual-connect-hint">适用于不同网段的设备</span>
+                </div>
+                <div class="manual-connect-form">
+                    <input type="text" id="manual-ip-input" class="manual-ip-input"
+                           placeholder="输入目标 IP，如 192.168.1.100"
+                           maxlength="15">
+                    <input type="number" id="manual-port-input" class="manual-port-input"
+                           placeholder="端口" value="8889" min="1024" max="65535">
+                    <button id="manual-connect-btn" class="btn btn-manual-connect">连接</button>
+                </div>
+                <div id="manual-connect-status" class="manual-connect-status hidden"></div>
             </div>
         </div>
 
@@ -160,6 +193,57 @@
                             <input type="checkbox" id="start-minimized">
                             <span class="toggle-slider"></span>
                         </label>
+                    </div>
+                </div>
+
+                <!-- 监听地址配置（跨网段直连） -->
+                <div class="settings-section">
+                    <h4>监听地址（让对端连接到本机）</h4>
+                    <div class="settings-item">
+                        <label>监听网卡:</label>
+                        <select id="listen-ip-select" class="settings-select">
+                            <option value="0.0.0.0">所有网卡（0.0.0.0，推荐）</option>
+                        </select>
+                    </div>
+                    <div class="settings-item">
+                        <label>监听端口:</label>
+                        <input type="number" id="listen-port-input" class="settings-input-number"
+                               value="8889" min="1024" max="65535" placeholder="1024-65535">
+                    </div>
+                    <div class="settings-item">
+                        <label style="color:#6b7280;font-size:12px;">对端连接地址:</label>
+                        <span id="listen-address-display" style="font-family:monospace;font-size:12px;color:#374151;">-</span>
+                    </div>
+                </div>
+
+                <!-- 显示器布局配置 -->
+                <div class="settings-section">
+                    <h4>显示器布局</h4>
+                    <p class="settings-hint">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
+                    <div class="display-layout-container" id="display-layout-container">
+                        <!-- 布局预览区域 -->
+                        <div class="display-layout-preview" id="display-layout-preview">
+                            <div class="display-block local-display" id="local-display" draggable="true">
+                                <span class="display-label">本机</span>
+                                <span class="display-size" id="local-display-size">1920×1080</span>
+                            </div>
+                            <div class="display-block remote-display" id="remote-display">
+                                <span class="display-label">远端</span>
+                            </div>
+                        </div>
+                        <!-- 布局方向选择（备用：当拖拽不可用时） -->
+                        <div class="display-layout-select-row">
+                            <label>本机位于远端的:</label>
+                            <select id="display-layout-select" class="settings-select">
+                                <option value="LocalLeftOfRemote">左侧（鼠标→右边缘切换）</option>
+                                <option value="LocalRightOfRemote">右侧（鼠标→左边缘切换）</option>
+                                <option value="LocalAboveRemote">上方（鼠标→下边缘切换）</option>
+                                <option value="LocalBelowRemote">下方（鼠标→上边缘切换）</option>
+                            </select>
+                        </div>
+                        <div class="display-layout-hint" id="display-layout-hint">
+                            当前：鼠标超出 <strong id="trigger-edge-text">右边缘</strong> 时切换到远端
+                        </div>
                     </div>
                 </div>
             </div>

@@ -101,6 +101,15 @@ REQUIRED_IDS=(
     "auto-reconnect"
     "auto-start"
     "start-minimized"
+    # 跨网段直连新增组件
+    "manual-ip-input"
+    "manual-port-input"
+    "manual-connect-btn"
+    "manual-connect-status"
+    # 监听地址配置新增组件
+    "listen-ip-select"
+    "listen-port-input"
+    "listen-address-display"
 )
 
 MISSING_UI=""

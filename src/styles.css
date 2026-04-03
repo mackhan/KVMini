@@ -553,6 +553,23 @@ header p {
     cursor: pointer;
 }
 
+.settings-input-number {
+    width: 100px;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #374151;
+    background: white;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.settings-input-number:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
 /* 快捷键输入 */
 .hotkey-input-group {
     display: flex;
@@ -622,6 +639,128 @@ header p {
     transform: translateX(20px);
 }
 
+/* 手动连接区域（跨网段直连） */
+.manual-connect-section {
+    margin-top: 16px;
+    padding: 14px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 8px;
+}
+
+.manual-connect-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.manual-connect-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0369a1;
+}
+
+.manual-connect-hint {
+    font-size: 11px;
+    color: #7dd3fc;
+}
+
+.manual-connect-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.manual-ip-input {
+    flex: 1;
+    min-width: 140px;
+    padding: 7px 10px;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: monospace;
+    background: white;
+    color: #0c4a6e;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.manual-ip-input:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+}
+
+.manual-ip-input.input-error {
+    border-color: #f87171;
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.2);
+}
+
+.manual-port-input {
+    width: 80px;
+    padding: 7px 8px;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: white;
+    color: #0c4a6e;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.manual-port-input:focus {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+}
+
+.btn-manual-connect {
+    padding: 7px 16px;
+    background: #0ea5e9;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+
+.btn-manual-connect:hover {
+    background: #0284c7;
+}
+
+.btn-manual-connect:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.manual-connect-status {
+    margin-top: 8px;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+
+.manual-connect-status.status-error {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fca5a5;
+}
+
+.manual-connect-status.status-success {
+    background: #f0fdf4;
+    color: #16a34a;
+    border: 1px solid #86efac;
+}
+
+.manual-connect-status.status-connecting {
+    background: #fffbeb;
+    color: #d97706;
+    border: 1px solid #fcd34d;
+}
+
 /* 响应式设计 */
 @media (max-width: 600px) {
     .container {
@@ -640,6 +779,206 @@ header p {
         width: 95%;
     }
 }
+
+/* 辅助功能权限引导横幅 */
+.accessibility-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    margin-bottom: 16px;
+}
+
+.accessibility-banner-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.accessibility-banner-content {
+    flex: 1;
+}
+
+.accessibility-banner-content strong {
+    display: block;
+    font-size: 14px;
+    color: #92400e;
+    margin-bottom: 2px;
+}
+
+.accessibility-banner-content p {
+    font-size: 12px;
+    color: #78350f;
+    margin: 0;
+}
+
+.btn-accessibility {
+    padding: 6px 14px;
+    background: #f59e0b;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.btn-accessibility:hover {
+    background: #d97706;
+}
+
+/* 角色切换 */
+.role-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.role-server {
+    background: #dbeafe;
+    color: #1d4ed8;
+    border: 1px solid #93c5fd;
+}
+
+.role-client {
+    background: #dcfce7;
+    color: #15803d;
+    border: 1px solid #86efac;
+}
+
+.btn-role-switch {
+    padding: 2px 10px;
+    font-size: 12px;
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #374151;
+    transition: background 0.15s;
+}
+
+.btn-role-switch:hover {
+    background: #e5e7eb;
+}
+
+/* 显示器布局配置 */
+.settings-hint {
+    font-size: 12px;
+    color: #6b7280;
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+}
+
+.display-layout-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.display-layout-preview {
+    position: relative;
+    width: 100%;
+    height: 120px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.display-block {
+    width: 80px;
+    height: 60px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: grab;
+    user-select: none;
+    transition: transform 0.15s, box-shadow 0.15s;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+
+.display-block:active {
+    cursor: grabbing;
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.local-display {
+    background: #3b82f6;
+    color: white;
+    border: 2px solid #2563eb;
+}
+
+.remote-display {
+    background: #e5e7eb;
+    color: #374151;
+    border: 2px solid #d1d5db;
+}
+
+.display-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.display-size {
+    font-size: 10px;
+    opacity: 0.8;
+}
+
+/* 布局方向：本机在远端上方 */
+.display-layout-preview.layout-above {
+    flex-direction: column;
+}
+
+/* 布局方向：本机在远端下方 */
+.display-layout-preview.layout-below {
+    flex-direction: column-reverse;
+}
+
+/* 布局方向：本机在远端右侧 */
+.display-layout-preview.layout-right {
+    flex-direction: row-reverse;
+}
+
+.display-layout-select-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: #374151;
+}
+
+.display-layout-hint {
+    font-size: 12px;
+    color: #6b7280;
+    padding: 8px 12px;
+    background: #f9fafb;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+}
+
+.display-layout-hint strong {
+    color: #3b82f6;
+}
+
+/* 拖拽放置区域高亮 */
+.display-layout-preview.drag-over {
+    border-color: #3b82f6;
+    background: #eff6ff;
 
 /* 设备详情分隔符 */
 .device-sep {

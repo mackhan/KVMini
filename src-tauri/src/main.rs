@@ -6,10 +6,21 @@
 use tauri::{Manager, SystemTray, SystemTrayMenu, SystemTrayMenuItem, CustomMenuItem};
 
 mod types;
+mod protocol;
+mod server;
+mod client;
+mod injector;
+mod capturer;
+mod edge_switch;
+mod layout_config;
+mod role_manager;
+mod accessibility;
 mod network;
 mod usb;
 mod connection_manager;
 mod platform;
+#[cfg(test)]
+mod integration_tests;
 
 use connection_manager::{discover_devices, connect_to_device, disconnect_devices, get_connection_status};
 use network::{discover_network_devices, connect_network_device};
@@ -18,7 +29,7 @@ use platform::{
     get_settings, save_settings,
     get_connection_history, save_connection_history, clear_connection_history,
     show_tray_notification, register_global_hotkey, get_latency, kill_legacy_process,
-    get_local_ip,
+    get_local_ip, connect_by_ip, get_network_interfaces, set_listen_address, get_listen_config,
 };
 
 #[tauri::command]
@@ -106,7 +117,22 @@ fn main() {
             get_latency,
             kill_legacy_process,
             get_local_ip,
+            // 跨网段直连
+            connect_by_ip,
+            get_network_interfaces,
+            set_listen_address,
+            get_listen_config,
+            // 显示器布局配置
+            layout_config::get_layout_config,
+            layout_config::set_layout_config,
+            // 角色管理
+            role_manager::get_current_role,
+            role_manager::set_role,
+            // 辅助功能权限
+            accessibility::check_accessibility,
+            accessibility::open_accessibility_prefs,
         ])
+        .manage(std::sync::Mutex::new(role_manager::AppRole::default()))
         .setup(|app| {
             // 启动时清理遗留进程
             let _ = platform::kill_legacy_process();
