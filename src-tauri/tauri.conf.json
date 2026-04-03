@@ -4,7 +4,7 @@
     "beforeBuildCommand": "",
     "devPath": "../src",
     "distDir": "../src",
-    "withGlobalTauri": false
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "KVM Share",
@@ -19,10 +19,13 @@
       }
     },
     "bundle": {
-      "active": true,
+      "active": false,
       "targets": "all",
       "identifier": "com.kvmshare.app",
       "windows": {
+        "webviewInstallMode": {
+          "type": "downloadBootstrapper"
+        },
         "wix": {
           "language": "zh-CN",
           "template": "fixed"
