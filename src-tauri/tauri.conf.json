@@ -12,16 +12,29 @@
   },
   "tauri": {
     "allowlist": {
-      "all": true,
+      "all": false,
       "shell": {
-        "all": true,
+        "all": false,
         "open": true
+      },
+      "notification": {
+        "all": true
       }
+    },
+    "systemTray": {
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false
     },
     "bundle": {
       "active": false,
       "targets": "all",
       "identifier": "com.kvmshare.app",
+      "macOS": {
+        "frameworks": [],
+        "minimumSystemVersion": "10.13",
+        "exceptionDomain": "localhost"
+      },
       "windows": {
         "webviewInstallMode": {
           "type": "downloadBootstrapper"
