@@ -50,6 +50,7 @@ function initApp() {
 
     // 初始化 DOM 元素引用
     elements = {
+        localIp: document.getElementById('local-ip'),
         connectionStatus: document.getElementById('connection-status'),
         connectionType: document.getElementById('connection-type'),
         latency: document.getElementById('latency'),
@@ -79,6 +80,7 @@ function initApp() {
     updateUI();
     loadSettings();
     loadConnectionHistory();
+    loadLocalIp();
 }
 
 // 设置事件监听器
@@ -101,6 +103,23 @@ function setupEventListeners() {
             elements.hotkeyInput.value = elements.hotkeyInput.dataset.hotkey;
         }
     });
+}
+
+// ─── 本机 IP ───
+
+// 加载并显示本机 IP
+async function loadLocalIp() {
+    if (!elements.localIp) return;
+    try {
+        const ips = await window.Platform.getLocalIp();
+        if (ips && ips.length > 0) {
+            elements.localIp.textContent = ips.join(' / ');
+        } else {
+            elements.localIp.textContent = '无法获取';
+        }
+    } catch (e) {
+        elements.localIp.textContent = '无法获取';
+    }
 }
 
 // ─── 连接管理 ───

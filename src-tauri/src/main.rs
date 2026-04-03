@@ -18,6 +18,7 @@ use platform::{
     get_settings, save_settings,
     get_connection_history, save_connection_history, clear_connection_history,
     show_tray_notification, register_global_hotkey, get_latency, kill_legacy_process,
+    get_local_ip,
 };
 
 #[tauri::command]
@@ -104,6 +105,7 @@ fn main() {
             register_global_hotkey,
             get_latency,
             kill_legacy_process,
+            get_local_ip,
         ])
         .setup(|app| {
             // 启动时清理遗留进程

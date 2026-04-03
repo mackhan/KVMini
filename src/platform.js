@@ -128,6 +128,16 @@ async function killLegacyProcess() {
     return safeInvoke('kill_legacy_process', {}, false);
 }
 
+// ─── 本机信息 API ───
+
+/**
+ * 获取本机局域网 IP 地址列表
+ * @returns {Promise<string[]>}
+ */
+async function getLocalIp() {
+    return safeInvoke('get_local_ip', {}, []);
+}
+
 // ─── 设备发现与连接 API ───
 
 /**
@@ -180,6 +190,8 @@ window.Platform = {
     getLatency,
     // 遗留进程
     killLegacyProcess,
+    // 本机信息
+    getLocalIp,
     // 设备
     discoverDevices,
     connectToDevice,

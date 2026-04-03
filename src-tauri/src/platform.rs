@@ -226,6 +226,49 @@ pub fn register_global_hotkey(hotkey: String) -> Result<(), String> {
     save_settings(settings)
 }
 
+// ─── 本机 IP 命令 ───
+
+#[tauri::command]
+/// 获取本机局域网 IP 地址列表
+pub fn get_local_ip() -> Vec<String> {
+    let mut ips = Vec::new();
+
+    // 通过连接到外部地址（不实际发送数据）来获取本机出口 IP
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "0.0.0.0" {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+
+    // 如果上面方法失败，尝试枚举网络接口
+    if ips.is_empty() {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("ipconfig")
+                .arg("getifaddr")
+                .arg("en0")
+                .output()
+            {
+                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !ip.is_empty() && ip != "0.0.0.0" {
+                    ips.push(ip);
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 降级：返回空，前端显示 "获取中..."
+        }
+    }
+
+    ips
+}
+
 // ─── 延迟检测命令 ───
 
 #[tauri::command]
