@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KVM Share - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
+    <script>
+        (function() {
+            try {
+                var s = JSON.parse(localStorage.getItem('kvm_settings') || '{}');
+                var theme = s.theme || 'auto';
+                if (theme === 'dark') {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                } else if (theme === 'light') {
+                    document.documentElement.setAttribute('data-theme', 'light');
+                } else {
+                    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+                    document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
+                }
+            } catch(e) {}
+        })();
+    </script>
 </head>
 <body>
     <!-- 错误提示横幅 -->
@@ -16,47 +33,68 @@
     <div class="container">
         <!-- 头部 -->
         <header>
-            <h1>KVM Share</h1>
-            <p>跨平台鼠标键盘共享软件</p>
+            <h1 data-i18n="appTitle">KVM Share</h1>
+            <p data-i18n="appSubtitle">跨平台鼠标键盘共享软件</p>
+            <p class="app-version" id="app-version">v0.1.4</p>
         </header>
 
-        <!-- macOS 辅助功能权限引导（仅在未授权时显示） -->
-        <div id="accessibility-banner" class="accessibility-banner hidden">
-            <div class="accessibility-banner-icon">🔐</div>
-            <div class="accessibility-banner-content">
-                <strong>需要辅助功能权限</strong>
-                <p>键鼠捕获和注入功能需要辅助功能（Accessibility）权限。</p>
+        <!-- macOS 辅助功能权限引导（全屏遮罩，未授权时强制显示，不可关闭） -->
+        <div id="accessibility-overlay" class="accessibility-overlay hidden">
+            <div class="accessibility-overlay-card">
+                <div class="accessibility-overlay-icon">🔐</div>
+                <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
+                <p class="accessibility-overlay-desc">
+                    KVM Share 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
+                    请在系统设置中授权后，应用将自动继续。
+                </p>
+                <div class="accessibility-overlay-steps">
+                    <div class="accessibility-step">
+                        <span class="accessibility-step-num">1</span>
+                        <span>点击下方"前往授权"按钮</span>
+                    </div>
+                    <div class="accessibility-step">
+                        <span class="accessibility-step-num">2</span>
+                        <span>在系统设置中找到 <strong>KVM Share</strong>，打开开关</span>
+                    </div>
+                    <div class="accessibility-step">
+                        <span class="accessibility-step-num">3</span>
+                        <span>返回应用，权限授予后自动继续</span>
+                    </div>
+                </div>
+                <button id="open-accessibility-btn" class="btn btn-accessibility-overlay" onclick="openAccessibilitySettings()">
+                    前往授权 →
+                </button>
+                <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
+                    ⏳ 等待授权中，授权后将自动继续...
+                </p>
             </div>
-            <button id="open-accessibility-btn" class="btn btn-accessibility" onclick="openAccessibilitySettings()">
-                前往授权
-            </button>
         </div>
 
         <!-- 状态面板 -->
         <div class="status-panel">
             <div class="status-item">
-                <span class="status-label">当前角色:</span>
-                <span id="current-role" class="role-badge role-server">被控端</span>
-                <button id="switch-role-btn" class="btn btn-role-switch" title="切换主控端/被控端">切换</button>
+                <span class="status-label" data-i18n="labelRole">当前角色:</span>
+                <span id="current-role" class="role-badge role-server" data-i18n="roleServer">被控端</span>
+                <button id="switch-role-btn" class="btn btn-role-switch" data-i18n="btnSwitch">切换</button>
             </div>
             <div class="status-item">
-                <span class="status-label">连接状态:</span>
-                <span id="connection-status" class="status-disconnected">断开</span>
+                <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
+                <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">断开</span>
             </div>
             <div class="status-item">
-                <span class="status-label">已连接设备:</span>
+                <span class="status-label" data-i18n="labelConnectedDevice">已连接设备:</span>
                 <span id="connected-device">-</span>
             </div>
             <div class="status-item">
-                <span class="status-label">连接方式:</span>
+                <span class="status-label" data-i18n="labelConnectionType">连接方式:</span>
                 <span id="connection-type">-</span>
             </div>
             <div class="status-item">
-                <span class="status-label">本机 IP:</span>
+                <span class="status-label" data-i18n="labelLocalIp">本机 IP:</span>
                 <span id="local-ip">获取中...</span>
             </div>
             <div class="status-item">
-                <span class="status-label">延迟:</span>
+                <span class="status-label" data-i18n="labelLatency">延迟:</span>
                 <span id="latency">-</span>
             </div>
         </div>
@@ -69,10 +107,10 @@
 
         <!-- 控制按钮 -->
         <div class="controls">
-            <button id="connect-btn" class="btn btn-primary">扫描设备</button>
-            <button id="disconnect-btn" class="btn btn-secondary" disabled>断开连接</button>
-            <button id="start-sharing-btn" class="btn btn-success hidden">▶ 开始共享</button>
-            <button id="settings-btn" class="btn btn-outline">⚙ 设置</button>
+            <button id="connect-btn" class="btn btn-primary" data-i18n="btnScanDevices">扫描设备</button>
+            <button id="disconnect-btn" class="btn btn-secondary" disabled data-i18n="btnDisconnect">断开连接</button>
+            <button id="start-sharing-btn" class="btn btn-success hidden" data-i18n="btnStartSharing">▶ 开始共享</button>
+            <button id="settings-btn" class="btn btn-outline" data-i18n="btnSettings">⚙ 设置</button>
         </div>
 
         <!-- 可滚动内容区域（设备面板 + 历史面板） -->
@@ -81,10 +119,10 @@
         <!-- 设备发现面板 -->
         <div class="devices-panel">
             <div class="devices-panel-header">
-                <h3>可用设备</h3>
+                <h3 data-i18n="availableDevices">可用设备</h3>
                 <button id="scan-btn" class="btn btn-scan">
                     <span id="scan-icon">🔍</span>
-                    <span id="scan-text">扫描设备</span>
+                    <span id="scan-text" data-i18n="btnScan">扫描设备</span>
                 </button>
             </div>
             <!-- 扫描动画 -->
@@ -92,7 +130,7 @@
                 <div class="scan-dot"></div>
                 <div class="scan-dot"></div>
                 <div class="scan-dot"></div>
-                <span>正在扫描局域网设备...</span>
+                <span data-i18n="scanningHint">正在扫描局域网设备...</span>
             </div>
             <div id="devices-list" class="devices-list">
                 <div class="no-devices">点击"扫描设备"发现局域网内的设备</div>
@@ -100,16 +138,17 @@
             <!-- 手动连接区域（跨网段直连） -->
             <div class="manual-connect-section">
                 <div class="manual-connect-header">
-                    <span class="manual-connect-title">🔗 手动连接（跨网段）</span>
-                    <span class="manual-connect-hint">适用于不同网段的设备</span>
+                    <span class="manual-connect-title" data-i18n="manualConnectTitle">🔗 手动连接（跨网段）</span>
+                    <span class="manual-connect-hint" data-i18n="manualConnectHint">适用于不同网段的设备</span>
                 </div>
                 <div class="manual-connect-form">
                     <input type="text" id="manual-ip-input" class="manual-ip-input"
-                           placeholder="输入目标 IP，如 192.168.1.100"
+                           placeholder="请输入目标设备 IP 地址"
+                           data-i18n-placeholder="manualIpPlaceholder"
                            maxlength="15">
                     <input type="number" id="manual-port-input" class="manual-port-input"
                            placeholder="端口" value="8889" min="1024" max="65535">
-                    <button id="manual-connect-btn" class="btn btn-manual-connect">连接</button>
+                    <button id="manual-connect-btn" class="btn btn-manual-connect" data-i18n="btnManualConnect">连接</button>
                 </div>
                 <div id="manual-connect-status" class="manual-connect-status hidden"></div>
             </div>
@@ -118,8 +157,8 @@
         <!-- 连接历史面板 -->
         <div class="history-panel">
             <div class="history-panel-header">
-                <h3>连接历史</h3>
-                <button id="clear-history-btn" class="btn btn-text">清除</button>
+                <h3 data-i18n="connectionHistory">连接历史</h3>
+                <button id="clear-history-btn" class="btn btn-text" data-i18n="btnClearHistory">清除</button>
             </div>
             <div id="history-list" class="history-list">
                 <div class="no-history">暂无连接历史</div>
@@ -157,31 +196,33 @@
             <div class="modal-body">
                 <!-- 快捷键配置 -->
                 <div class="settings-section">
-                    <h4>全局快捷键</h4>
+                    <h4 data-i18n="settingsHotkey">全局快捷键</h4>
                     <div class="settings-item">
-                        <label>切换控制焦点:</label>
+                        <label data-i18n="labelToggleFocus">切换控制焦点:</label>
                         <div class="hotkey-input-group">
                             <input type="text" id="hotkey-input" class="hotkey-input" 
-                                   placeholder="点击此处录入快捷键" readonly
+                                   placeholder="点击此处录入快捷键（默认：Ctrl+Alt+S）" readonly
+                                   data-i18n-placeholder="hotkeyPlaceholder"
                                    data-hotkey="">
-                            <button class="btn btn-small" onclick="clearHotkey()">清除</button>
+                            <button class="btn btn-small" onclick="clearHotkey()" data-i18n="btnClearHotkey">清除</button>
                         </div>
+                        <p class="feature-hint" data-i18n="hotkeyHint">按下此快捷键可在本机和远端之间切换键鼠控制权</p>
                     </div>
                 </div>
 
                 <!-- 连接偏好 -->
                 <div class="settings-section">
-                    <h4>连接偏好</h4>
+                    <h4 data-i18n="settingsConnection">连接偏好</h4>
                     <div class="settings-item">
-                        <label>优先连接方式:</label>
+                        <label data-i18n="labelPreferConnection">优先连接方式:</label>
                         <select id="prefer-connection-type" class="settings-select">
-                            <option value="auto">自动选择</option>
-                            <option value="network">网络优先</option>
-                            <option value="usb">USB优先</option>
+                            <option value="auto" data-i18n="optionAuto">自动选择</option>
+                            <option value="network" data-i18n="optionNetwork">网络优先</option>
+                            <option value="usb" data-i18n="optionUsb">USB优先</option>
                         </select>
                     </div>
                     <div class="settings-item">
-                        <label>自动重连:</label>
+                        <label data-i18n="labelAutoReconnect">自动重连:</label>
                         <label class="toggle">
                             <input type="checkbox" id="auto-reconnect" checked>
                             <span class="toggle-slider"></span>
@@ -191,16 +232,16 @@
 
                 <!-- 启动选项 -->
                 <div class="settings-section">
-                    <h4>启动选项</h4>
+                    <h4 data-i18n="settingsStartup">启动选项</h4>
                     <div class="settings-item">
-                        <label>开机自启动:</label>
+                        <label data-i18n="labelAutoStart">开机自启动:</label>
                         <label class="toggle">
                             <input type="checkbox" id="auto-start">
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
                     <div class="settings-item">
-                        <label>启动时最小化到托盘:</label>
+                        <label data-i18n="labelStartMinimized">启动时最小化到托盘:</label>
                         <label class="toggle">
                             <input type="checkbox" id="start-minimized">
                             <span class="toggle-slider"></span>
@@ -210,62 +251,88 @@
 
                 <!-- 监听地址配置（跨网段直连） -->
                 <div class="settings-section">
-                    <h4>监听地址（让对端连接到本机）</h4>
+                    <h4 data-i18n="settingsListen">监听地址（让对端连接到本机）</h4>
                     <div class="settings-item">
-                        <label>监听网卡:</label>
+                        <label data-i18n="labelListenInterface">监听网卡:</label>
                         <select id="listen-ip-select" class="settings-select">
-                            <option value="0.0.0.0">所有网卡（0.0.0.0，推荐）</option>
+                            <option value="0.0.0.0" data-i18n="optionAllInterfaces">所有网卡（0.0.0.0，推荐）</option>
                         </select>
                     </div>
+                    <p class="feature-hint" data-i18n="listenIfaceHint">选择本机用于接受远端连接的网络接口，通常选“所有网卡”即可</p>
                     <div class="settings-item">
-                        <label>监听端口:</label>
+                        <label data-i18n="labelListenPort">监听端口:</label>
                         <input type="number" id="listen-port-input" class="settings-input-number"
                                value="8889" min="1024" max="65535" placeholder="1024-65535">
                     </div>
                     <div class="settings-item">
-                        <label style="color:#6b7280;font-size:12px;">对端连接地址:</label>
+                        <label style="color:#6b7280;font-size:12px;" data-i18n="labelListenAddress">对端连接地址:</label>
                         <span id="listen-address-display" style="font-family:monospace;font-size:12px;color:#374151;">-</span>
+                    </div>
+                </div>
+
+                <!-- 外观设置 -->
+                <div class="settings-section">
+                    <h4 data-i18n="settingsAppearance">外观</h4>
+                    <div class="settings-item">
+                        <label data-i18n="labelLanguage">语言:</label>
+                        <select id="language-select" class="settings-select">
+                            <option value="zh">中文</option>
+                            <option value="en">English</option>
+                        </select>
+                    </div>
+                    <div class="settings-item">
+                        <label data-i18n="labelTheme">主题:</label>
+                        <select id="theme-select" class="settings-select">
+                            <option value="auto" data-i18n="optionThemeAuto">跟随系统</option>
+                            <option value="dark" data-i18n="optionThemeDark">深色</option>
+                            <option value="light" data-i18n="optionThemeLight">浅色</option>
+                        </select>
                     </div>
                 </div>
 
                 <!-- 显示器布局配置 -->
                 <div class="settings-section">
-                    <h4>显示器布局</h4>
-                    <p class="settings-hint">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
+                    <h4 data-i18n="settingsDisplay">显示器布局</h4>
+                    <p class="settings-hint" data-i18n="hintDisplayLayout">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
                     <div class="display-layout-container" id="display-layout-container">
                         <!-- 布局预览区域 -->
                         <div class="display-layout-preview" id="display-layout-preview">
                             <div class="display-block local-display" id="local-display" draggable="true">
-                                <span class="display-label">本机</span>
+                                <span class="display-label" data-i18n="labelLocalDisplay">本机</span>
                                 <span class="display-size" id="local-display-size">1920×1080</span>
                             </div>
                             <div class="display-block remote-display" id="remote-display">
-                                <span class="display-label">远端</span>
+                                <span class="display-label" data-i18n="labelRemoteDisplay">远端</span>
                             </div>
                         </div>
                         <!-- 布局方向选择（备用：当拖拽不可用时） -->
                         <div class="display-layout-select-row">
-                            <label>本机位于远端的:</label>
+                            <label data-i18n="labelLayoutPosition">本机位于远端的:</label>
                             <select id="display-layout-select" class="settings-select">
-                                <option value="LocalLeftOfRemote">左侧（鼠标→右边缘切换）</option>
-                                <option value="LocalRightOfRemote">右侧（鼠标→左边缘切换）</option>
-                                <option value="LocalAboveRemote">上方（鼠标→下边缘切换）</option>
-                                <option value="LocalBelowRemote">下方（鼠标→上边缘切换）</option>
+                                <option value="LocalLeftOfRemote" data-i18n="optionLocalLeft">左侧（鼠标→右边缘切换）</option>
+                                <option value="LocalRightOfRemote" data-i18n="optionLocalRight">右侧（鼠标→左边缘切换）</option>
+                                <option value="LocalAboveRemote" data-i18n="optionLocalAbove">上方（鼠标→下边缘切换）</option>
+                                <option value="LocalBelowRemote" data-i18n="optionLocalBelow">下方（鼠标→上边缘切换）</option>
                             </select>
                         </div>
                         <div class="display-layout-hint" id="display-layout-hint">
-                            当前：鼠标超出 <strong id="trigger-edge-text">右边缘</strong> 时切换到远端
+                            <span data-i18n="hintTriggerEdge">当前：鼠标超出</span> <strong id="trigger-edge-text">右边缘</strong> <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
                         </div>
                     </div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
-                <button class="btn btn-outline" onclick="closeSettings()">取消</button>
+            <div class="modal-footer" style="flex-direction: column; gap: 8px;">
+                <div style="display:flex; gap:12px; justify-content:flex-end; width:100%;">
+                    <button class="btn btn-primary" data-i18n="btnSaveSettings" onclick="saveSettings()">保存设置</button>
+                    <button class="btn btn-outline" data-i18n="btnCancel" onclick="closeSettings()">取消</button>
+                </div>
+                <div class="settings-version" id="settings-version">v0.1.4</div>
             </div>
         </div>
     </div>
 
+    <script src="i18n.js"></script>
+    <script src="theme.js"></script>
     <script src="platform.js"></script>
     <script src="main.js"></script>
 </body>

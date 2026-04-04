@@ -11,6 +11,8 @@ let appState = {
         autoReconnect: true,
         autoStart: false,
         startMinimized: false,
+        language: 'zh',
+        theme: 'auto',
     }
 };
 
@@ -90,6 +92,14 @@ function initApp() {
         errorMsg: document.getElementById('error-msg'),
         errorClose: document.getElementById('error-close'),
         hintPanel: document.getElementById('hint-panel'),
+        // 角色徽章
+        currentRole: document.getElementById('current-role'),
+        // 外观设置
+        languageSelect: document.getElementById('language-select'),
+        themeSelect: document.getElementById('theme-select'),
+        // 版本号
+        appVersion: document.getElementById('app-version'),
+        settingsVersion: document.getElementById('settings-version'),
     };
 
     setupEventListeners();
@@ -97,6 +107,8 @@ function initApp() {
     loadSettings();
     loadConnectionHistory();
     loadLocalIp();
+    initAppearance();
+    initVersion();
 
     // Windows 特有：hint-panel 仅在 Windows 下显示
     if (elements.hintPanel) {
@@ -122,8 +134,25 @@ function setupEventListeners() {
 
     // 快捷键录入
     elements.hotkeyInput.addEventListener('keydown', handleHotkeyCapture);
+
+    // 语言选择器：实时切换（不保存）
+    if (elements.languageSelect) {
+        elements.languageSelect.addEventListener('change', () => {
+            const lang = elements.languageSelect.value;
+            window.i18n.setLocale(lang);
+            applyI18n();
+        });
+    }
+
+    // 主题选择器：实时切换（不保存）
+    if (elements.themeSelect) {
+        elements.themeSelect.addEventListener('change', () => {
+            window.themeManager.setTheme(elements.themeSelect.value);
+        });
+    }
+
     elements.hotkeyInput.addEventListener('focus', () => {
-        elements.hotkeyInput.value = '请按下快捷键组合...';
+        elements.hotkeyInput.value = window.i18n.t('hotkeyPrompt');
     });
     elements.hotkeyInput.addEventListener('blur', () => {
         if (!elements.hotkeyInput.dataset.hotkey) {
@@ -137,7 +166,7 @@ function setupEventListeners() {
     if (window.__TAURI__) {
         window.__TAURI__.event.listen('connection-lost', (event) => {
             const payload = event.payload || {};
-            const message = payload.message || '连接已断开';
+            const message = payload.message || window.i18n.t('connectionLost');
             appState.connected = false;
             appState.connectionType = null;
             setConnectionStatus('disconnected');
@@ -160,41 +189,25 @@ async function loadLocalIp() {
         if (ips && ips.length > 0) {
             elements.localIp.textContent = ips.join(' / ');
         } else {
-            elements.localIp.textContent = '无法获取';
+            elements.localIp.textContent = window.i18n.t('msgLocalIpFailed');
         }
     } catch (e) {
-        elements.localIp.textContent = '无法获取';
+        elements.localIp.textContent = window.i18n.t('msgLocalIpFailed');
     }
 }
 
 // ─── 连接管理 ───
 
-// 处理连接按钮点击
+// 处理连接按钮点击（顶部扫描并连接按钮）
 async function handleConnect() {
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
-    try {
-        setConnectionStatus('connecting');
-        const result = await invoke('connect_devices');
-        if (result.success) {
-            appState.connected = true;
-            appState.connectionType = result.connectionType;
-            setConnectionStatus('connected');
-            startLatencyCheck();
-            showSuccess('设备连接成功');
-            await checkPermissionAfterConnect();
-        } else {
-            setConnectionStatus('disconnected');
-            showError('连接失败: ' + result.error);
-        }
-    } catch (error) {
-        setConnectionStatus('disconnected');
-        showError('连接错误: ' + error);
-    }
+    // 顶部按钮实际功能是扫描设备，与下方扫描按钮一致
+    await handleScan();
 }
 
 // 处理断开连接
 async function handleDisconnect() {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    const { t } = window.i18n;
     try {
         // 断开 TCP 连接（包括握手建立的连接）
         await invoke('disconnect_tcp').catch(() => {});
@@ -206,7 +219,7 @@ async function handleDisconnect() {
         setConnectionStatus('disconnected');
         stopLatencyCheck();
         hidePermissionWarning();
-        showSuccess('已断开连接');
+        showSuccess(t('msgDisconnectSuccess'));
     } catch (error) {
         showError('断开连接错误: ' + error);
     }
@@ -215,6 +228,7 @@ async function handleDisconnect() {
 // 连接到特定设备
 async function connectToDevice(deviceId) {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
         const result = await invoke('connect_to_device', { deviceId });
@@ -227,15 +241,17 @@ async function connectToDevice(deviceId) {
             // 保存到历史记录
             const device = appState.devices.find(d => d.id === deviceId);
             if (device) saveToHistory(device);
-            showSuccess(`已连接到 ${device?.name || deviceId}`);
+            showSuccess(t('connectedToIp').replace('{ip}', device?.name || deviceId));
             await checkPermissionAfterConnect();
         } else {
             setConnectionStatus('disconnected');
-            showError('连接失败: ' + result.error);
+            // 修复：result.error 可能为 undefined，使用兜底文案
+            const errMsg = result.error || result.errorMessage || t('connectErrGeneric').replace('{err}', t('statusDisconnected'));
+            showError(t('connectErrGeneric').replace('{err}', errMsg));
         }
     } catch (error) {
         setConnectionStatus('disconnected');
-        showError('连接错误: ' + error);
+        showError(t('connectErrGeneric').replace('{err}', error || t('statusDisconnected')));
     }
 }
 
@@ -273,17 +289,18 @@ function hideManualConnectStatus() {
 async function handleManualConnect() {
     const ip = elements.manualIpInput.value.trim();
     const port = parseInt(elements.manualPortInput.value, 10) || 8889;
+    const { t } = window.i18n;
 
     // 前端 IPv4 格式校验
     if (!ip) {
         elements.manualIpInput.classList.add('input-error');
-        showManualConnectStatus('error', '请输入目标设备的 IP 地址');
+        showManualConnectStatus('error', t('errIpEmpty'));
         elements.manualIpInput.focus();
         return;
     }
     if (!isValidIpv4(ip)) {
         elements.manualIpInput.classList.add('input-error');
-        showManualConnectStatus('error', `IP 格式不正确："${ip}"，请输入合法的 IPv4 地址（如 192.168.1.100）`);
+        showManualConnectStatus('error', t('errIpFormat').replace('{ip}', ip));
         elements.manualIpInput.focus();
         return;
     }
@@ -291,14 +308,14 @@ async function handleManualConnect() {
 
     // 端口范围校验
     if (port < 1024 || port > 65535) {
-        showManualConnectStatus('error', '端口范围应为 1024-65535');
+        showManualConnectStatus('error', t('errPortRange'));
         elements.manualPortInput.focus();
         return;
     }
 
     // 开始连接
     elements.manualConnectBtn.disabled = true;
-    showManualConnectStatus('connecting', `⏳ 正在连接 ${ip}:${port}，最长等待 5 秒...`);
+    showManualConnectStatus('connecting', t('connectingTo').replace('{ip}', ip).replace('{port}', port));
 
     try {
         const result = await window.Platform.connectByIp(ip, port);
@@ -309,8 +326,8 @@ async function handleManualConnect() {
             setConnectionStatus('connected');
             startLatencyCheck();
             const platformInfo = result.remote_platform ? ` (${result.remote_platform})` : '';
-            showManualConnectStatus('success', `✅ 已成功连接到 ${ip}:${port}${platformInfo}`);
-            showSuccess(`已连接到 ${ip}`);
+            showManualConnectStatus('success', t('connectedTo').replace('{ip}', ip).replace('{port}', port) + platformInfo);
+            showSuccess(t('connectedToIp').replace('{ip}', ip));
             // 保存到历史记录（手动 IP 类型）
             saveManualIpToHistory(ip, port);
             // 启动心跳监控（连接成功后）
@@ -322,21 +339,21 @@ async function handleManualConnect() {
             await checkPermissionAfterConnect();
         } else {
             // 根据错误类型显示不同提示
-            let errorMsg = result.error_message || result.errorMessage || '连接失败';
+            let errorMsg = result.error_message || result.errorMessage || t('errIpEmpty');
             if (result.error_type === 'handshake_failed') {
-                errorMsg = '❌ 连接失败：对端不是 KVMini 服务。请确认对端已启动 KVM Share。';
+                errorMsg = t('errHandshakeFailed');
             } else if (result.error_type === 'version_mismatch') {
-                errorMsg = `❌ 版本不兼容：请确保两端使用相同版本的 KVM Share。`;
+                errorMsg = t('errVersionMismatch');
             } else if (result.error_type === 'timeout') {
-                errorMsg = `⏱ 连接超时：请检查 ${ip} 的防火墙设置，确保 KVM Share 端口已开放。`;
+                errorMsg = t('errTimeout').replace('{ip}', ip);
             } else if (result.error_type === 'refused') {
-                errorMsg = `🚫 连接被拒绝：请确认对端已启动 KVM Share 并开放防火墙端口。`;
+                errorMsg = t('errRefused');
             }
             showManualConnectStatus('error', errorMsg);
             setConnectionStatus('disconnected');
         }
     } catch (e) {
-        showManualConnectStatus('error', `连接出错：${e}`);
+        showManualConnectStatus('error', t('connectErrGeneric').replace('{err}', e));
         setConnectionStatus('disconnected');
     } finally {
         elements.manualConnectBtn.disabled = false;
@@ -345,7 +362,7 @@ async function handleManualConnect() {
 
 // ─── 设备扫描 ───
 
-// 处理扫描按钮
+// 处理扫描按鈕
 async function handleScan() {
     if (appState.scanning) return;
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
@@ -357,29 +374,30 @@ async function handleScan() {
         const devices = await invoke('discover_devices');
         updateDevicesList(devices);
     } catch (error) {
-        showError('扫描设备失败: ' + error);
+        showError(window.i18n.t('noDevicesAfterScan'));
         updateDevicesList([]);
     } finally {
         appState.scanning = false;
         setScanningState(false);
     }
 }
-
 // 设置扫描状态 UI
 function setScanningState(scanning) {
+    const { t } = window.i18n;
     elements.scanBtn.classList.toggle('scanning', scanning);
     elements.scanBtn.disabled = scanning;
     elements.scanIcon.textContent = scanning ? '⏳' : '🔍';
-    elements.scanText.textContent = scanning ? '扫描中...' : '扫描设备';
+    elements.scanText.textContent = scanning ? t('scanningText') : t('btnScan');
     elements.scanAnimation.classList.toggle('hidden', !scanning);
 }
 
 // 更新设备列表
 function updateDevicesList(devices) {
     appState.devices = devices;
+    const { t } = window.i18n;
 
     if (devices.length === 0) {
-        elements.devicesList.innerHTML = '<div class="no-devices">未发现设备，请确保目标设备在同一局域网内</div>';
+        elements.devicesList.innerHTML = `<div class="no-devices">${t('noDevicesAfterScan')}</div>`;
         return;
     }
 
@@ -392,7 +410,7 @@ function updateDevicesList(devices) {
                 </div>
             </div>
             <button class="connect-device-btn" onclick="connectToDevice('${escapeHtml(device.id)}')">
-                连接
+                ${t('btnConnect')}
             </button>
         </div>
     `).join('');
@@ -486,8 +504,9 @@ async function loadConnectionHistory() {
 
 // 渲染历史列表
 function renderHistoryList(history) {
+    const { t } = window.i18n;
     if (history.length === 0) {
-        elements.historyList.innerHTML = '<div class="no-history">暂无连接历史</div>';
+        elements.historyList.innerHTML = `<div class="no-history">${t('noHistory')}</div>`;
         return;
     }
 
@@ -497,10 +516,10 @@ function renderHistoryList(history) {
         // 区分手动 IP 和自动发现设备
         const isManual = item.entryType === 'manual';
         const icon = isManual ? '🔗' : '📡';
-        const typeLabel = isManual ? '手动 IP' : (item.connectionType || 'Network');
+        const typeLabel = isManual ? t('manualIpLabel') : (item.connectionType || 'Network');
         const reconnectAttr = isManual
             ? `onclick="reconnectManualIp('${escapeHtml(item.ip)}', ${item.port || 8889})"`
-            : `onclick="reconnectToDevice('${escapeHtml(item.id)}', '${escapeHtml(item.name)}')"`;
+            : `onclick="reconnectToDevice('${escapeHtml(item.id)}', '${escapeHtml(item.name)}')"` ;
         return `
             <div class="history-item">
                 <div class="history-info">
@@ -508,16 +527,16 @@ function renderHistoryList(history) {
                     <div class="history-meta">${escapeHtml(item.ip)} · ${escapeHtml(typeLabel)} · ${dateStr}</div>
                 </div>
                 <button class="reconnect-btn" ${reconnectAttr}>
-                    重连
+                    ${t('btnReconnect')}
                 </button>
             </div>
         `;
     }).join('');
 }
-
 // 快速重连（自动发现设备）
 async function reconnectToDevice(deviceId, deviceName) {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
         const result = await invoke('connect_to_device', { deviceId });
@@ -527,14 +546,16 @@ async function reconnectToDevice(deviceId, deviceName) {
             appState.currentDevice = deviceId;
             setConnectionStatus('connected');
             startLatencyCheck();
-            showSuccess(`已重连到 ${deviceName}`);
+            showSuccess(t('reconnectedToIp').replace('{ip}', deviceName));
         } else {
             setConnectionStatus('disconnected');
-            showError('重连失败: ' + result.error);
+            // 修复：result.error 可能为 undefined，使用兜底文案
+            const errMsg = result.error || result.errorMessage || t('connectErrGeneric').replace('{err}', t('statusDisconnected'));
+            showError(t('connectErrGeneric').replace('{err}', errMsg));
         }
     } catch (error) {
         setConnectionStatus('disconnected');
-        showError('重连错误: ' + error);
+        showError(t('connectErrGeneric').replace('{err}', error || t('statusDisconnected')));
     }
 }
 
@@ -574,13 +595,23 @@ function closeSettings() {
 }
 
 // 将设置加载到 UI
+const DEFAULT_HOTKEY = 'Ctrl+Alt+S';
 function loadSettingsToUI() {
-    elements.hotkeyInput.value = appState.settings.hotkey;
-    elements.hotkeyInput.dataset.hotkey = appState.settings.hotkey;
+    // 修复：hotkey 为空时显示默认值 Ctrl+Alt+S
+    const hotkey = appState.settings.hotkey || DEFAULT_HOTKEY;
+    elements.hotkeyInput.value = hotkey;
+    elements.hotkeyInput.dataset.hotkey = appState.settings.hotkey || '';
     elements.preferConnectionType.value = appState.settings.preferConnectionType;
     elements.autoReconnect.checked = appState.settings.autoReconnect;
     elements.autoStart.checked = appState.settings.autoStart;
     elements.startMinimized.checked = appState.settings.startMinimized;
+    // 外观设置
+    if (elements.languageSelect) {
+        elements.languageSelect.value = appState.settings.language || 'zh';
+    }
+    if (elements.themeSelect) {
+        elements.themeSelect.value = appState.settings.theme || 'auto';
+    }
 }
 
 // 保存设置
@@ -591,6 +622,8 @@ async function saveSettings() {
         autoReconnect: elements.autoReconnect.checked,
         autoStart: elements.autoStart.checked,
         startMinimized: elements.startMinimized.checked,
+        language: elements.languageSelect ? elements.languageSelect.value : (appState.settings.language || 'zh'),
+        theme: elements.themeSelect ? elements.themeSelect.value : (appState.settings.theme || 'auto'),
     };
     localStorage.setItem('kvm_settings', JSON.stringify(appState.settings));
 
@@ -622,8 +655,9 @@ async function saveSettings() {
         await saveLayoutConfig();
     }
 
+    // 保存设置
     closeSettings();
-    showSuccess('设置已保存');
+    showSuccess(window.i18n.t('msgSettingsSaved'));
 }
 
 // 加载设置
@@ -636,6 +670,144 @@ function loadSettings() {
     } catch {
         // 忽略解析错误
     }
+}
+
+// ─── 外观（语言 + 主题）初始化 ───────────────────────────────────────────
+
+/**
+ * 初始化外观：从已保存设置中读取语言和主题并立即应用
+ * 在 loadSettings() 之后调用
+ */
+function initAppearance() {
+    const lang = appState.settings.language || 'zh';
+    const theme = appState.settings.theme || 'auto';
+
+    // 应用语言
+    window.i18n.setLocale(lang);
+    applyI18n();
+
+    // 应用主题（防止闪烁，已在 <head> 内联脚本中提前设置，这里同步模块状态）
+    window.themeManager.setTheme(theme);
+}
+
+/**
+ * 将 data-i18n 属性的元素文本全部替换为当前语言文本
+ * 同时更新动态生成的文本（状态、按钮等）
+ */
+function applyI18n() {
+    const { t } = window.i18n;
+
+    // 批量替换带 data-i18n 属性的元素
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        el.textContent = t(key);
+    });
+
+    // 更新 placeholder
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        el.placeholder = t(key);
+    });
+
+    // 更新动态状态文本（已渲染到 DOM 的）
+    if (elements.connectionStatus) {
+        const cls = elements.connectionStatus.className;
+        if (cls.includes('status-connected')) {
+            elements.connectionStatus.textContent = t('statusConnected');
+        } else if (cls.includes('status-connecting')) {
+            elements.connectionStatus.textContent = t('statusConnecting');
+        } else {
+            elements.connectionStatus.textContent = t('statusDisconnected');
+        }
+    }
+
+    // 更新角色徽章
+    if (elements.currentRole) {
+        const isClient = elements.currentRole.classList.contains('role-client');
+        elements.currentRole.textContent = isClient ? t('roleClient') : t('roleServer');
+    }
+
+    // 更新设备列表空状态文本
+    const noDevicesEl = document.querySelector('.no-devices');
+    if (noDevicesEl) noDevicesEl.textContent = t('noDevices');
+
+    // 更新历史列表空状态文本
+    const noHistoryEl = document.querySelector('.no-history');
+    if (noHistoryEl) noHistoryEl.textContent = t('noHistory');
+
+    // 更新权限警告文本
+    const permWarnText = document.querySelector('.permission-warning-text');
+    if (permWarnText) permWarnText.textContent = t('permissionWarningText');
+
+    // 更新语言选择器选项文本（确保选中项文本与当前语言一致）
+    if (elements.languageSelect) {
+        const zhOption = elements.languageSelect.querySelector('option[value="zh"]');
+        const enOption = elements.languageSelect.querySelector('option[value="en"]');
+        if (zhOption) zhOption.textContent = t('optionZh');
+        if (enOption) enOption.textContent = t('optionEn');
+    }
+
+    // 更新辅助功能遮罩文本
+    updateOverlayI18n();
+}
+
+/**
+ * 更新辅助功能权限遮罩内的文本
+ */
+function updateOverlayI18n() {
+    const { t } = window.i18n;
+    const titleEl = document.querySelector('.accessibility-overlay-title');
+    if (titleEl) titleEl.textContent = t('overlayTitle');
+
+    const descEl = document.querySelector('.accessibility-overlay-desc');
+    if (descEl) {
+        descEl.innerHTML = t('overlayDesc')
+            .replace('辅助功能（Accessibility）权限', '<strong>辅助功能（Accessibility）权限</strong>')
+            .replace('Accessibility permission', '<strong>Accessibility permission</strong>')
+            .replace(/\n/g, '<br>');
+    }
+
+    const steps = document.querySelectorAll('.accessibility-step span:last-child');
+    const stepKeys = ['overlayStep1', 'overlayStep2', 'overlayStep3'];
+    steps.forEach((el, i) => {
+        if (stepKeys[i]) {
+            const text = t(stepKeys[i]);
+            // step2 需要加粗 KVM Share
+            if (i === 1) {
+                el.innerHTML = text.replace('KVM Share', '<strong>KVM Share</strong>');
+            } else {
+                el.textContent = text;
+            }
+        }
+    });
+
+    const authBtn = document.getElementById('open-accessibility-btn');
+    if (authBtn) authBtn.textContent = t('btnGoAuthorize');
+
+    const pollingHint = document.getElementById('accessibility-polling-hint');
+    if (pollingHint) pollingHint.textContent = t('overlayPollingHint');
+}
+
+// ─── 版本号 ───────────────────────────────────────────────────────────────
+
+/**
+ * 初始化版本号显示
+ * 优先从 Tauri API 读取，降级使用 HTML 静态值
+ */
+async function initVersion() {
+    let version = 'v0.1.4'; // 静态降级值
+
+    try {
+        if (window.__TAURI__?.app?.getVersion) {
+            const v = await window.__TAURI__.app.getVersion();
+            if (v) version = `v${v}`;
+        }
+    } catch (e) {
+        // 降级使用静态值
+    }
+
+    if (elements.appVersion) elements.appVersion.textContent = version;
+    if (elements.settingsVersion) elements.settingsVersion.textContent = version;
 }
 
 // ─── 监听地址配置 ───
@@ -684,9 +856,12 @@ function updateListenAddressFromInputs() {
 
 function updateListenAddressDisplay(ip, port) {
     if (!elements.listenAddressDisplay) return;
+    const { t } = window.i18n;
     const localIps = elements.localIp?.textContent;
-    if (ip === '0.0.0.0' && localIps && localIps !== '获取中...' && localIps !== '无法获取') {
-        elements.listenAddressDisplay.textContent = `${localIps.split(' / ')[0]}:${port}（或其他本机 IP）`;
+    const loadingText = t('msgLocalIpLoading');
+    const failedText = t('msgLocalIpFailed');
+    if (ip === '0.0.0.0' && localIps && localIps !== loadingText && localIps !== failedText) {
+        elements.listenAddressDisplay.textContent = `${localIps.split(' / ')[0]}:${port}（${t('orOtherLocalIp')}）`;
     } else if (ip !== '0.0.0.0') {
         elements.listenAddressDisplay.textContent = `${ip}:${port}`;
     } else {
@@ -725,10 +900,11 @@ function handleHotkeyCapture(e) {
 
 // 设置连接状态
 function setConnectionStatus(status) {
+    const { t } = window.i18n;
     const statusMap = {
-        connected: '已连接',
-        connecting: '连接中...',
-        disconnected: '断开',
+        connected: t('statusConnected'),
+        connecting: t('statusConnecting'),
+        disconnected: t('statusDisconnected'),
     };
     const classMap = {
         connected: 'status-connected',
@@ -736,7 +912,7 @@ function setConnectionStatus(status) {
         disconnected: 'status-disconnected',
     };
 
-    elements.connectionStatus.textContent = statusMap[status] || '断开';
+    elements.connectionStatus.textContent = statusMap[status] || t('statusDisconnected');
     elements.connectionStatus.className = classMap[status] || 'status-disconnected';
 
     if (status === 'connected' && appState.connectionType) {
@@ -756,7 +932,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_INTERVAL_MS = 2000;
 
 function startLatencyCheck() {
-    elements.latency.textContent = '检测中...';
+    elements.latency.textContent = window.i18n.t('msgLatencyChecking');
     elements.latency.className = '';
     reconnectAttempts = 0;
     latencyTimer = setInterval(async () => {
@@ -797,13 +973,13 @@ async function handleConnectionLost() {
         stopLatencyCheck();
         appState.connected = false;
         setConnectionStatus('disconnected');
-        showError(`连接已断开，自动重连 ${MAX_RECONNECT_ATTEMPTS} 次均失败，请手动重连`);
+        showError(window.i18n.t('reconnectFailed').replace('{max}', MAX_RECONNECT_ATTEMPTS));
         window.Platform.showNotification('KVM Share', '连接已断开，请手动重连').catch(() => {});
         return;
     }
 
     reconnectAttempts++;
-    elements.latency.textContent = `重连中(${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`;
+    elements.latency.textContent = window.i18n.t('reconnecting').replace('{n}', reconnectAttempts).replace('{max}', MAX_RECONNECT_ATTEMPTS);
     elements.latency.style.color = '#f59e0b';
 
     await new Promise(resolve => setTimeout(resolve, RECONNECT_INTERVAL_MS));
@@ -821,7 +997,7 @@ async function handleConnectionLost() {
             if (result.success) {
                 reconnectAttempts = 0;
                 elements.latency.style.color = '#10b981';
-                showSuccess(`已重连到 ${ip}`);
+                showSuccess(window.i18n.t('manualReconnectSuccess').replace('{ip}', ip));
             }
         } else {
             // 自动发现设备重连
@@ -829,7 +1005,7 @@ async function handleConnectionLost() {
             if (result.success) {
                 reconnectAttempts = 0;
                 elements.latency.style.color = '#10b981';
-                showSuccess('连接已恢复');
+                showSuccess(window.i18n.t('reconnectSuccess'));
             }
         }
     } catch (e) {
@@ -1015,6 +1191,7 @@ async function initDisplayLayout() {
  * 更新布局预览和提示文字
  */
 function updateLayoutPreview(layout, preview, hintEdge) {
+    const { t } = window.i18n;
     // 移除所有布局类
     preview.classList.remove('layout-left', 'layout-right', 'layout-above', 'layout-below');
 
@@ -1022,9 +1199,16 @@ function updateLayoutPreview(layout, preview, hintEdge) {
     const cls = LAYOUT_PREVIEW_CLASS[layout];
     if (cls) preview.classList.add(cls);
 
-    // 更新提示文字
+    // 更新提示文字（使用 i18n 翻译键）
     if (hintEdge) {
-        hintEdge.textContent = LAYOUT_TRIGGER_EDGE[layout] || '右边缘';
+        const edgeKeyMap = {
+            'LocalLeftOfRemote':  'edgeRight',
+            'LocalRightOfRemote': 'edgeLeft',
+            'LocalAboveRemote':   'edgeBottom',
+            'LocalBelowRemote':   'edgeTop',
+        };
+        const edgeKey = edgeKeyMap[layout] || 'edgeRight';
+        hintEdge.textContent = t(edgeKey);
     }
 }
 
@@ -1062,34 +1246,34 @@ document.addEventListener('DOMContentLoaded', () => {
 let accessibilityPollTimer = null;
 
 /**
- * 检测辅助功能权限，未授权时显示引导横幅
+ * 检测辅助功能权限，未授权时显示全屏遮罩引导
  * Windows 平台不需要此权限，直接跳过
  */
 async function checkAccessibilityPermission() {
-    const banner = document.getElementById('accessibility-banner');
-    if (!banner || !invoke) return;
+    const overlay = document.getElementById('accessibility-overlay');
+    if (!overlay || !invoke) return;
 
-    // Windows 平台不需要辅助功能权限，隐藏横幅并返回
+    // Windows 平台不需要辅助功能权限，隐藏遮罩并返回
     const isWindows = navigator.userAgent.includes('Windows') ||
         (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
     if (isWindows) {
-        banner.classList.add('hidden');
+        overlay.classList.add('hidden');
         return;
     }
 
     try {
         const status = await invoke('check_accessibility');
         if (status === 'Denied') {
-            banner.classList.remove('hidden');
+            overlay.classList.remove('hidden');
             // 启动轮询：每 2 秒检测一次，授权后自动隐藏
             startAccessibilityPolling();
         } else {
-            banner.classList.add('hidden');
+            overlay.classList.add('hidden');
             stopAccessibilityPolling();
         }
     } catch (e) {
-        // 检测失败，隐藏横幅（不影响主功能）
-        banner.classList.add('hidden');
+        // 检测失败，隐藏遮罩（不影响主功能）
+        overlay.classList.add('hidden');
     }
 }
 
@@ -1102,11 +1286,11 @@ function startAccessibilityPolling() {
         try {
             const status = await invoke('check_accessibility');
             if (status !== 'Denied') {
-                // 权限已授权，隐藏横幅并停止轮询
-                const banner = document.getElementById('accessibility-banner');
-                if (banner) banner.classList.add('hidden');
+                // 权限已授权，隐藏全屏遮罩并停止轮询
+                const overlay = document.getElementById('accessibility-overlay');
+                if (overlay) overlay.classList.add('hidden');
                 stopAccessibilityPolling();
-                // 任务4：权限授予后，若已连接则隐藏权限提示并恢复开始共享按钮
+                // 权限授予后，若已连接则隐藏权限提示并恢复开始共享按钮
                 if (appState.connected) {
                     hidePermissionWarning();
                 }
@@ -1242,14 +1426,15 @@ async function initRoleSwitch() {
  */
 async function switchRole(newRole) {
     if (!invoke) return;
+    const { t } = window.i18n;
 
     try {
         await invoke('set_role', { newRole });
         currentRole = newRole;
         updateRoleUI(newRole);
 
-        const roleName = newRole === 'Server' ? '被控端' : '主控端';
-        showSuccess(`已切换为${roleName}模式`);
+        const successMsg = newRole === 'Server' ? t('msgSwitchedToServer') : t('msgSwitchedToClient');
+        showSuccess(successMsg);
 
         // 断开当前连接
         if (appState.connected) {
@@ -1266,12 +1451,13 @@ async function switchRole(newRole) {
 function updateRoleUI(role) {
     const roleBadge = document.getElementById('current-role');
     if (!roleBadge) return;
+    const { t } = window.i18n;
 
     if (role === 'Server') {
-        roleBadge.textContent = '被控端';
+        roleBadge.textContent = t('roleServer');
         roleBadge.className = 'role-badge role-server';
     } else {
-        roleBadge.textContent = '主控端';
+        roleBadge.textContent = t('roleClient');
         roleBadge.className = 'role-badge role-client';
     }
 }

@@ -43,7 +43,9 @@ describe('手动连接 UI - HTML 结构', () => {
 
     test('IP 输入框有合适的 placeholder', () => {
         const ipInput = document.getElementById('manual-ip-input') as HTMLInputElement;
-        expect(ipInput.placeholder).toContain('192.168');
+        // 需求 2.1：中文时显示"请输入目标设备 IP 地址"
+        expect(ipInput.placeholder).toBeTruthy();
+        expect(ipInput.placeholder.length).toBeGreaterThan(0);
     });
 });
 
