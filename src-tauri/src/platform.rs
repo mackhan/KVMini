@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// 组合 trait：同时支持 Read 和 Write（用于 TLS/TCP 流的 trait object）
+pub trait ReadWrite: std::io::Read + std::io::Write + Send {}
+impl<T: std::io::Read + std::io::Write + Send> ReadWrite for T {}
+
 // ─── 数据结构 ───
 
 /// 默认快捷键
@@ -117,10 +121,123 @@ pub fn save_settings(settings: AppSettings) -> Result<(), String> {
     let dir = ensure_data_dir()?;
     let path = dir.join("settings.json");
 
+    // 读取旧设置，检测 auto_start 是否变化
+    let old_auto_start = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<AppSettings>(&c).ok())
+            .map(|s| s.auto_start)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("序列化设置失败: {}", e))?;
     fs::write(&path, content)
-        .map_err(|e| format!("写入设置文件失败: {}", e))
+        .map_err(|e| format!("写入设置文件失败: {}", e))?;
+
+    // 如果 auto_start 发生变化，更新系统级启动项
+    if settings.auto_start != old_auto_start {
+        if settings.auto_start {
+            register_auto_start()?;
+        } else {
+            unregister_auto_start()?;
+        }
+    }
+
+    Ok(())
+}
+
+/// 注册开机自启动
+fn register_auto_start() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let launch_agents_dir = std::path::PathBuf::from(&home).join("Library/LaunchAgents");
+        fs::create_dir_all(&launch_agents_dir)
+            .map_err(|e| format!("创建 LaunchAgents 目录失败: {}", e))?;
+        let plist_path = launch_agents_dir.join("com.kvmshare.app.plist");
+        let plist_content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kvmshare.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>"#,
+            exe_path.display()
+        );
+        fs::write(&plist_path, plist_content)
+            .map_err(|e| format!("写入 LaunchAgent plist 失败: {}", e))?;
+        log::info!("已注册开机自启动: {:?}", plist_path);
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let run_key = hkcu.open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            KEY_SET_VALUE,
+        ).map_err(|e| format!("打开注册表 Run 键失败: {}", e))?;
+        run_key.set_value("KVMShare", &exe_path.to_string_lossy().to_string())
+            .map_err(|e| format!("写入注册表启动项失败: {}", e))?;
+        log::info!("已注册开机自启动（注册表）");
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("当前平台不支持开机自启动功能".to_string())
+    }
+}
+
+/// 注销开机自启动
+fn unregister_auto_start() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let plist_path = std::path::PathBuf::from(&home)
+            .join("Library/LaunchAgents/com.kvmshare.app.plist");
+        if plist_path.exists() {
+            fs::remove_file(&plist_path)
+                .map_err(|e| format!("删除 LaunchAgent plist 失败: {}", e))?;
+            log::info!("已注销开机自启动: {:?}", plist_path);
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let run_key = hkcu.open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            KEY_SET_VALUE,
+        ).map_err(|e| format!("打开注册表 Run 键失败: {}", e))?;
+        // 忽略键不存在的错误
+        let _ = run_key.delete_value("KVMShare");
+        log::info!("已注销开机自启动（注册表）");
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(()) // 非支持平台，静默成功
+    }
 }
 
 // ─── 连接历史命令 ───
@@ -350,16 +467,40 @@ fn normalize_hotkey(hotkey: &str) -> String {
 
 #[tauri::command]
 /// 注册全局快捷键（两端统一接口）
-pub fn register_global_hotkey(hotkey: String) -> Result<(), String> {
+/// 先注销旧快捷键，再注册新快捷键
+pub fn register_global_hotkey(app_handle: tauri::AppHandle, hotkey: String) -> Result<(), String> {
+    use tauri::GlobalShortcutManager;
+    use tauri::Manager;
+
+    let mut gsm = app_handle.global_shortcut_manager();
+
+    // 注销所有已注册的快捷键（避免冲突）
+    gsm.unregister_all()
+        .map_err(|e| format!("注销旧快捷键失败: {}", e))?;
+
     if hotkey.is_empty() {
-        return Ok(());
+        // 保存空快捷键到设置
+        let mut settings = get_settings().unwrap_or_default();
+        settings.hotkey = hotkey;
+        return save_settings(settings);
     }
-    // 快捷键注册通过 Tauri 的 globalShortcut 插件实现
-    // 此命令作为后端存储接口，实际注册在前端通过 Tauri API 完成
-    // 这里保存快捷键配置到设置文件
-    let mut settings = get_settings().unwrap_or_default();
-    settings.hotkey = hotkey;
-    save_settings(settings)
+
+    // 注册新快捷键
+    let app_handle_clone = app_handle.clone();
+    match gsm.register(&hotkey, move || {
+        let _ = app_handle_clone.emit_all("hotkey-triggered", ());
+    }) {
+        Ok(_) => {
+            log::info!("全局快捷键已注册: {}", hotkey);
+            // 保存到设置文件
+            let mut settings = get_settings().unwrap_or_default();
+            settings.hotkey = hotkey;
+            save_settings(settings)
+        }
+        Err(e) => {
+            Err(format!("快捷键注册失败（可能与其他应用冲突）: {}", e))
+        }
+    }
 }
 
 // ─── 托盘菜单国际化命令 ───
@@ -791,16 +932,16 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// 启动主控端事件循环：捕获键鼠事件 → 键码映射 → TCP 发送
+/// 启动主控端事件循环：捕获键鼠事件 → 键码映射 → TCP/TLS 发送
 ///
 /// 在专用线程中运行，通过 stop_rx 接收停止信号。
+/// stream 可以是裸 TcpStream 或 TLS 包裹流（通过 trait object 统一）
 fn start_controller_loop(
-    stream: std::net::TcpStream,
+    stream: Box<dyn ReadWrite>,
     remote_platform: crate::protocol::Platform,
     stop_rx: std::sync::mpsc::Receiver<()>,
 ) {
-    use crate::capturer::create_platform_capturer;
-    use crate::keycode_map;
+    use crate::capturer::{create_platform_capturer, EventCapturer};    use crate::keycode_map;
     use crate::protocol::{encode, KvmFrame, Platform};
     use std::io::Write;
 
@@ -820,7 +961,7 @@ fn start_controller_loop(
         // 开启事件拦截（主控端模式：键鼠事件不传递给本机）
         capturer.set_intercept(true);
 
-        let mut stream = stream;
+        let mut stream: Box<dyn ReadWrite> = stream;
 
         // 在当前线程运行 tokio 事件循环
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -907,11 +1048,12 @@ fn start_controller_loop(
     });
 }
 
-/// 启动被控端事件循环：TCP 接收 → 键码映射 → 注入键鼠事件
+/// 启动被控端事件循环：TCP/TLS 接收 → 键码映射 → 注入键鼠事件
 ///
 /// 在专用线程中运行，通过 stop_rx 接收停止信号。
+/// stream 可以是裸 TcpStream 或 TLS 包裹流（通过 trait object 统一）
 fn start_receiver_loop(
-    stream: std::net::TcpStream,
+    stream: Box<dyn ReadWrite>,
     remote_platform: crate::protocol::Platform,
     stop_rx: std::sync::mpsc::Receiver<()>,
     window: Option<tauri::Window>,
@@ -927,9 +1069,7 @@ fn start_receiver_loop(
         let vd = get_virtual_desktop();
         let injector = create_platform_injector(vd.total_width, vd.total_height);
 
-        let mut stream = stream;
-        stream.set_read_timeout(Some(std::time::Duration::from_millis(5)))
-            .unwrap_or(());
+        let mut stream: Box<dyn ReadWrite> = stream;
 
         let mut buf = Vec::with_capacity(4096);
         let mut read_buf = [0u8; 4096];
@@ -1375,6 +1515,52 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
             // 创建停止信号
             let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
 
+            // 检查 TLS 设置，决定是否包裹 TLS 流
+            let tls_enabled = get_settings().map(|s| s.enable_tls).unwrap_or(true);
+            let boxed_stream: Box<dyn ReadWrite> = if tls_enabled {
+                // TLS 模式：包裹为 TLS 客户端流
+                let tls_data_dir = {
+                    #[cfg(target_os = "macos")]
+                    { let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()); std::path::PathBuf::from(home).join("Library/Application Support/com.kvmshare.app/tls") }
+                    #[cfg(target_os = "windows")]
+                    { let appdata = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Temp".to_string()); std::path::PathBuf::from(appdata).join("KVMShare/tls") }
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    { std::path::PathBuf::from("/tmp/kvmshare/tls") }
+                };
+                let tls_manager = crate::tls::TlsManager::new(tls_data_dir);
+                // 检查是否有已保存的指纹
+                let saved_fingerprint = {
+                    let peers = tls_manager.verify_peer_fingerprint(&peer_addr, "");
+                    // 获取已保存的指纹（如果有）
+                    None::<String> // 首次连接时为 None，由 TOFU 流程处理
+                };
+                let tls_config = crate::tls::tls_stream::create_client_config_tofu(saved_fingerprint);
+                match crate::tls::tls_stream::wrap_client_stream(stream_for_loop, &ip, tls_config) {
+                    Ok(tls_stream) => {
+                        log::info!("TLS 握手成功，连接已加密");
+                        Box::new(tls_stream)
+                    }
+                    Err(e) => {
+                        log::warn!("TLS 握手失败（{}），回退到明文传输", e);
+                        // TLS 失败时回退到明文
+                        match std_stream.try_clone() {
+                            Ok(s) => Box::new(s),
+                            Err(e2) => {
+                                return ConnectByIpResult {
+                                    success: false,
+                                    error_type: "tls_error".to_string(),
+                                    error_message: format!("TLS 握手失败: {}，且无法回退: {}", e, e2),
+                                    remote_platform: String::new(),
+                                };
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 明文模式
+                Box::new(stream_for_loop)
+            };
+
             // 读取当前角色，决定启动主控端还是被控端循环
             let current_role = {
                 // 尝试从 Tauri 状态读取角色，默认为被控端
@@ -1384,13 +1570,13 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
             // 根据角色启动对应的事件循环
             match current_role {
                 crate::role_manager::AppRole::Client => {
-                    // 主控端：捕获键鼠 → TCP 发送
-                    start_controller_loop(stream_for_loop, info.remote_platform, stop_rx);
+                    // 主控端：捕获键鼠 → TCP/TLS 发送
+                    start_controller_loop(boxed_stream, info.remote_platform, stop_rx);
                     log::info!("主控端事件循环已启动，连接到 {}", peer_addr);
                 }
                 crate::role_manager::AppRole::Server => {
-                    // 被控端：TCP 接收 → 注入键鼠
-                    start_receiver_loop(stream_for_loop, info.remote_platform, stop_rx, None);
+                    // 被控端：TCP/TLS 接收 → 注入键鼠
+                    start_receiver_loop(boxed_stream, info.remote_platform, stop_rx, None);
                     log::info!("被控端事件循环已启动，接受来自 {} 的控制", peer_addr);
                 }
             }

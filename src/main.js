@@ -56,7 +56,6 @@ function initApp() {
         connectionStatus: document.getElementById('connection-status'),
         connectionType: document.getElementById('connection-type'),
         latency: document.getElementById('latency'),
-        connectBtn: document.getElementById('connect-btn'),
         disconnectBtn: document.getElementById('disconnect-btn'),
         startSharingBtn: document.getElementById('start-sharing-btn'),
         permissionWarning: document.getElementById('permission-warning'),
@@ -125,7 +124,6 @@ function initApp() {
 
 // 设置事件监听器
 function setupEventListeners() {
-    elements.connectBtn.addEventListener('click', handleConnect);
     elements.disconnectBtn.addEventListener('click', handleDisconnect);
     elements.settingsBtn.addEventListener('click', openSettings);
     elements.scanBtn.addEventListener('click', handleScan);
@@ -156,6 +154,13 @@ function setupEventListeners() {
         });
     }
 
+    // TLS 开关：实时更新指纹显示
+    if (elements.enableTls) {
+        elements.enableTls.addEventListener('change', () => {
+            loadLocalTlsFingerprint();
+        });
+    }
+
     elements.hotkeyInput.addEventListener('focus', () => {
         elements.hotkeyInput.value = window.i18n.t('hotkeyPrompt');
     });
@@ -181,6 +186,37 @@ function setupEventListeners() {
             // 隐藏手动连接成功状态
             hideManualConnectStatus();
         }).catch(e => console.warn('断线事件监听注册失败:', e));
+
+        // 监听 TLS 指纹验证事件（TOFU 首次连接确认）
+        window.__TAURI__.event.listen('tls-verify-fingerprint', async (event) => {
+            const { address, fingerprint } = event.payload || {};
+            if (!address || !fingerprint) return;
+            const trusted = await showTlsConfirmDialog(address, fingerprint);
+            if (trusted) {
+                // 用户确认信任，保存到后端
+                try {
+                    await invoke('trust_peer_certificate', { address, fingerprint });
+                } catch (e) {
+                    console.warn('保存信任记录失败:', e);
+                }
+            }
+        }).catch(e => console.warn('TLS 指纹验证事件监听注册失败:', e));
+
+        // 监听全局快捷键触发事件，切换主控/被控角色
+        window.__TAURI__.event.listen('hotkey-triggered', async () => {
+            try {
+                // 切换角色：主控端 ↔ 被控端
+                const currentRole = await invoke('get_current_role');
+                const newRole = currentRole === 'Client' ? 'Server' : 'Client';
+                await invoke('set_role', { role: newRole });
+                const { t } = window.i18n;
+                const msg = newRole === 'Client' ? t('msgSwitchedToClient') : t('msgSwitchedToServer');
+                showSuccess(msg);
+                updateUI();
+            } catch (e) {
+                console.warn('快捷键触发角色切换失败:', e);
+            }
+        }).catch(e => console.warn('快捷键事件监听注册失败:', e));
     }
 }
 
@@ -202,12 +238,6 @@ async function loadLocalIp() {
 }
 
 // ─── 连接管理 ───
-
-// 处理连接按钮点击（顶部扫描并连接按钮）
-async function handleConnect() {
-    // 顶部按钮实际功能是扫描设备，与下方扫描按钮一致
-    await handleScan();
-}
 
 // 处理断开连接
 async function handleDisconnect() {
@@ -377,7 +407,12 @@ async function handleScan() {
 
     try {
         const devices = await invoke('discover_devices');
-        updateDevicesList(devices);
+        if (devices.length === 0) {
+            // 扫描成功但未发现其他设备
+            updateDevicesList([]);
+        } else {
+            updateDevicesList(devices);
+        }
     } catch (error) {
         showError(window.i18n.t('noDevicesAfterScan'));
         updateDevicesList([]);
@@ -402,7 +437,7 @@ function updateDevicesList(devices) {
     const { t } = window.i18n;
 
     if (devices.length === 0) {
-        elements.devicesList.innerHTML = `<div class="no-devices">${t('noDevicesAfterScan')}</div>`;
+        elements.devicesList.innerHTML = `<div class="no-devices">${t('noDevicesFound')}</div>`;
         return;
     }
 
@@ -604,13 +639,35 @@ function closeSettings() {
 /** 加载本机 TLS 证书指纹并显示在设置页 */
 async function loadLocalTlsFingerprint() {
     if (!elements.localTlsFingerprint || !invoke) return;
+    const { t } = window.i18n;
+    const fingerprintRow = document.getElementById('tls-fingerprint-row');
+    const fingerprintHint = document.getElementById('tls-fingerprint-hint');
+    const copyBtn = fingerprintRow ? fingerprintRow.querySelector('.btn-small') : null;
+
+    // 检查 TLS 是否开启
+    const tlsEnabled = elements.enableTls ? elements.enableTls.checked : true;
+
+    if (!tlsEnabled) {
+        // TLS 关闭时：显示灰色提示
+        elements.localTlsFingerprint.textContent = t('tlsDisabled');
+        elements.localTlsFingerprint.style.color = '#9ca3af';
+        elements.localTlsFingerprint.title = '';
+        if (copyBtn) copyBtn.disabled = true;
+        if (fingerprintHint) fingerprintHint.style.color = '#9ca3af';
+        return;
+    }
+
+    // TLS 开启时：正常加载指纹
+    if (copyBtn) copyBtn.disabled = false;
+    if (fingerprintHint) fingerprintHint.style.color = '';
+    elements.localTlsFingerprint.style.color = '';
     try {
         const fp = await invoke('get_local_tls_fingerprint');
-        // 只显示前 32 个字符（前 10 个字节），避免过长
+        // 只显示前 47 个字符，完整指纹放 title
         elements.localTlsFingerprint.textContent = fp ? fp.substring(0, 47) + '...' : '-';
         elements.localTlsFingerprint.title = fp || '';
     } catch (e) {
-        elements.localTlsFingerprint.textContent = window.i18n.t('tlsFingerprintLoadFailed');
+        elements.localTlsFingerprint.textContent = t('tlsFingerprintLoadFailed');
     }
 }
 
@@ -722,7 +779,9 @@ async function saveSettings() {
         try {
             await invoke('save_settings', { settings: appState.settings });
         } catch (e) {
-            console.warn('后端设置保存失败（功能待实现）:', e);
+            // 显示后端错误（如开机自启动注册失败）
+            showError(`设置保存失败: ${e}`);
+            return;
         }
 
         // 保存监听地址配置
@@ -743,6 +802,18 @@ async function saveSettings() {
 
         // 保存显示器布局配置
         await saveLayoutConfig();
+
+        // 注册全局快捷键（先注销旧的，再注册新的）
+        const newHotkey = appState.settings.hotkey || '';
+        try {
+            await invoke('register_global_hotkey', { hotkey: newHotkey });
+            if (newHotkey) {
+                log.debug && log.debug(`全局快捷键已注册: ${newHotkey}`);
+            }
+        } catch (e) {
+            // 快捷键冲突或注册失败，显示提示但不阻止保存
+            showError(`快捷键注册失败: ${e}`);
+        }
     }
 
     // 保存设置
@@ -1011,7 +1082,6 @@ function setConnectionStatus(status) {
         elements.connectionType.textContent = '-';
     }
 
-    elements.connectBtn.disabled = status !== 'disconnected';
     elements.disconnectBtn.disabled = status !== 'connected';
 }
 

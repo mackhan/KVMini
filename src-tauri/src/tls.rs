@@ -265,16 +265,159 @@ pub fn compute_fingerprint(data: &[u8]) -> String {
 
 /// TLS 连接包装器（对上层透明）
 ///
-/// 实际实现需要 rustls crate：
-/// ```rust
-/// use rustls::{ClientConfig, ServerConfig, StreamOwned};
-/// pub enum TlsStream<S: std::io::Read + std::io::Write> {
-///     Client(StreamOwned<ClientConnection, S>),
-///     Server(StreamOwned<ServerConnection, S>),
-/// }
-/// ```
-///
-/// 当前提供接口定义，待 rustls 依赖添加后实现
+/// 使用 rustls 实现真正的 TLS 1.3 加密传输。
+/// 支持服务端（被控端 accept）和客户端（主控端 connect）两种模式。
+pub mod tls_stream {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::Arc;
+    use rustls::{ClientConfig, ServerConfig, RootCertStore};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+    use tokio_rustls::rustls as tls_rustls;
+
+    /// 创建 TLS 服务端配置（被控端使用）
+    pub fn create_server_config(cert_pem: &str, key_pem: &str) -> Result<Arc<ServerConfig>, String> {
+        use rustls_pemfile::{certs, pkcs8_private_keys};
+        use std::io::BufReader;
+
+        let cert_bytes = cert_pem.as_bytes();
+        let key_bytes = key_pem.as_bytes();
+
+        let certs: Vec<CertificateDer<'static>> = certs(&mut BufReader::new(cert_bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("解析证书失败: {}", e))?;
+
+        let keys: Vec<_> = pkcs8_private_keys(&mut BufReader::new(key_bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("解析私钥失败: {}", e))?;
+
+        let key = keys.into_iter().next()
+            .ok_or("未找到私钥".to_string())?;
+
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, PrivateKeyDer::Pkcs8(key))
+            .map_err(|e| format!("创建服务端 TLS 配置失败: {}", e))?;
+
+        Ok(Arc::new(config))
+    }
+
+    /// 创建 TLS 客户端配置（主控端使用，跳过 CA 验证，使用 TOFU 指纹验证）
+    pub fn create_client_config_tofu(expected_fingerprint: Option<String>) -> Arc<ClientConfig> {
+        // 使用自定义证书验证器（跳过 CA 链验证，只验证指纹）
+        let verifier = Arc::new(TofuCertVerifier { expected_fingerprint });
+        let config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        Arc::new(config)
+    }
+
+    /// TOFU 证书验证器：跳过 CA 链验证，只验证指纹
+    #[derive(Debug)]
+    struct TofuCertVerifier {
+        expected_fingerprint: Option<String>,
+    }
+
+    impl tls_rustls::client::danger::ServerCertVerifier for TofuCertVerifier {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: tls_rustls::pki_types::UnixTime,
+        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
+            // 计算对端证书指纹
+            let fingerprint = super::compute_fingerprint(end_entity.as_ref());
+
+            // 如果有期望的指纹，验证是否匹配
+            if let Some(ref expected) = self.expected_fingerprint {
+                if &fingerprint != expected {
+                    return Err(tls_rustls::Error::General(
+                        format!("证书指纹不匹配：期望 {}，实际 {}", expected, fingerprint)
+                    ));
+                }
+            }
+            // 无期望指纹（首次连接）：允许通过，由上层处理 TOFU 确认
+            Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
+            vec![
+                tls_rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                tls_rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                tls_rustls::SignatureScheme::RSA_PSS_SHA256,
+                tls_rustls::SignatureScheme::RSA_PSS_SHA384,
+                tls_rustls::SignatureScheme::RSA_PSS_SHA512,
+                tls_rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                tls_rustls::SignatureScheme::RSA_PKCS1_SHA384,
+                tls_rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            ]
+        }
+    }
+
+    /// 将 TcpStream 包裹为 TLS 服务端流（同步版本，用于 std::net::TcpStream）
+    pub fn wrap_server_stream(
+        stream: TcpStream,
+        config: Arc<ServerConfig>,
+    ) -> Result<rustls::StreamOwned<rustls::ServerConnection, TcpStream>, String> {
+        let conn = rustls::ServerConnection::new(config)
+            .map_err(|e| format!("创建 TLS 服务端连接失败: {}", e))?;
+        Ok(rustls::StreamOwned::new(conn, stream))
+    }
+
+    /// 将 TcpStream 包裹为 TLS 客户端流（同步版本，用于 std::net::TcpStream）
+    pub fn wrap_client_stream(
+        stream: TcpStream,
+        server_name: &str,
+        config: Arc<ClientConfig>,
+    ) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>, String> {
+        let server_name = ServerName::try_from(server_name.to_string())
+            .map_err(|e| format!("无效的服务器名称: {}", e))?;
+        let conn = rustls::ClientConnection::new(config, server_name)
+            .map_err(|e| format!("创建 TLS 客户端连接失败: {}", e))?;
+        Ok(rustls::StreamOwned::new(conn, stream))
+    }
+
+    /// 从对端 TLS 连接中提取证书指纹
+    pub fn extract_peer_fingerprint_from_server_stream(
+        tls_stream: &rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
+    ) -> Option<String> {
+        tls_stream.conn.peer_certificates()
+            .and_then(|certs| certs.first())
+            .map(|cert| super::compute_fingerprint(cert.as_ref()))
+    }
+
+    /// 从客户端 TLS 连接中提取对端证书指纹
+    pub fn extract_peer_fingerprint_from_client_stream(
+        tls_stream: &rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
+    ) -> Option<String> {
+        tls_stream.conn.peer_certificates()
+            .and_then(|certs| certs.first())
+            .map(|cert| super::compute_fingerprint(cert.as_ref()))
+    }
+}
+
+/// TLS 连接包装器（旧接口，保留兼容性）
 pub struct TlsStreamWrapper {
     /// 是否已加密
     pub encrypted: bool,

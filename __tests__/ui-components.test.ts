@@ -25,8 +25,9 @@ describe('前端界面 - HTML 结构完整性', () => {
         expect(document.getElementById('latency')).not.toBeNull();
     });
 
-    test('主界面包含连接/断开按钮', () => {
-        expect(document.getElementById('connect-btn')).not.toBeNull();
+    test('主界面包含断开按钮（顶部扫描按钮已移除，scan-btn 为唯一扫描入口）', () => {
+        // 需求 1：顶部 connect-btn 已移除，不应存在
+        expect(document.getElementById('connect-btn')).toBeNull();
         expect(document.getElementById('disconnect-btn')).not.toBeNull();
     });
 

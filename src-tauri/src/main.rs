@@ -5,6 +5,7 @@
 #![allow(dead_code, unused_imports, unused_variables, unused_doc_comments)]
 
 use tauri::{Manager, SystemTray, SystemTrayMenu, SystemTrayMenuItem, CustomMenuItem};
+use tauri::GlobalShortcutManager;
 
 mod types;
 mod protocol;
@@ -164,6 +165,20 @@ fn main() {
 
             // 启动显示器变化监听（每 3 秒检测一次，变化时通知前端）
             monitor::start_monitor_watcher(app.handle());
+
+            // 注册已保存的全局快捷键
+            if let Ok(settings) = platform::get_settings() {
+                if !settings.hotkey.is_empty() {
+                    let app_handle = app.handle();
+                    let hotkey = settings.hotkey.clone();
+                    match app.global_shortcut_manager().register(&hotkey, move || {
+                        let _ = app_handle.emit_all("hotkey-triggered", ());
+                    }) {
+                        Ok(_) => log::info!("全局快捷键已注册: {}", hotkey),
+                        Err(e) => log::warn!("全局快捷键注册失败: {} ({})", hotkey, e),
+                    }
+                }
+            }
 
             #[cfg(debug_assertions)]
             {

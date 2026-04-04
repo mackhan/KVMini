@@ -39,6 +39,7 @@ const MESSAGES = {
     scanningHint: '正在扫描局域网设备...',
     noDevices: '点击"扫描设备"发现局域网内的设备',
     noDevicesAfterScan: '未发现设备，请确保目标设备在同一局域网内',
+    noDevicesFound: '未发现其他设备',
     btnConnect: '连接',
 
     // 手动连接
@@ -210,6 +211,9 @@ const MESSAGES = {
     btnCopyFingerprint: '复制',
     tlsFingerprintCopied: '指纹已复制到剪贴板',
     tlsFingerprintLoadFailed: '指纹加载失败',
+    tlsFingerprintHint: '对端首次连接时需核对此指纹，确认一致后方可信任连接',
+    tlsDisabled: '（TLS 已关闭）',
+    copied: '已复制',
 
     // TLS 指纹确认对话框
     tlsConfirmTitle: '首次连接安全确认',
@@ -254,6 +258,7 @@ const MESSAGES = {
     scanningHint: 'Scanning LAN devices...',
     noDevices: 'Click "Scan Devices" to find devices on LAN',
     noDevicesAfterScan: 'No devices found. Make sure the target device is on the same LAN.',
+    noDevicesFound: 'No other devices found',
     btnConnect: 'Connect',
 
     // Manual connect
@@ -425,6 +430,9 @@ const MESSAGES = {
     btnCopyFingerprint: 'Copy',
     tlsFingerprintCopied: 'Fingerprint copied to clipboard',
     tlsFingerprintLoadFailed: 'Failed to load fingerprint',
+    tlsFingerprintHint: 'When the remote connects for the first time, verify this fingerprint matches what is shown on the remote before trusting the connection.',
+    tlsDisabled: '(TLS Disabled)',
+    copied: 'Copied',
 
     // TLS fingerprint confirmation dialog
     tlsConfirmTitle: 'First Connection Security Check',

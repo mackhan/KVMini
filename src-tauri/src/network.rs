@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket, IpAddr};
 use std::collections::HashMap;
 use tokio::net::TcpStream;
 use crate::types::{DeviceInfo, ConnectionType, ConnectionResult};
@@ -8,6 +8,21 @@ pub const DISCOVERY_MSG: &[u8] = b"KVM_DISCOVERY";
 pub const DISCOVERY_PORT: u16 = 8888;
 /// 扫描固定等待时间：5 秒
 pub const SCAN_TIMEOUT_SECS: u64 = 5;
+
+/// 获取本机所有网卡 IP 地址（用于过滤自身响应）
+fn get_local_ips() -> Vec<IpAddr> {
+    let mut ips = vec![
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),       // 127.0.0.1
+        IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),       // ::1
+    ];
+    // 尝试通过枚举网卡获取所有本机 IP
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            ips.push(iface.ip());
+        }
+    }
+    ips
+}
 
 /// 网络管理器
 pub struct NetworkManager {
@@ -41,11 +56,19 @@ impl NetworkManager {
         self.udp_socket.set_read_timeout(Some(std::time::Duration::from_secs(SCAN_TIMEOUT_SECS)))
             .map_err(|e| format!("Failed to set timeout: {}", e))?;
 
+        // 收集本机所有 IP，用于过滤自身响应
+        let local_ips = get_local_ips();
+
         let mut buffer = [0u8; 1024];
         let mut devices = Vec::new();
 
         // 持续接收，直到超时
         while let Ok((size, src_addr)) = self.udp_socket.recv_from(&mut buffer) {
+            // 过滤本机自身响应
+            if local_ips.contains(&src_addr.ip()) {
+                continue;
+            }
+
             let data = &buffer[..size];
 
             // 尝试解析 JSON 格式响应（新格式）
