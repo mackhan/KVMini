@@ -50,6 +50,10 @@ pub enum EventType {
     HeartbeatAck = 0x41,
     /// 剪贴板内容
     Clipboard = 0x50,
+    /// Ping（延迟检测，携带发送时间戳 ms）
+    Ping = 0x60,
+    /// Pong（延迟检测响应，回传原始时间戳）
+    Pong = 0x61,
 }
 
 impl EventType {
@@ -66,6 +70,8 @@ impl EventType {
             0x40 => Some(Self::Heartbeat),
             0x41 => Some(Self::HeartbeatAck),
             0x50 => Some(Self::Clipboard),
+            0x60 => Some(Self::Ping),
+            0x61 => Some(Self::Pong),
             _ => None,
         }
     }
@@ -160,6 +166,10 @@ pub enum KvmFrame {
     HeartbeatAck,
     /// 剪贴板内容（UTF-8 文本）
     Clipboard { text: String },
+    /// Ping：携带发送时间戳（毫秒，u64 小端序）
+    Ping { timestamp_ms: u64 },
+    /// Pong：回传原始时间戳（毫秒，u64 小端序）
+    Pong { timestamp_ms: u64 },
 }
 
 /// 协议编解码错误
@@ -240,6 +250,12 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
         KvmFrame::Clipboard { text } => {
             let p = text.as_bytes().to_vec();
             (EventType::Clipboard, p)
+        }
+        KvmFrame::Ping { timestamp_ms } => {
+            (EventType::Ping, timestamp_ms.to_le_bytes().to_vec())
+        }
+        KvmFrame::Pong { timestamp_ms } => {
+            (EventType::Pong, timestamp_ms.to_le_bytes().to_vec())
         }
     };
 
@@ -327,6 +343,16 @@ pub fn decode(buf: &[u8]) -> Result<(KvmFrame, usize), ProtocolError> {
         EventType::Clipboard => {
             let text = String::from_utf8_lossy(payload).to_string();
             KvmFrame::Clipboard { text }
+        }
+        EventType::Ping => {
+            check_payload_len(payload, 8)?;
+            let timestamp_ms = u64::from_le_bytes([payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7]]);
+            KvmFrame::Ping { timestamp_ms }
+        }
+        EventType::Pong => {
+            check_payload_len(payload, 8)?;
+            let timestamp_ms = u64::from_le_bytes([payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7]]);
+            KvmFrame::Pong { timestamp_ms }
         }
     };
 

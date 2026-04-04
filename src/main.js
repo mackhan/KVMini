@@ -941,8 +941,11 @@ function startLatencyCheck() {
             const latency = await invoke('get_latency');
             if (latency != null) {
                 elements.latency.textContent = `${latency}ms`;
-                // 延迟 > 50ms 显示黄色警告
-                if (latency > 50) {
+                // 延迟颜色：>100ms 红色，>50ms 黄色，否则绿色
+                if (latency > 100) {
+                    elements.latency.style.color = '#ef4444';
+                    elements.latency.title = '网络延迟过高，使用体验可能受到严重影响';
+                } else if (latency > 50) {
                     elements.latency.style.color = '#d97706';
                     elements.latency.title = '网络延迟较高，可能影响使用体验';
                 } else {

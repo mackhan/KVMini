@@ -508,11 +508,14 @@ pub fn get_local_ip() -> Vec<String> {
 // ─── 延迟检测命令 ───
 
 #[tauri::command]
-/// 获取当前连接延迟（毫秒）
+/// 获取当前连接延迟（毫秒），None 表示未连接或尚未测量
 pub async fn get_latency() -> Option<u32> {
-    // 实际实现：ping 当前连接的设备
-    // 当前返回模拟值，后续与 connection_manager 集成
-    Some(3)
+    let rtt = LAST_RTT_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if rtt == u32::MAX {
+        None
+    } else {
+        Some(rtt)
+    }
 }
 
 // ─── 遗留进程清理命令 ───
@@ -777,6 +780,17 @@ lazy_static::lazy_static! {
         std::sync::Mutex::new(None);
 }
 
+/// 最新 RTT 延迟（毫秒），0 表示尚未测量，u32::MAX 表示连接已断开
+static LAST_RTT_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// 获取当前时间戳（毫秒）
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// 启动主控端事件循环：捕获键鼠事件 → 键码映射 → TCP 发送
 ///
 /// 在专用线程中运行，通过 stop_rx 接收停止信号。
@@ -823,10 +837,24 @@ fn start_controller_loop(
         };
 
         rt.block_on(async move {
+            let mut last_ping_time = tokio::time::Instant::now();
+            const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
             loop {
                 // 检查停止信号
                 if stop_rx.try_recv().is_ok() {
                     break;
+                }
+
+                // 每 2 秒发送一次 Ping
+                if last_ping_time.elapsed() >= PING_INTERVAL {
+                    let ts = now_ms();
+                    let ping_bytes = encode(&KvmFrame::Ping { timestamp_ms: ts });
+                    if let Err(e) = stream.write_all(&ping_bytes) {
+                        log::error!("Ping 发送失败: {}，停止主控端循环", e);
+                        break;
+                    }
+                    last_ping_time = tokio::time::Instant::now();
                 }
 
                 // 接收捕获事件（超时 1ms）
@@ -891,8 +919,8 @@ fn start_receiver_loop(
     use crate::injector::{create_platform_injector, inject_frame};
     use crate::keycode_map;
     use crate::monitor::get_virtual_desktop;
-    use crate::protocol::{decode, KvmFrame, Platform, ProtocolError};
-    use std::io::Read;
+    use crate::protocol::{decode, encode, KvmFrame, Platform, ProtocolError};
+    use std::io::{Read, Write};
 
     std::thread::spawn(move || {
         // 获取屏幕尺寸（用于注入器坐标转换）
@@ -967,6 +995,22 @@ fn start_receiver_loop(
                                     keycode
                                 };
                                 KvmFrame::KeyEvent { keycode: mapped, pressed }
+                            }
+                            // 收到 Ping → 立即回复 Pong（回传原始时间戳）
+                            KvmFrame::Ping { timestamp_ms } => {
+                                let pong_bytes = encode(&KvmFrame::Pong { timestamp_ms });
+                                if let Err(e) = stream.write_all(&pong_bytes) {
+                                    log::warn!("Pong 回复失败: {}", e);
+                                }
+                                continue;
+                            }
+                            // 收到 Pong → 计算 RTT，更新全局延迟
+                            KvmFrame::Pong { timestamp_ms } => {
+                                let now = now_ms();
+                                let rtt = now.saturating_sub(timestamp_ms) as u32;
+                                LAST_RTT_MS.store(rtt, std::sync::atomic::Ordering::Relaxed);
+                                log::debug!("RTT: {}ms", rtt);
+                                continue;
                             }
                             other => other,
                         };
@@ -1424,6 +1468,9 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
 pub fn disconnect_tcp() -> Result<(), String> {
     // 停止事件循环（捕获/注入）
     stop_event_loop();
+
+    // 重置延迟显示
+    LAST_RTT_MS.store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
 
     if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
         if let Some(active) = conn.take() {
