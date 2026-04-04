@@ -159,6 +159,9 @@ fn main() {
             // 启动时清理遗留进程
             let _ = platform::kill_legacy_process();
 
+            // 启动被控端 UDP 广播监听（所有设备启动时都监听，主控端扫描时能发现）
+            platform::start_udp_discovery_listener();
+
             #[cfg(debug_assertions)]
             {
                 let window = app.get_window("main").unwrap();

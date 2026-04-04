@@ -771,6 +771,10 @@ lazy_static::lazy_static! {
     /// 全局剪贴板监听器
     static ref CLIPBOARD_MONITOR: std::sync::Mutex<Option<Box<dyn crate::clipboard::ClipboardMonitor>>> =
         std::sync::Mutex::new(None);
+
+    /// 全局 UDP 广播监听器停止信号（被控端）
+    static ref UDP_LISTENER_STOP: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>> =
+        std::sync::Mutex::new(None);
 }
 
 /// 启动主控端事件循环：捕获键鼠事件 → 键码映射 → TCP 发送
@@ -1008,6 +1012,157 @@ fn stop_event_loop() {
         }
         *monitor = None;
     }
+}
+
+/// 启动被控端 UDP 广播监听
+///
+/// 监听 UDP 8888 端口，收到 KVM_DISCOVERY 广播后立即回复 KVM_RESPONSE:JSON。
+/// 崩溃时自动重启，最多重试 3 次。
+pub fn start_udp_discovery_listener() {
+    use std::net::UdpSocket;
+    use crate::network::DISCOVERY_PORT;
+
+    // 停止旧的监听器
+    stop_udp_discovery_listener();
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    if let Ok(mut s) = UDP_LISTENER_STOP.lock() {
+        *s = Some(stop_tx);
+    }
+
+    std::thread::spawn(move || {
+        let mut retry_count = 0u32;
+        const MAX_RETRIES: u32 = 3;
+
+        loop {
+            // 检查停止信号
+            if stop_rx.try_recv().is_ok() {
+                log::info!("UDP 广播监听已停止");
+                break;
+            }
+
+            match run_udp_listener(&stop_rx) {
+                Ok(()) => {
+                    // 正常停止（收到停止信号）
+                    break;
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count > MAX_RETRIES {
+                        log::error!("UDP 广播监听失败次数超过上限（{}），停止重试: {}", MAX_RETRIES, e);
+                        break;
+                    }
+                    log::warn!("UDP 广播监听崩溃（第 {}/{} 次），1 秒后重启: {}", retry_count, MAX_RETRIES, e);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    });
+}
+
+/// 运行 UDP 监听循环（内部函数，供 start_udp_discovery_listener 调用）
+fn run_udp_listener(stop_rx: &std::sync::mpsc::Receiver<()>) -> Result<(), String> {
+    use std::net::UdpSocket;
+    use crate::network::DISCOVERY_PORT;
+
+    let socket = UdpSocket::bind(format!("0.0.0.0:{}", DISCOVERY_PORT))
+        .map_err(|e| format!("绑定 UDP 端口 {} 失败: {}", DISCOVERY_PORT, e))?;
+
+    // 设置读取超时，以便定期检查停止信号
+    socket.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| format!("设置 UDP 超时失败: {}", e))?;
+
+    log::info!("被控端 UDP 广播监听已启动，端口 {}", DISCOVERY_PORT);
+
+    let mut buf = [0u8; 256];
+
+    loop {
+        // 检查停止信号
+        if stop_rx.try_recv().is_ok() {
+            return Ok(());
+        }
+
+        match socket.recv_from(&mut buf) {
+            Ok((size, src_addr)) => {
+                let data = &buf[..size];
+                if data == crate::network::DISCOVERY_MSG {
+                    // 收到发现广播，立即回复包含设备信息的 JSON 响应
+                    let device_name = get_device_name();
+                    let os_name = get_os_name();
+                    let tcp_port = get_listen_config()
+                        .map(|c| c.port)
+                        .unwrap_or(8889);
+
+                    let response_json = serde_json::json!({
+                        "name": device_name,
+                        "os": os_name,
+                        "tcp_port": tcp_port,
+                    });
+                    let response = format!("KVM_RESPONSE:{}", response_json);
+
+                    if let Err(e) = socket.send_to(response.as_bytes(), src_addr) {
+                        log::warn!("回复 UDP 发现广播失败: {}", e);
+                    } else {
+                        log::info!("已回复 UDP 发现广播给 {}", src_addr);
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut => {
+                // 超时，继续循环（用于检查停止信号）
+            }
+            Err(e) => {
+                return Err(format!("UDP 接收失败: {}", e));
+            }
+        }
+    }
+}
+
+/// 停止被控端 UDP 广播监听
+pub fn stop_udp_discovery_listener() {
+    if let Ok(mut s) = UDP_LISTENER_STOP.lock() {
+        if let Some(tx) = s.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// 获取本机设备名称
+fn get_device_name() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("scutil")
+            .args(&["--get", "ComputerName"])
+            .output()
+        {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    // 降级：使用 hostname
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "KVMini Device".to_string())
+}
+
+/// 获取当前操作系统名称
+fn get_os_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    { "macOS" }
+    #[cfg(target_os = "windows")]
+    { "Windows" }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { "Linux" }
 }
 
 /// 启动剪贴板共享：监听本机剪贴板变化，通过 TCP 发送给对端

@@ -17,14 +17,16 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 - ✅ MockCapturer / MockInjector（测试用）
 - ✅ HotkeyDetector（键码检测逻辑）
 
-### 本文档目标（全部未实现）
+### 本文档目标（全部待修复/实现）
 
 - ❌ UI Bug 修复（连接失败 undefined、i18n 占位符、按钮语义、默认快捷键显示）
+- ❌ UDP 广播扫描：被控端响应广播（当前扫描永远找不到设备，超时固定 5 秒）
+- ❌ 延迟显示真实 ping 值（当前硬编码返回 3ms）
 - ❌ macOS CGEvent Tap 真实捕获与注入
 - ❌ Windows SetWindowsHookEx 真实捕获与 SendInput 注入
 - ❌ 跨平台键码映射（CGKeyCode ↔ VirtualKey）
 - ❌ 事件循环串联（捕获 → TCP → 注入）
-- ❌ 多显示器支持
+- ❌ 多显示器支持（后端已实现，前端 UI 缺失）
 - ❌ 剪贴板共享（Mac ↔ Windows）
 - ❌ TLS 1.3 加密传输
 
@@ -60,7 +62,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 
 #### 验收标准
 
-1. WHEN 用户查看主界面时 THEN 顶部"连接"按钮 SHALL 改为"扫描并连接"或移除（功能与下方设备列表重复）
+1. WHEN 用户查看主界面时 THEN 顶部"连接"按钮 SHALL 改为"扫描设备"，功能为触发局域网扫描
 2. WHEN 设备列表中有可用设备时 THEN 每个设备旁的"连接"按钮 SHALL 点击后直接连接该设备
 3. WHEN 手动连接区域的"连接"按钮被点击时 THEN 系统 SHALL 使用输入框中的 IP 和端口发起连接
 4. WHEN 已有连接时 THEN 顶部状态区域 SHALL 清晰显示"已连接到 [设备名/IP]"
@@ -76,7 +78,32 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 3. WHEN 用户清空快捷键输入框并保存 THEN 系统 SHALL 提示"快捷键已清空，切换控制权功能将不可用"
 4. WHEN 用户修改快捷键后保存 THEN 系统 SHALL 立即注册新快捷键，并在输入框中显示新值
 
-### 需求 5：macOS CGEvent Tap 键鼠捕获实现
+### 需求 5：UDP 广播扫描——被控端响应广播
+
+**用户故事：** 作为用户，我希望点击"扫描设备"后能真正发现局域网内的被控端设备，而不是永远返回空列表。
+
+#### 验收标准
+
+1. WHEN 被控端应用启动时 THEN 系统 SHALL 在独立线程中监听 UDP 广播端口（默认 8888）
+2. WHEN 被控端收到 `KVM_DISCOVERY` 广播包时 THEN 系统 SHALL 立即回复 `KVM_RESPONSE` 包，包含设备名称、IP、TCP 端口
+3. WHEN 主控端发出广播后 THEN 系统 SHALL 固定等待 5 秒收集所有响应，超时后自动返回设备列表
+4. WHEN 扫描结束时 THEN 前端 SHALL 显示所有发现的设备，若无设备则显示"未发现设备，请确认被控端已启动"
+5. WHEN 扫描进行中时 THEN 前端 SHALL 显示"扫描中..."动画，扫描结束后自动消失
+6. WHEN 被控端 UDP 监听线程崩溃时 THEN 系统 SHALL 自动重启监听，最多重试 3 次
+
+### 需求 6：延迟显示真实 ping 值
+
+**用户故事：** 作为用户，我希望界面上显示的延迟是真实的网络延迟，而不是假数据，以便判断网络质量。
+
+#### 验收标准
+
+1. WHEN TCP 连接建立后 THEN 系统 SHALL 每 2 秒发送一次 `KvmFrame::Ping`，记录发送时间戳
+2. WHEN 收到对端的 `KvmFrame::Pong` 时 THEN 系统 SHALL 计算往返时间（RTT）并通过 Tauri 事件更新前端延迟显示
+3. WHEN 延迟超过 50ms 时 THEN 前端 SHALL 将延迟数字显示为黄色警告色
+4. WHEN 延迟超过 100ms 时 THEN 前端 SHALL 将延迟数字显示为红色
+5. WHEN 连接断开时 THEN 前端 SHALL 将延迟显示重置为"-"
+
+### 需求 7：macOS CGEvent Tap 键鼠捕获实现
 
 **用户故事：** 作为 Mac 主控端用户，我希望软件能捕获我的键盘和鼠标输入并转发给被控端，以便实现跨设备控制。
 
@@ -91,7 +118,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 7. WHEN 权限检测时 THEN 系统 SHALL 使用 `CGPreflightListenEventAccess()` 避免 TCC 缓存延迟
 8. WHEN CGEvent Tap 在子线程中运行时 THEN 系统 SHALL 在同一子线程调用 `CFRunLoopRun()` 阻塞驱动事件循环（不能在主线程）
 
-### 需求 6：macOS CGEvent 键鼠注入实现
+### 需求 8：macOS CGEvent 键鼠注入实现
 
 **用户故事：** 作为 Mac 被控端用户，我希望软件能将收到的键鼠事件注入到本机，以便实现远程控制。
 
@@ -103,7 +130,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 4. WHEN 收到 `KvmFrame::KeyEvent` THEN 系统 SHALL 调用 `CGEvent::new_keyboard_event` 注入键盘事件
 5. WHEN 收到 `KvmFrame::SwitchControl` THEN 系统 SHALL 将光标定位到对应边缘位置
 
-### 需求 7：Windows SetWindowsHookEx 键鼠捕获实现
+### 需求 9：Windows SetWindowsHookEx 键鼠捕获实现
 
 **用户故事：** 作为 Windows 主控端用户，我希望软件能捕获键鼠输入并转发给 Mac 被控端。
 
@@ -115,7 +142,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 4. WHEN `stop()` 被调用 THEN 系统 SHALL 调用 `UnhookWindowsHookEx` 并退出消息循环
 5. WHEN 启用 winapi 依赖时 THEN 系统 SHALL 在 `Cargo.toml` 中启用 `winapi = { version = "0.3", features = ["winuser", "winbase"] }`
 
-### 需求 8：Windows SendInput 键鼠注入实现
+### 需求 10：Windows SendInput 键鼠注入实现
 
 **用户故事：** 作为 Windows 被控端用户，我希望软件能将收到的键鼠事件注入到本机。
 
@@ -128,7 +155,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 5. WHEN Windows DPI 缩放不为 100% 时 THEN 系统 SHALL 使用 `GetSystemMetrics(SM_CXVIRTUALSCREEN)` 正确处理坐标映射（0-65535 范围）
 6. WHEN 进程启动时 THEN 系统 SHALL 调用 `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` 确保 DPI 感知
 
-### 需求 9：跨平台键码映射
+### 需求 11：跨平台键码映射
 
 **用户故事：** 作为用户，我希望在 Mac 上按下的键能在 Windows 上正确重现，以便跨平台键盘操作无误。
 
@@ -141,7 +168,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 5. WHEN 映射常用键时 THEN 系统 SHALL 正确映射字母 A-Z、数字 0-9、F1-F12、方向键、修饰键（Ctrl/Alt/Shift/Win/Cmd）
 6. WHEN macOS 的 `Command` 键被按下时 THEN 系统 SHALL 默认映射为 Windows 的 `Win` 键
 
-### 需求 10：事件循环串联（捕获 → TCP 传输 → 注入）
+### 需求 12：事件循环串联（捕获 → TCP 传输 → 注入）
 
 **用户故事：** 作为用户，我希望连接建立后主控端的键鼠操作能实时传输并在被控端执行，以便真正实现跨设备控制。
 
@@ -153,20 +180,21 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 4. WHEN 边缘检测触发切换 THEN 系统 SHALL 发送 `KvmFrame::SwitchControl`，主控端停止拦截，被控端开始接管
 5. WHEN TCP 连接断开 THEN 系统 SHALL 停止捕获器，恢复本机输入控制权
 
-### 需求 11：多显示器支持
+### 需求 13：多显示器支持（后端 + 前端 UI）
 
-**用户故事：** 作为使用多台显示器的用户，我希望鼠标能在多个屏幕之间自然地跨设备移动，而不仅限于主显示器边缘。
+**用户故事：** 作为使用多台显示器的用户，我希望能在 UI 中配置显示器布局，并让鼠标能在多个屏幕之间自然地跨设备移动。
 
 #### 验收标准
 
-1. WHEN 新增 Tauri 命令 `get_monitors()` THEN 系统 SHALL 返回 `Vec<MonitorInfo>` 供前端布局配置界面调用
+1. WHEN 用户打开设置页时 THEN 系统 SHALL 调用 `get_monitors()` 获取当前显示器列表并在 UI 中以可视化方式展示
 2. WHEN macOS 枚举显示器时 THEN 系统 SHALL 使用 `CGGetActiveDisplayList` 获取所有活跃显示器
 3. WHEN Windows 枚举显示器时 THEN 系统 SHALL 使用 `EnumDisplayMonitors` 获取所有显示器
 4. WHEN 鼠标到达任意显示器边缘时 THEN 系统 SHALL 根据布局配置判断是否触发跨设备切换（而非仅检测主显示器）
 5. WHEN 鼠标坐标归一化时 THEN 系统 SHALL 基于虚拟桌面总尺寸（所有显示器包围盒）进行归一化
 6. WHEN 显示器配置变化时 THEN 系统 SHALL 通过 Tauri 事件 `monitors-changed` 通知前端更新布局
+7. WHEN 用户在 UI 中拖拽调整显示器相对位置时 THEN 系统 SHALL 保存布局配置并更新边缘检测逻辑
 
-### 需求 12：剪贴板共享（Mac ↔ Windows 双向同步）
+### 需求 14：剪贴板共享（Mac ↔ Windows 双向同步）
 
 **用户故事：** 作为用户，我希望在 Mac 上复制的内容能直接粘贴到 Windows 上（反之亦然），以便跨设备工作时无需借助其他工具传递文本。
 
@@ -181,7 +209,7 @@ KVMini 是一款基于 Tauri（Rust + WebView）的跨平台键鼠共享软件�
 7. WHEN 收到远端剪贴板写入本机时 THEN 系统 SHALL 使用标志位防止循环同步
 8. WHEN 用户在设置中关闭剪贴板共享 THEN 系统 SHALL 停止监听和发送剪贴板变化
 
-### 需求 13：TLS 1.3 加密传输
+### 需求 15：TLS 1.3 加密传输
 
 **用户故事：** 作为用户，我希望键鼠数据和剪贴板内容在网络传输时是加密的，以便在局域网中不担心数据（包括密码输入）被窃听。
 
