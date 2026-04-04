@@ -12,7 +12,7 @@ pub struct ConnectionManager {
 
 /// 活动连接
 #[derive(Debug, Clone)]
-struct ActiveConnection {
+pub struct ActiveConnection {
     device_id: String,
     connection_type: ConnectionType,
     connected_at: std::time::SystemTime,

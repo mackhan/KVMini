@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 // ─── 数据结构 ───
 
+/// 默认快捷键
+pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+S";
+
 /// 应用设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -12,16 +15,34 @@ pub struct AppSettings {
     pub auto_reconnect: bool,
     pub auto_start: bool,
     pub start_minimized: bool,
+    /// 是否启用剪贴板共享
+    #[serde(default = "default_true")]
+    pub clipboard_sync: bool,
+    /// 是否启用 TLS 加密
+    #[serde(default = "default_true")]
+    pub enable_tls: bool,
+    /// Command 键映射模式（"win" 或 "ctrl"）
+    #[serde(default)]
+    pub command_key_mapping: String,
+    /// 界面语言（"zh" 或 "en"）
+    #[serde(default)]
+    pub language: String,
 }
+
+fn default_true() -> bool { true }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            hotkey: String::new(),
+            hotkey: DEFAULT_HOTKEY.to_string(),
             prefer_connection_type: "auto".to_string(),
             auto_reconnect: true,
             auto_start: false,
             start_minimized: false,
+            clipboard_sync: true,
+            enable_tls: true,
+            command_key_mapping: "win".to_string(),
+            language: "zh".to_string(),
         }
     }
 }
@@ -68,6 +89,7 @@ fn ensure_data_dir() -> Result<PathBuf, String> {
 
 #[tauri::command]
 /// 获取应用设置
+/// 当 hotkey 为空时，自动填充默认值 Ctrl+Alt+S
 pub fn get_settings() -> Result<AppSettings, String> {
     let dir = ensure_data_dir()?;
     let path = dir.join("settings.json");
@@ -78,8 +100,15 @@ pub fn get_settings() -> Result<AppSettings, String> {
 
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("读取设置文件失败: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("解析设置失败: {}", e))
+    let mut settings: AppSettings = serde_json::from_str(&content)
+        .map_err(|e| format!("解析设置失败: {}", e))?;
+
+    // 当 hotkey 为空时，填充默认值（需求 6.1、6.2）
+    if settings.hotkey.is_empty() {
+        settings.hotkey = DEFAULT_HOTKEY.to_string();
+    }
+
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -210,6 +239,113 @@ fn show_notification_windows(title: &str, body: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ─── 快捷键冲突检测 ───
+
+/// 快捷键冲突检测结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictResult {
+    /// 是否存在冲突
+    pub conflict: bool,
+    /// 冲突类型："system"（系统保留）或 "registered"（已注册）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_type: Option<String>,
+    /// 冲突说明
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl ConflictResult {
+    fn no_conflict() -> Self {
+        Self { conflict: false, conflict_type: None, description: None }
+    }
+
+    fn system_conflict(desc: &str) -> Self {
+        Self {
+            conflict: true,
+            conflict_type: Some("system".to_string()),
+            description: Some(desc.to_string()),
+        }
+    }
+}
+
+#[tauri::command]
+/// 检测快捷键是否与系统保留快捷键冲突（需求 8）
+pub fn check_hotkey_conflict(hotkey: String) -> ConflictResult {
+    if hotkey.is_empty() {
+        return ConflictResult::no_conflict();
+    }
+
+    let hotkey_lower = hotkey.to_lowercase();
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 系统保留快捷键列表
+        let macos_reserved = [
+            ("cmd+space", "Spotlight 搜索"),
+            ("cmd+tab", "应用切换"),
+            ("ctrl+space", "输入法切换"),
+            ("cmd+ctrl+space", "表情符号选择器"),
+            ("cmd+shift+3", "截图"),
+            ("cmd+shift+4", "区域截图"),
+            ("cmd+shift+5", "截图工具栏"),
+            ("cmd+q", "退出应用"),
+            ("cmd+w", "关闭窗口"),
+            ("cmd+h", "隐藏应用"),
+            ("cmd+m", "最小化窗口"),
+            ("cmd+,", "偏好设置"),
+            ("cmd+option+esc", "强制退出"),
+            ("ctrl+cmd+q", "锁定屏幕"),
+        ];
+        for (reserved, desc) in &macos_reserved {
+            if hotkey_lower.contains(reserved) || normalize_hotkey(&hotkey_lower) == *reserved {
+                return ConflictResult::system_conflict(
+                    &format!("与 macOS 系统快捷键冲突：{} ({})", reserved, desc)
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 系统保留快捷键列表
+        let windows_reserved = [
+            ("win+l", "锁定屏幕"),
+            ("ctrl+alt+del", "任务管理器/安全选项"),
+            ("alt+f4", "关闭窗口"),
+            ("win+d", "显示桌面"),
+            ("win+e", "文件资源管理器"),
+            ("win+r", "运行对话框"),
+            ("win+tab", "任务视图"),
+            ("win+i", "设置"),
+            ("win+s", "搜索"),
+            ("win+p", "投影"),
+            ("alt+tab", "应用切换"),
+            ("ctrl+shift+esc", "任务管理器"),
+            ("win+prtsc", "截图"),
+        ];
+        for (reserved, desc) in &windows_reserved {
+            if hotkey_lower.contains(reserved) || normalize_hotkey(&hotkey_lower) == *reserved {
+                return ConflictResult::system_conflict(
+                    &format!("与 Windows 系统快捷键冲突：{} ({})", reserved, desc)
+                );
+            }
+        }
+    }
+
+    ConflictResult::no_conflict()
+}
+
+/// 规范化快捷键字符串（统一格式，便于比较）
+fn normalize_hotkey(hotkey: &str) -> String {
+    hotkey
+        .replace("control", "ctrl")
+        .replace("option", "alt")
+        .replace("command", "cmd")
+        .replace("windows", "win")
+        .replace(" ", "")
+        .to_lowercase()
+}
+
 // ─── 全局快捷键命令 ───
 
 #[tauri::command]
@@ -224,6 +360,82 @@ pub fn register_global_hotkey(hotkey: String) -> Result<(), String> {
     let mut settings = get_settings().unwrap_or_default();
     settings.hotkey = hotkey;
     save_settings(settings)
+}
+
+// ─── 托盘菜单国际化命令 ───
+
+/// 托盘菜单文字（根据语言）
+pub struct TrayMenuText {
+    pub show: &'static str,
+    pub connect: &'static str,
+    pub disconnect: &'static str,
+    pub quit: &'static str,
+}
+
+impl TrayMenuText {
+    pub fn for_lang(lang: &str) -> Self {
+        match lang {
+            "en" => Self {
+                show: "Show Window",
+                connect: "Connect",
+                disconnect: "Disconnect",
+                quit: "Quit",
+            },
+            _ => Self {
+                show: "显示窗口",
+                connect: "连接设备",
+                disconnect: "断开连接",
+                quit: "退出",
+            },
+        }
+    }
+}
+
+#[tauri::command]
+/// 更新托盘菜单语言（需求 7.1、7.2）
+/// 前端语言切换时调用此命令，后端重建托盘菜单文字
+pub fn update_tray_language(
+    app: tauri::AppHandle,
+    lang: String,
+    connected: bool,
+) -> Result<(), String> {
+    let text = TrayMenuText::for_lang(&lang);
+
+    // 保存语言设置
+    let mut settings = get_settings().unwrap_or_default();
+    settings.language = lang.clone();
+    let _ = save_settings(settings);
+
+    // 更新托盘菜单项文字
+    if let Some(tray) = app.tray_handle().try_get_item("show") {
+        let _ = tray.set_title(text.show);
+    }
+    if let Some(tray) = app.tray_handle().try_get_item("connect") {
+        let _ = tray.set_title(text.connect);
+        // 已连接时"连接设备"置灰（需求 7.5）
+        let _ = tray.set_enabled(!connected);
+    }
+    if let Some(tray) = app.tray_handle().try_get_item("disconnect") {
+        let _ = tray.set_title(text.disconnect);
+        // 未连接时"断开连接"置灰
+        let _ = tray.set_enabled(connected);
+    }
+    if let Some(tray) = app.tray_handle().try_get_item("quit") {
+        let _ = tray.set_title(text.quit);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+/// 更新托盘菜单连接状态（连接/断开时调用）
+pub fn update_tray_connection_state(
+    app: tauri::AppHandle,
+    connected: bool,
+) -> Result<(), String> {
+    // 读取当前语言设置
+    let settings = get_settings().unwrap_or_default();
+    update_tray_language(app, settings.language, connected)
 }
 
 // ─── 本机 IP 命令 ───
@@ -535,10 +747,319 @@ pub struct ActiveTcpConnection {
     pub stream: Option<std::net::TcpStream>,
 }
 
+/// 全局事件循环停止信号
+pub struct EventLoopHandle {
+    /// 停止信号发送端
+    stop_tx: std::sync::mpsc::Sender<()>,
+}
+
+impl EventLoopHandle {
+    pub fn stop(&self) {
+        let _ = self.stop_tx.send(());
+    }
+}
+
 lazy_static::lazy_static! {
     /// 全局活动 TCP 连接（握手成功后保存）
     pub static ref ACTIVE_TCP_CONNECTION: std::sync::Mutex<Option<ActiveTcpConnection>> =
         std::sync::Mutex::new(None);
+
+    /// 全局事件循环句柄（捕获/注入循环）
+    static ref EVENT_LOOP_HANDLE: std::sync::Mutex<Option<EventLoopHandle>> =
+        std::sync::Mutex::new(None);
+
+    /// 全局剪贴板监听器
+    static ref CLIPBOARD_MONITOR: std::sync::Mutex<Option<Box<dyn crate::clipboard::ClipboardMonitor>>> =
+        std::sync::Mutex::new(None);
+}
+
+/// 启动主控端事件循环：捕获键鼠事件 → 键码映射 → TCP 发送
+///
+/// 在专用线程中运行，通过 stop_rx 接收停止信号。
+fn start_controller_loop(
+    stream: std::net::TcpStream,
+    remote_platform: crate::protocol::Platform,
+    stop_rx: std::sync::mpsc::Receiver<()>,
+) {
+    use crate::capturer::create_platform_capturer;
+    use crate::keycode_map;
+    use crate::protocol::{encode, KvmFrame, Platform};
+    use std::io::Write;
+
+    std::thread::spawn(move || {
+        // 创建 tokio channel（capturer 使用 tokio mpsc）
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<KvmFrame>(1024);
+
+        // 创建平台捕获器
+        let capturer = create_platform_capturer();
+
+        // 启动捕获
+        if let Err(e) = capturer.start(frame_tx) {
+            log::error!("启动捕获器失败: {}", e);
+            return;
+        }
+
+        // 开启事件拦截（主控端模式：键鼠事件不传递给本机）
+        capturer.set_intercept(true);
+
+        let mut stream = stream;
+
+        // 在当前线程运行 tokio 事件循环
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                log::error!("创建 tokio runtime 失败: {}", e);
+                capturer.set_intercept(false);
+                capturer.stop();
+                return;
+            }
+        };
+
+        rt.block_on(async move {
+            loop {
+                // 检查停止信号
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                // 接收捕获事件（超时 1ms）
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(1),
+                    frame_rx.recv(),
+                ).await {
+                    Ok(Some(frame)) => {
+                        // 键码映射：将本机键码转换为对端键码
+                        let frame = match frame {
+                            KvmFrame::KeyEvent { keycode, pressed } => {
+                                // macOS → Windows 键码映射
+                                if remote_platform == Platform::Windows {
+                                    match keycode_map::cg_to_vk(keycode) {
+                                        Some(vk) => KvmFrame::KeyEvent { keycode: vk, pressed },
+                                        None => {
+                                            log::warn!("未知 CGKeyCode: {}，丢弃", keycode);
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    KvmFrame::KeyEvent { keycode, pressed }
+                                }
+                            }
+                            other => other,
+                        };
+
+                        // 发送到 TCP
+                        let bytes = encode(&frame);
+                        if let Err(e) = stream.write_all(&bytes) {
+                            log::error!("TCP 发送失败: {}，停止主控端循环", e);
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        log::info!("捕获器 channel 已关闭，退出主控端循环");
+                        break;
+                    }
+                    Err(_) => {
+                        // 超时，继续循环
+                    }
+                }
+            }
+        });
+
+        // 停止捕获，恢复本机输入
+        capturer.set_intercept(false);
+        capturer.stop();
+        log::info!("主控端事件循环已停止");
+    });
+}
+
+/// 启动被控端事件循环：TCP 接收 → 键码映射 → 注入键鼠事件
+///
+/// 在专用线程中运行，通过 stop_rx 接收停止信号。
+fn start_receiver_loop(
+    stream: std::net::TcpStream,
+    remote_platform: crate::protocol::Platform,
+    stop_rx: std::sync::mpsc::Receiver<()>,
+    window: Option<tauri::Window>,
+) {
+    use crate::injector::{create_platform_injector, inject_frame};
+    use crate::keycode_map;
+    use crate::monitor::get_virtual_desktop;
+    use crate::protocol::{decode, KvmFrame, Platform, ProtocolError};
+    use std::io::Read;
+
+    std::thread::spawn(move || {
+        // 获取屏幕尺寸（用于注入器坐标转换）
+        let vd = get_virtual_desktop();
+        let injector = create_platform_injector(vd.total_width, vd.total_height);
+
+        let mut stream = stream;
+        stream.set_read_timeout(Some(std::time::Duration::from_millis(5)))
+            .unwrap_or(());
+
+        let mut buf = Vec::with_capacity(4096);
+        let mut read_buf = [0u8; 4096];
+
+        loop {
+            // 检查停止信号
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+
+            // 读取 TCP 数据
+            match stream.read(&mut read_buf) {
+                Ok(0) => {
+                    log::info!("TCP 连接已关闭，退出被控端循环");
+                    if let Some(ref w) = window {
+                        let _ = w.emit("connection-lost", serde_json::json!({
+                            "reason": "remote_closed",
+                            "message": "对端已断开连接"
+                        }));
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    buf.extend_from_slice(&read_buf[..n]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut => {
+                    // 超时，继续循环
+                    continue;
+                }
+                Err(e) => {
+                    log::error!("TCP 读取失败: {}，停止被控端循环", e);
+                    if let Some(ref w) = window {
+                        let _ = w.emit("connection-lost", serde_json::json!({
+                            "reason": "io_error",
+                            "message": format!("连接错误: {}", e)
+                        }));
+                    }
+                    break;
+                }
+            }
+
+            // 解码并处理所有完整帧
+            let mut consumed = 0;
+            loop {
+                match decode(&buf[consumed..]) {
+                    Ok((frame, n)) => {
+                        consumed += n;
+
+                        // 键码映射：将对端键码转换为本机键码
+                        let frame = match frame {
+                            KvmFrame::KeyEvent { keycode, pressed } => {
+                                let mapped = if remote_platform == Platform::Windows {
+                                    // Windows → macOS 键码映射
+                                    match keycode_map::vk_to_cg(keycode) {
+                                        Some(cg) => cg,
+                                        None => {
+                                            log::warn!("未知 VirtualKey: {}，丢弃", keycode);
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    keycode
+                                };
+                                KvmFrame::KeyEvent { keycode: mapped, pressed }
+                            }
+                            other => other,
+                        };
+
+                        // 注入事件
+                        if let Err(e) = inject_frame(injector.as_ref(), &frame) {
+                            log::warn!("注入事件失败: {}", e);
+                        }
+                    }
+                    Err(ProtocolError::Incomplete) => break,
+                    Err(e) => {
+                        log::warn!("协议解码错误: {}，跳过", e);
+                        // 跳过一个字节，尝试重新同步
+                        if !buf[consumed..].is_empty() {
+                            consumed += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if consumed > 0 {
+                buf.drain(..consumed);
+            }
+        }
+
+        log::info!("被控端事件循环已停止");
+    });
+}
+
+/// 停止当前事件循环（如果有）
+fn stop_event_loop() {
+    if let Ok(mut handle) = EVENT_LOOP_HANDLE.lock() {
+        if let Some(h) = handle.take() {
+            h.stop();
+        }
+    }
+    // 同时停止剪贴板监听
+    if let Ok(mut monitor) = CLIPBOARD_MONITOR.lock() {
+        if let Some(ref m) = *monitor {
+            m.stop();
+        }
+        *monitor = None;
+    }
+}
+
+/// 启动剪贴板共享：监听本机剪贴板变化，通过 TCP 发送给对端
+fn start_clipboard_sync(stream: Option<std::net::TcpStream>) {
+    use crate::clipboard::create_platform_clipboard_monitor;
+    use crate::protocol::{encode, KvmFrame};
+    use std::io::Write;
+
+    let stream = match stream {
+        Some(s) => s,
+        None => return,
+    };
+
+    // 创建 tokio channel（clipboard monitor 使用 tokio mpsc）
+    let (clip_tx, mut clip_rx) = tokio::sync::mpsc::channel::<KvmFrame>(64);
+
+    let monitor = create_platform_clipboard_monitor();
+    if let Err(e) = monitor.start(clip_tx) {
+        log::error!("启动剪贴板监听失败: {}", e);
+        return;
+    }
+
+    // 保存监听器句柄
+    if let Ok(mut m) = CLIPBOARD_MONITOR.lock() {
+        *m = Some(monitor);
+    }
+
+    // 在后台线程中转发剪贴板帧到 TCP
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                log::error!("剪贴板同步 runtime 创建失败: {}", e);
+                return;
+            }
+        };
+
+        let mut stream = stream;
+        rt.block_on(async move {
+            while let Some(frame) = clip_rx.recv().await {
+                let bytes = encode(&frame);
+                if let Err(e) = stream.write_all(&bytes) {
+                    log::error!("剪贴板 TCP 发送失败: {}", e);
+                    break;
+                }
+            }
+        });
+        log::info!("剪贴板同步循环已停止");
+    });
 }
 
 #[tauri::command]
@@ -636,6 +1157,58 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
             let remote_platform = format!("{:?}", info.remote_platform);
             let peer_addr = addr.clone();
 
+            // 停止旧的事件循环（如果有）
+            stop_event_loop();
+
+            // 克隆 stream 用于事件循环
+            let stream_for_loop = match std_stream.try_clone() {
+                Ok(s) => s,
+                Err(e) => {
+                    return ConnectByIpResult {
+                        success: false,
+                        error_type: "unreachable".to_string(),
+                        error_message: format!("连接克隆失败（事件循环）：{}", e),
+                        remote_platform: String::new(),
+                    };
+                }
+            };
+
+            // 创建停止信号
+            let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+            // 读取当前角色，决定启动主控端还是被控端循环
+            let current_role = {
+                // 尝试从 Tauri 状态读取角色，默认为被控端
+                crate::role_manager::AppRole::Server // 默认被控端，前端可通过 set_role 切换
+            };
+
+            // 根据角色启动对应的事件循环
+            match current_role {
+                crate::role_manager::AppRole::Client => {
+                    // 主控端：捕获键鼠 → TCP 发送
+                    start_controller_loop(stream_for_loop, info.remote_platform, stop_rx);
+                    log::info!("主控端事件循环已启动，连接到 {}", peer_addr);
+                }
+                crate::role_manager::AppRole::Server => {
+                    // 被控端：TCP 接收 → 注入键鼠
+                    start_receiver_loop(stream_for_loop, info.remote_platform, stop_rx, None);
+                    log::info!("被控端事件循环已启动，接受来自 {} 的控制", peer_addr);
+                }
+            }
+
+            // 保存事件循环句柄
+            if let Ok(mut handle) = EVENT_LOOP_HANDLE.lock() {
+                *handle = Some(EventLoopHandle { stop_tx });
+            }
+
+            // 启动剪贴板共享（如果设置中已启用）
+            let clipboard_enabled = get_settings()
+                .map(|s| s.clipboard_sync)
+                .unwrap_or(true);
+            if clipboard_enabled {
+                start_clipboard_sync(std_stream.try_clone().ok());
+            }
+
             // 清除旧连接，保存新连接
             if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
                 *conn = Some(ActiveTcpConnection {
@@ -694,6 +1267,9 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
 /// Tauri 命令：断开当前 TCP 连接
 #[tauri::command]
 pub fn disconnect_tcp() -> Result<(), String> {
+    // 停止事件循环（捕获/注入）
+    stop_event_loop();
+
     if let Ok(mut conn) = ACTIVE_TCP_CONNECTION.lock() {
         if let Some(active) = conn.take() {
             // 关闭 TCP stream
@@ -796,11 +1372,15 @@ mod tests {
     #[test]
     fn test_app_settings_default() {
         let settings = AppSettings::default();
-        assert_eq!(settings.hotkey, "");
+        // 默认快捷键应为 Ctrl+Alt+S（需求 6.1）
+        assert_eq!(settings.hotkey, DEFAULT_HOTKEY);
         assert_eq!(settings.prefer_connection_type, "auto");
         assert!(settings.auto_reconnect);
         assert!(!settings.auto_start);
         assert!(!settings.start_minimized);
+        assert!(settings.clipboard_sync);
+        assert!(settings.enable_tls);
+        assert_eq!(settings.command_key_mapping, "win");
     }
 
     #[test]
@@ -811,6 +1391,10 @@ mod tests {
             auto_reconnect: false,
             auto_start: true,
             start_minimized: false,
+            clipboard_sync: true,
+            enable_tls: true,
+            command_key_mapping: "win".to_string(),
+            language: "zh".to_string(),
         };
         let json = serde_json::to_string(&settings).unwrap();
         let deserialized: AppSettings = serde_json::from_str(&json).unwrap();

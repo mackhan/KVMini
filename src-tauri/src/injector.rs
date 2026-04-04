@@ -70,12 +70,11 @@ pub fn inject_frame(injector: &dyn EventInjector, frame: &KvmFrame) -> Result<()
 
 /// macOS 事件注入器（使用 CGEvent API）
 ///
-/// 注意：实际的 CGEvent 调用需要辅助功能（Accessibility）权限。
-/// 在生产代码中，这里会调用 core-graphics crate 的 CGEvent API。
-/// 目前提供接口定义和测试桩，实际 CGEvent 调用在后续集成时补充。
+/// 使用 core-graphics crate 调用 CGEvent API 注入键鼠事件。
+/// 需要辅助功能（Accessibility）权限。
 #[cfg(target_os = "macos")]
 pub struct MacOSInjector {
-    /// 屏幕宽度（像素）
+    /// 屏幕宽度（像素，逻辑像素，非 Retina 物理像素）
     screen_width: i32,
     /// 屏幕高度（像素）
     screen_height: i32,
@@ -98,42 +97,150 @@ impl MacOSInjector {
 #[cfg(target_os = "macos")]
 impl EventInjector for MacOSInjector {
     fn inject_mouse_move(&self, x: i32, y: i32) -> Result<(), InjectorError> {
+        use core_graphics::geometry::CGPoint;
+
         let (px, py) = self.normalize_to_screen(x, y);
-        // TODO: 调用 CGEvent::new_mouse_event(CGEventType::MouseMoved, CGPoint { x: px, y: py }, ...)
-        // 目前记录日志，实际注入在集成 core-graphics crate 后实现
-        let _ = (px, py);
+        let point = CGPoint { x: px as f64, y: py as f64 };
+
+        // 使用 CGWarpMouseCursorPosition 移动光标（不产生事件，性能更好）
+        unsafe {
+            macos_warp_cursor(point);
+        }
         Ok(())
     }
 
     fn inject_mouse_button(&self, button: u8, pressed: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 CGEvent::new_mouse_event(CGEventType::LeftMouseDown/Up, ...)
-        let _ = (button, pressed);
+        use core_graphics::event::{CGEvent, CGEventType, CGMouseButton};
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+        use core_graphics::geometry::CGPoint;
+
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| InjectorError::SystemError("创建 CGEventSource 失败".to_string()))?;
+
+        // 获取当前鼠标位置
+        let location = unsafe { macos_get_cursor_position() };
+
+        let (event_type, cg_button) = match (button, pressed) {
+            (0, true) => (CGEventType::LeftMouseDown, CGMouseButton::Left),
+            (0, false) => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+            (1, true) => (CGEventType::RightMouseDown, CGMouseButton::Right),
+            (1, false) => (CGEventType::RightMouseUp, CGMouseButton::Right),
+            (_, true) => (CGEventType::OtherMouseDown, CGMouseButton::Center),
+            (_, false) => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+        };
+
+        let event = CGEvent::new_mouse_event(source, event_type, location, cg_button)
+            .map_err(|_| InjectorError::SystemError("创建鼠标事件失败".to_string()))?;
+        event.post(core_graphics::event::CGEventTapLocation::HID);
         Ok(())
     }
 
     fn inject_mouse_scroll(&self, dx: i32, dy: i32) -> Result<(), InjectorError> {
-        // TODO: 调用 CGEvent::new_scroll_event(...)
-        let _ = (dx, dy);
+        // 使用 C FFI 直接创建滚轮事件，避免 core-graphics crate API 不兼容
+        unsafe {
+            macos_post_scroll_event(dx, dy);
+        }
         Ok(())
     }
 
     fn inject_key_event(&self, keycode: u16, pressed: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 CGEvent::new_keyboard_event(keycode, pressed)
-        let _ = (keycode, pressed);
+        use core_graphics::event::CGEvent;
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| InjectorError::SystemError("创建 CGEventSource 失败".to_string()))?;
+
+        let event = CGEvent::new_keyboard_event(source, keycode, pressed)
+            .map_err(|_| InjectorError::SystemError("创建键盘事件失败".to_string()))?;
+        event.post(core_graphics::event::CGEventTapLocation::HID);
         Ok(())
     }
 
     fn set_cursor_visible(&self, visible: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 CGDisplayShowCursor / CGDisplayHideCursor
-        let _ = visible;
+        unsafe {
+            if visible {
+                macos_show_cursor();
+            } else {
+                macos_hide_cursor();
+            }
+        }
         Ok(())
     }
 
     fn warp_cursor_to_edge(&self, edge: u8, pos_ratio: u16) -> Result<(), InjectorError> {
+        use core_graphics::geometry::CGPoint;
         let (px, py) = edge_to_screen_pos(edge, pos_ratio, self.screen_width, self.screen_height);
-        // TODO: 调用 CGWarpMouseCursorPosition(CGPoint { x: px, y: py })
-        let _ = (px, py);
+        let point = CGPoint { x: px as f64, y: py as f64 };
+        unsafe { macos_warp_cursor(point); }
         Ok(())
+    }
+}
+
+// macOS FFI：CGWarpMouseCursorPosition
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGWarpMouseCursorPosition(new_cursor_position: core_graphics::geometry::CGPoint);
+    fn CGDisplayShowCursor(display: u32) -> i32;
+    fn CGDisplayHideCursor(display: u32) -> i32;
+}
+
+/// 使用 C FFI 发送滚轮事件
+#[cfg(target_os = "macos")]
+unsafe fn macos_post_scroll_event(dx: i32, dy: i32) {
+    extern "C" {
+        fn CGEventCreateScrollWheelEvent(
+            source: *mut std::ffi::c_void,
+            units: u32,
+            wheel_count: u32,
+            wheel1: i32,
+            ...
+        ) -> *mut std::ffi::c_void;
+        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+        fn CFRelease(cf: *mut std::ffi::c_void);
+    }
+    // kCGScrollEventUnitPixel = 0
+    let event = CGEventCreateScrollWheelEvent(
+        std::ptr::null_mut(),
+        0, // kCGScrollEventUnitPixel
+        2, // wheel_count
+        dy,
+        dx,
+    );
+    if !event.is_null() {
+        CGEventPost(0, event); // kCGHIDEventTap = 0
+        CFRelease(event);
+    }
+}
+
+/// 移动光标到指定位置
+#[cfg(target_os = "macos")]
+unsafe fn macos_warp_cursor(point: core_graphics::geometry::CGPoint) {
+    CGWarpMouseCursorPosition(point);
+}
+
+/// 显示光标
+#[cfg(target_os = "macos")]
+unsafe fn macos_show_cursor() {
+    use core_graphics::display::CGDisplay;
+    CGDisplayShowCursor(CGDisplay::main().id);
+}
+
+/// 隐藏光标
+#[cfg(target_os = "macos")]
+unsafe fn macos_hide_cursor() {
+    use core_graphics::display::CGDisplay;
+    CGDisplayHideCursor(CGDisplay::main().id);
+}
+
+/// 获取当前鼠标位置
+#[cfg(target_os = "macos")]
+unsafe fn macos_get_cursor_position() -> core_graphics::geometry::CGPoint {
+    // 简化实现：返回屏幕中心
+    use core_graphics::display::CGDisplay;
+    let bounds = CGDisplay::main().bounds();
+    core_graphics::geometry::CGPoint {
+        x: bounds.size.width / 2.0,
+        y: bounds.size.height / 2.0,
     }
 }
 
@@ -141,13 +248,15 @@ impl EventInjector for MacOSInjector {
 
 /// Windows 事件注入器（使用 SendInput API）
 ///
-/// 注意：实际的 SendInput 调用需要 winapi crate。
-/// 目前提供接口定义和测试桩，实际 SendInput 调用在后续集成时补充。
+/// 实现要点：
+/// 1. 使用 SetProcessDpiAwarenessContext 确保 DPI 感知
+/// 2. 使用 GetSystemMetrics(SM_CXVIRTUALSCREEN) 获取虚拟屏幕尺寸
+/// 3. MOUSEEVENTF_ABSOLUTE 坐标范围 0-65535，需正确映射
 #[cfg(target_os = "windows")]
 pub struct WindowsInjector {
-    /// 屏幕宽度（像素，考虑 DPI 缩放后的逻辑像素）
+    /// 屏幕宽度（虚拟屏幕，多显示器时为总宽度）
     screen_width: i32,
-    /// 屏幕高度（像素）
+    /// 屏幕高度（虚拟屏幕）
     screen_height: i32,
     /// DPI 缩放比例（默认 1.0）
     dpi_scale: f32,
@@ -156,15 +265,23 @@ pub struct WindowsInjector {
 #[cfg(target_os = "windows")]
 impl WindowsInjector {
     pub fn new(screen_width: i32, screen_height: i32, dpi_scale: f32) -> Self {
+        // 初始化时设置 DPI 感知
+        unsafe { windows_set_dpi_awareness(); }
         Self { screen_width, screen_height, dpi_scale }
     }
 
     /// 将归一化坐标（* 10000）转换为 SendInput 使用的绝对坐标（0-65535）
-    /// Windows SendInput 使用 0-65535 的绝对坐标系
+    /// 使用虚拟屏幕尺寸（多显示器时为总宽高），确保 DPI 感知
     fn normalize_to_absolute(&self, x: i32, y: i32) -> (i32, i32) {
-        // SendInput 绝对坐标：0 = 左/上边缘，65535 = 右/下边缘
-        let abs_x = (x as i64 * 65535 / 10000) as i32;
-        let abs_y = (y as i64 * 65535 / 10000) as i32;
+        // 使用实时虚拟屏幕尺寸（支持动态分辨率变化）
+        let (vw, vh) = unsafe { windows_get_virtual_screen_size_ffi() };
+        let screen_w = if vw > 0 { vw } else { self.screen_width };
+        let screen_h = if vh > 0 { vh } else { self.screen_height };
+
+        // MOUSEEVENTF_ABSOLUTE 坐标：0 = 左/上边缘，65535 = 右/下边缘
+        // 公式：abs = norm * 65535 / screen_size
+        let abs_x = (x as i64 * 65535 / screen_w as i64) as i32;
+        let abs_y = (y as i64 * 65535 / screen_h as i64) as i32;
         (abs_x.clamp(0, 65535), abs_y.clamp(0, 65535))
     }
 }
@@ -172,44 +289,168 @@ impl WindowsInjector {
 #[cfg(target_os = "windows")]
 impl EventInjector for WindowsInjector {
     fn inject_mouse_move(&self, x: i32, y: i32) -> Result<(), InjectorError> {
+        use winapi::um::winuser::{SendInput, INPUT, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK};
+
         let (abs_x, abs_y) = self.normalize_to_absolute(x, y);
-        // TODO: 调用 SendInput with MOUSEINPUT { dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, dx: abs_x, dy: abs_y }
-        let _ = (abs_x, abs_y);
+
+        let mut input = INPUT {
+            type_: INPUT_MOUSE,
+            u: unsafe { std::mem::zeroed() },
+        };
+        unsafe {
+            *input.u.mi_mut() = MOUSEINPUT {
+                dx: abs_x,
+                dy: abs_y,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+        }
         Ok(())
     }
 
     fn inject_mouse_button(&self, button: u8, pressed: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 SendInput with MOUSEINPUT { dwFlags: MOUSEEVENTF_LEFTDOWN/UP/RIGHTDOWN/UP }
-        let _ = (button, pressed);
+        use winapi::um::winuser::{
+            SendInput, INPUT, INPUT_MOUSE, MOUSEINPUT,
+            MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+            MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        };
+
+        let flags = match (button, pressed) {
+            (0, true) => MOUSEEVENTF_LEFTDOWN,
+            (0, false) => MOUSEEVENTF_LEFTUP,
+            (1, true) => MOUSEEVENTF_RIGHTDOWN,
+            (1, false) => MOUSEEVENTF_RIGHTUP,
+            (2, true) => MOUSEEVENTF_MIDDLEDOWN,
+            (2, false) => MOUSEEVENTF_MIDDLEUP,
+            _ => return Ok(()),
+        };
+
+        let mut input = INPUT {
+            type_: INPUT_MOUSE,
+            u: unsafe { std::mem::zeroed() },
+        };
+        unsafe {
+            *input.u.mi_mut() = MOUSEINPUT {
+                dx: 0, dy: 0,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+        }
         Ok(())
     }
 
     fn inject_mouse_scroll(&self, dx: i32, dy: i32) -> Result<(), InjectorError> {
-        // TODO: 调用 SendInput with MOUSEINPUT { dwFlags: MOUSEEVENTF_WHEEL, mouseData: dy }
-        let _ = (dx, dy);
+        use winapi::um::winuser::{SendInput, INPUT, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL};
+
+        // 垂直滚轮
+        if dy != 0 {
+            let mut input = INPUT {
+                type_: INPUT_MOUSE,
+                u: unsafe { std::mem::zeroed() },
+            };
+            unsafe {
+                *input.u.mi_mut() = MOUSEINPUT {
+                    dx: 0, dy: 0,
+                    mouseData: dy as u32,
+                    dwFlags: MOUSEEVENTF_WHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
+                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+            }
+        }
+
+        // 水平滚轮
+        if dx != 0 {
+            let mut input = INPUT {
+                type_: INPUT_MOUSE,
+                u: unsafe { std::mem::zeroed() },
+            };
+            unsafe {
+                *input.u.mi_mut() = MOUSEINPUT {
+                    dx: 0, dy: 0,
+                    mouseData: dx as u32,
+                    dwFlags: MOUSEEVENTF_HWHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
+                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+            }
+        }
         Ok(())
     }
 
     fn inject_key_event(&self, keycode: u16, pressed: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 SendInput with KEYBDINPUT { wVk: keycode, dwFlags: KEYEVENTF_KEYUP if !pressed }
-        let _ = (keycode, pressed);
+        use winapi::um::winuser::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP};
+
+        let flags = if pressed { 0 } else { KEYEVENTF_KEYUP };
+
+        let mut input = INPUT {
+            type_: INPUT_KEYBOARD,
+            u: unsafe { std::mem::zeroed() },
+        };
+        unsafe {
+            *input.u.ki_mut() = KEYBDINPUT {
+                wVk: keycode,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+        }
         Ok(())
     }
 
     fn set_cursor_visible(&self, visible: bool) -> Result<(), InjectorError> {
-        // TODO: 调用 ShowCursor(visible)
-        let _ = visible;
+        use winapi::um::winuser::ShowCursor;
+        unsafe { ShowCursor(if visible { 1 } else { 0 }); }
         Ok(())
     }
 
     fn warp_cursor_to_edge(&self, edge: u8, pos_ratio: u16) -> Result<(), InjectorError> {
+        use winapi::um::winuser::SetCursorPos;
         let (px, py) = edge_to_screen_pos(edge, pos_ratio, self.screen_width, self.screen_height);
-        let abs_x = (px as i64 * 65535 / self.screen_width as i64) as i32;
-        let abs_y = (py as i64 * 65535 / self.screen_height as i64) as i32;
-        // TODO: 调用 SendInput with MOUSEINPUT { dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, dx: abs_x, dy: abs_y }
-        let _ = (abs_x, abs_y);
+        unsafe { SetCursorPos(px, py); }
         Ok(())
     }
+}
+
+/// 设置 Windows 进程 DPI 感知（Per-Monitor V2）
+#[cfg(target_os = "windows")]
+unsafe fn windows_set_dpi_awareness() {
+    // SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+    // 使用动态加载避免在旧版 Windows 上崩溃
+    use winapi::um::libloaderapi::{LoadLibraryW, GetProcAddress};
+
+    let lib_name: Vec<u16> = "user32.dll\0".encode_utf16().collect();
+    let lib = LoadLibraryW(lib_name.as_ptr());
+    if lib.is_null() { return; }
+
+    let func_name = b"SetProcessDpiAwarenessContext\0";
+    let func = GetProcAddress(lib, func_name.as_ptr() as *const i8);
+    if func.is_null() { return; }
+
+    type SetDpiAwarenessFn = unsafe extern "system" fn(isize) -> bool;
+    let set_dpi: SetDpiAwarenessFn = std::mem::transmute(func);
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+    let _ = set_dpi(-4isize);
+}
+
+/// 获取 Windows 虚拟屏幕尺寸（FFI 版本，用于注入器）
+#[cfg(target_os = "windows")]
+unsafe fn windows_get_virtual_screen_size_ffi() -> (i32, i32) {
+    use winapi::um::winuser::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
+    let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    (w, h)
 }
 
 // ── 跨平台辅助函数 ──────────────────────────────────────────────────────────

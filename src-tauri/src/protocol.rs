@@ -48,6 +48,8 @@ pub enum EventType {
     Heartbeat = 0x40,
     /// 心跳响应
     HeartbeatAck = 0x41,
+    /// 剪贴板内容
+    Clipboard = 0x50,
 }
 
 impl EventType {
@@ -63,6 +65,7 @@ impl EventType {
             0x31 => Some(Self::SwitchControlAck),
             0x40 => Some(Self::Heartbeat),
             0x41 => Some(Self::HeartbeatAck),
+            0x50 => Some(Self::Clipboard),
             _ => None,
         }
     }
@@ -155,6 +158,8 @@ pub enum KvmFrame {
     Heartbeat,
     /// 心跳响应
     HeartbeatAck,
+    /// 剪贴板内容（UTF-8 文本）
+    Clipboard { text: String },
 }
 
 /// 协议编解码错误
@@ -232,6 +237,10 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
         KvmFrame::SwitchControlAck => (EventType::SwitchControlAck, vec![]),
         KvmFrame::Heartbeat => (EventType::Heartbeat, vec![]),
         KvmFrame::HeartbeatAck => (EventType::HeartbeatAck, vec![]),
+        KvmFrame::Clipboard { text } => {
+            let p = text.as_bytes().to_vec();
+            (EventType::Clipboard, p)
+        }
     };
 
     let payload_len = payload.len() as u32;
@@ -315,6 +324,10 @@ pub fn decode(buf: &[u8]) -> Result<(KvmFrame, usize), ProtocolError> {
         EventType::SwitchControlAck => KvmFrame::SwitchControlAck,
         EventType::Heartbeat => KvmFrame::Heartbeat,
         EventType::HeartbeatAck => KvmFrame::HeartbeatAck,
+        EventType::Clipboard => {
+            let text = String::from_utf8_lossy(payload).to_string();
+            KvmFrame::Clipboard { text }
+        }
     };
 
     Ok((frame, total_len))

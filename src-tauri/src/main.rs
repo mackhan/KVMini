@@ -2,6 +2,7 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+#![allow(dead_code, unused_imports, unused_variables, unused_doc_comments)]
 
 use tauri::{Manager, SystemTray, SystemTrayMenu, SystemTrayMenuItem, CustomMenuItem};
 
@@ -20,6 +21,10 @@ mod usb;
 mod connection_manager;
 mod platform;
 mod handshake;
+mod keycode_map;
+mod clipboard;
+mod tls;
+mod monitor;
 #[cfg(test)]
 mod integration_tests;
 
@@ -32,6 +37,7 @@ use platform::{
     show_tray_notification, register_global_hotkey, get_latency, kill_legacy_process,
     get_local_ip, connect_by_ip, get_network_interfaces, set_listen_address, get_listen_config,
     disconnect_tcp, get_tcp_connection_status, start_heartbeat_monitor,
+    check_hotkey_conflict, update_tray_language, update_tray_connection_state,
 };
 
 #[tauri::command]
@@ -136,6 +142,17 @@ fn main() {
             // 辅助功能权限
             accessibility::check_accessibility,
             accessibility::open_accessibility_prefs,
+            // 快捷键冲突检测
+            check_hotkey_conflict,
+            // 托盘菜单国际化
+            update_tray_language,
+            update_tray_connection_state,
+            // TLS 证书管理
+            tls::get_local_tls_fingerprint,
+            tls::trust_peer_certificate,
+            // 多显示器支持
+            monitor::get_monitors,
+            monitor::get_virtual_desktop_info,
         ])
         .manage(std::sync::Mutex::new(role_manager::AppRole::default()))
         .setup(|app| {

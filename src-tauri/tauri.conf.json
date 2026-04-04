@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "KVM Share",
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "tauri": {
     "allowlist": {
@@ -27,7 +27,7 @@
       "menuOnLeftClick": false
     },
     "bundle": {
-      "active": false,
+      "active": true,
       "targets": "all",
       "identifier": "com.kvmshare.app",
       "macOS": {

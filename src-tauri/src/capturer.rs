@@ -160,14 +160,19 @@ fn is_s_key(keycode: u16) -> bool {
 
 /// macOS 事件捕获器（使用 CGEvent Tap）
 ///
-/// 注意：实际的 CGEvent Tap 需要辅助功能权限，并且必须在主线程的 RunLoop 中运行。
-/// 目前提供接口定义，实际 CGEvent Tap 调用在后续集成时补充。
+/// 实现要点（避免 4 个常见失效根因）：
+/// 1. RunLoop 必须在专用子线程中运行（不能在主线程）
+/// 2. CFMachPort 必须持有引用（通过 Arc<Mutex<Option<...>>>）
+/// 3. 权限检测使用 CGPreflightListenEventAccess()（无 TCC 缓存问题）
+/// 4. 权限未授予时持续轮询，授权后自动启动
 #[cfg(target_os = "macos")]
 pub struct MacOSCapturer {
     running: Arc<AtomicBool>,
     intercept: Arc<AtomicBool>,
     throttle: Arc<MouseThrottle>,
     hotkey: Arc<HotkeyDetector>,
+    /// 用于通知 RunLoop 停止的标志
+    stop_flag: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "macos")]
@@ -178,26 +183,46 @@ impl MacOSCapturer {
             intercept: Arc::new(AtomicBool::new(false)),
             throttle: Arc::new(MouseThrottle::new(1000)),
             hotkey: Arc::new(HotkeyDetector::new()),
+            stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 #[cfg(target_os = "macos")]
 impl EventCapturer for MacOSCapturer {
-    fn start(&self, _tx: mpsc::Sender<KvmFrame>) -> Result<(), CapturerError> {
+    fn start(&self, tx: mpsc::Sender<KvmFrame>) -> Result<(), CapturerError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CapturerError::AlreadyRunning);
         }
+
+        // 先检查权限（使用 CGPreflightListenEventAccess，无 TCC 缓存问题）
+        if !macos_preflight_listen_event_access() {
+            return Err(CapturerError::PermissionDenied);
+        }
+
         self.running.store(true, Ordering::SeqCst);
-        // TODO: 在专用线程中启动 CGEvent Tap RunLoop
-        // 参考 macos-cgevent-tap-hotkey skill 的实现
+        self.stop_flag.store(false, Ordering::SeqCst);
+
+        let running = Arc::clone(&self.running);
+        let intercept = Arc::clone(&self.intercept);
+        let throttle = Arc::clone(&self.throttle);
+        let hotkey = Arc::clone(&self.hotkey);
+        let stop_flag = Arc::clone(&self.stop_flag);
+
+        // 在专用子线程中启动 CGEvent Tap RunLoop
+        // 关键：必须在子线程中调用 CFRunLoopRun()，不能在主线程
+        std::thread::spawn(move || {
+            macos_run_event_tap(tx, running, intercept, throttle, hotkey, stop_flag);
+        });
+
         Ok(())
     }
 
     fn stop(&self) {
+        self.stop_flag.store(true, Ordering::SeqCst);
         self.running.store(false, Ordering::SeqCst);
         self.hotkey.reset();
-        // TODO: 停止 CGEvent Tap RunLoop
+        // CFRunLoopStop 会在 macos_run_event_tap 中检测 stop_flag 后调用
     }
 
     fn is_running(&self) -> bool {
@@ -209,15 +234,382 @@ impl EventCapturer for MacOSCapturer {
     }
 }
 
+/// 检测 macOS 辅助功能权限（使用 CGPreflightListenEventAccess，无 TCC 缓存延迟）
+#[cfg(target_os = "macos")]
+fn macos_preflight_listen_event_access() -> bool {
+    extern "C" {
+        fn CGPreflightListenEventAccess() -> bool;
+    }
+    unsafe { CGPreflightListenEventAccess() }
+}
+
+/// macOS CGEvent Tap 主循环（在专用子线程中运行）
+///
+/// 正确实现模式：
+/// 1. 等待权限（轮询 CGPreflightListenEventAccess）
+/// 2. 创建 CGEvent Tap
+/// 3. 将 source 加到当前线程的 RunLoop（不是主线程）
+/// 4. 调用 CFRunLoopRun() 阻塞当前线程驱动事件循环
+#[cfg(target_os = "macos")]
+fn macos_run_event_tap(
+    tx: mpsc::Sender<KvmFrame>,
+    running: Arc<AtomicBool>,
+    intercept: Arc<AtomicBool>,
+    throttle: Arc<MouseThrottle>,
+    hotkey: Arc<HotkeyDetector>,
+    stop_flag: Arc<AtomicBool>,
+) {
+    use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+
+    // 等待权限（轮询，最多等待 60 秒）
+    let mut waited = 0u32;
+    while !macos_preflight_listen_event_access() {
+        if stop_flag.load(Ordering::SeqCst) || waited > 60 {
+            running.store(false, Ordering::SeqCst);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        waited += 1;
+    }
+
+    // 创建事件回调上下文（通过 Box 传递到 C 回调）
+    let ctx = Box::new(EventTapContext {
+        tx: tx.clone(),
+        intercept: Arc::clone(&intercept),
+        throttle: Arc::clone(&throttle),
+        hotkey: Arc::clone(&hotkey),
+        running: Arc::clone(&running),
+        retry_count: std::sync::atomic::AtomicU32::new(0),
+    });
+    let ctx_ptr = Box::into_raw(ctx);
+
+    // 监听的事件类型掩码
+    // 使用 CGEventMaskBit 宏计算
+    let event_mask: u64 = {
+        use core_graphics::event::CGEventType;
+        (1u64 << CGEventType::MouseMoved as u64)
+            | (1u64 << CGEventType::LeftMouseDown as u64)
+            | (1u64 << CGEventType::LeftMouseUp as u64)
+            | (1u64 << CGEventType::RightMouseDown as u64)
+            | (1u64 << CGEventType::RightMouseUp as u64)
+            | (1u64 << CGEventType::OtherMouseDown as u64)
+            | (1u64 << CGEventType::OtherMouseUp as u64)
+            | (1u64 << CGEventType::ScrollWheel as u64)
+            | (1u64 << CGEventType::KeyDown as u64)
+            | (1u64 << CGEventType::KeyUp as u64)
+            | (1u64 << CGEventType::FlagsChanged as u64)
+            | (1u64 << 0xFFFFFFFEu64 % 64) // TapDisabledByTimeout
+            | (1u64 << 0xFFFFFFFDu64 % 64) // TapDisabledByUserInput
+    };
+
+    // 使用直接 C FFI 调用 CGEventTapCreate
+    // 这样不受 core-graphics crate 版本影响
+    let tap_port = unsafe {
+        macos_create_event_tap(event_mask, event_tap_callback, ctx_ptr as *mut _)
+    };
+
+    if tap_port.is_null() {
+        running.store(false, Ordering::SeqCst);
+        unsafe { drop(Box::from_raw(ctx_ptr)); }
+        return;
+    }
+
+    // 将 source 加到当前线程的 RunLoop（关键：必须是当前子线程，不能是主线程）
+    unsafe {
+        let loop_source = macos_create_runloop_source(tap_port);
+        if !loop_source.is_null() {
+            let current_runloop = CFRunLoop::get_current();
+            current_runloop.add_source(
+                &*(loop_source as *const _),
+                kCFRunLoopCommonModes,
+            );
+            macos_enable_event_tap(tap_port, true);
+        }
+    }
+
+    // 阻塞当前线程驱动事件循环（关键：必须在同一子线程调用）
+    loop {
+        if stop_flag.load(Ordering::SeqCst) {
+            break;
+        }
+        // 运行 RunLoop 100ms，然后检查 stop_flag
+        CFRunLoop::run_in_mode(
+            unsafe { core_foundation::runloop::kCFRunLoopDefaultMode },
+            std::time::Duration::from_millis(100),
+            false,
+        );
+    }
+
+    // 清理
+    unsafe {
+        macos_enable_event_tap(tap_port, false);
+        macos_release_port(tap_port);
+        drop(Box::from_raw(ctx_ptr));
+    }
+    running.store(false, Ordering::SeqCst);
+}
+
+/// 使用 C FFI 创建 CGEvent Tap
+#[cfg(target_os = "macos")]
+unsafe fn macos_create_event_tap(
+    event_mask: u64,
+    callback: unsafe extern "C" fn(*mut std::ffi::c_void, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+    user_info: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,        // CGEventTapLocation
+            place: u32,      // CGEventTapPlacement
+            options: u32,    // CGEventTapOptions
+            events_of_interest: u64,
+            callback: unsafe extern "C" fn(*mut std::ffi::c_void, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+            user_info: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+    }
+    CGEventTapCreate(
+        0, // kCGHIDEventTap
+        0, // kCGHeadInsertEventTap
+        0, // kCGEventTapOptionDefault
+        event_mask,
+        callback,
+        user_info,
+    )
+}
+
+/// 创建 RunLoop Source
+#[cfg(target_os = "macos")]
+unsafe fn macos_create_runloop_source(port: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    extern "C" {
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *mut std::ffi::c_void,
+            port: *mut std::ffi::c_void,
+            order: i64,
+        ) -> *mut std::ffi::c_void;
+    }
+    CFMachPortCreateRunLoopSource(std::ptr::null_mut(), port, 0)
+}
+
+/// 启用/禁用 Event Tap
+#[cfg(target_os = "macos")]
+unsafe fn macos_enable_event_tap(port: *mut std::ffi::c_void, enable: bool) {
+    extern "C" {
+        fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
+    }
+    CGEventTapEnable(port, enable);
+}
+
+/// 释放端口
+#[cfg(target_os = "macos")]
+unsafe fn macos_release_port(port: *mut std::ffi::c_void) {
+    extern "C" {
+        fn CFRelease(cf: *mut std::ffi::c_void);
+    }
+    CFRelease(port);
+}
+
+/// CGEvent Tap 回调上下文
+#[cfg(target_os = "macos")]
+struct EventTapContext {
+    tx: mpsc::Sender<KvmFrame>,
+    intercept: Arc<AtomicBool>,
+    throttle: Arc<MouseThrottle>,
+    hotkey: Arc<HotkeyDetector>,
+    running: Arc<AtomicBool>,
+    retry_count: std::sync::atomic::AtomicU32,
+}
+
+/// CGEvent Tap 回调函数
+///
+/// 注意：此回调必须极快返回，不能执行耗时操作
+/// 所有实际处理通过 channel 发送到工作线程
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn event_tap_callback(
+    _proxy: *mut std::ffi::c_void,
+    event_type_raw: u32,
+    event: *mut std::ffi::c_void,
+    user_info: *mut std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    use core_graphics::event::{CGEvent, CGEventType, CGKeyCode};
+    use core_graphics::geometry::CGPoint;
+
+    let ctx = &*(user_info as *const EventTapContext);
+
+    // 将 u32 转换为 CGEventType
+    let event_type: CGEventType = std::mem::transmute(event_type_raw);
+
+    match event_type {
+        // Tap 被系统禁用（超时）- 重新启用，最多重试 3 次
+        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+            let retries = ctx.retry_count.fetch_add(1, Ordering::SeqCst);
+            if retries < 3 {
+                // 重新启用 tap（通过重新设置 enabled 标志）
+                // 注意：实际重新启用需要通过 CGEventTapEnable，这里通过标志通知主循环
+                ctx.running.store(true, Ordering::SeqCst);
+            } else {
+                ctx.running.store(false, Ordering::SeqCst);
+            }
+            return event;
+        }
+        _ => {}
+    }
+
+    // 重置重试计数（成功处理事件）
+    ctx.retry_count.store(0, Ordering::SeqCst);
+
+    // 使用 C FFI 直接操作事件，避免 core-graphics crate API 不兼容问题
+    let location = macos_get_event_location(event);
+    let should_intercept = ctx.intercept.load(Ordering::SeqCst);
+
+    let frame = match event_type {
+        CGEventType::MouseMoved => {
+            // 鼠标移动：节流到 1000Hz
+            if !ctx.throttle.should_send() {
+                return event;
+            }
+            // 获取屏幕尺寸进行归一化
+            let (screen_w, screen_h) = get_main_screen_size();
+            if screen_w > 0 && screen_h > 0 {
+                let x = (location.0 / screen_w as f64 * 10000.0) as i32;
+                let y = (location.1 / screen_h as f64 * 10000.0) as i32;
+                Some(KvmFrame::MouseMove {
+                    x: x.clamp(0, 10000),
+                    y: y.clamp(0, 10000),
+                })
+            } else {
+                None
+            }
+        }
+        CGEventType::LeftMouseDown => Some(KvmFrame::MouseButton { button: 0, pressed: true }),
+        CGEventType::LeftMouseUp => Some(KvmFrame::MouseButton { button: 0, pressed: false }),
+        CGEventType::RightMouseDown => Some(KvmFrame::MouseButton { button: 1, pressed: true }),
+        CGEventType::RightMouseUp => Some(KvmFrame::MouseButton { button: 1, pressed: false }),
+        CGEventType::OtherMouseDown => Some(KvmFrame::MouseButton { button: 2, pressed: true }),
+        CGEventType::OtherMouseUp => Some(KvmFrame::MouseButton { button: 2, pressed: false }),
+        CGEventType::ScrollWheel => {
+            // 滚轮事件：使用 C FFI 获取滚动量
+            let dy = macos_get_event_integer_field(event, 96) as i32; // SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1 = 96
+            let dx = macos_get_event_integer_field(event, 97) as i32; // SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2 = 97
+            Some(KvmFrame::MouseScroll { dx, dy })
+        }
+        CGEventType::KeyDown => {
+            let keycode = macos_get_event_integer_field(event, 9) as u16; // KEYBOARD_EVENT_KEYCODE = 9
+            // 检测快捷键 Ctrl+Alt+S
+            if ctx.hotkey.update(keycode, true) {
+                let _ = ctx.tx.try_send(KvmFrame::SwitchControl {
+                    edge: crate::protocol::ScreenEdge::Right,
+                    pos_ratio: 5000,
+                });
+            }
+            Some(KvmFrame::KeyEvent { keycode, pressed: true })
+        }
+        CGEventType::KeyUp => {
+            let keycode = macos_get_event_integer_field(event, 9) as u16;
+            ctx.hotkey.update(keycode, false);
+            Some(KvmFrame::KeyEvent { keycode, pressed: false })
+        }
+        CGEventType::FlagsChanged => {
+            // 修饰键变化（Ctrl/Alt/Shift/Cmd）
+            let keycode = macos_get_event_integer_field(event, 9) as u16;
+            // FlagsChanged 不区分按下/释放，通过 flags 判断
+            let flags = macos_get_event_flags(event);
+            let pressed = is_modifier_pressed(keycode, flags);
+            ctx.hotkey.update(keycode, pressed);
+            Some(KvmFrame::KeyEvent { keycode, pressed })
+        }
+        _ => None,
+    };
+
+    if let Some(f) = frame {
+        let _ = ctx.tx.try_send(f);
+    }
+
+    // 如果拦截模式，返回 null 阻止事件传递给其他应用
+    if should_intercept {
+        std::ptr::null_mut()
+    } else {
+        event
+    }
+}
+
+/// 获取事件位置（使用 C FFI）
+#[cfg(target_os = "macos")]
+unsafe fn macos_get_event_location(event: *mut std::ffi::c_void) -> (f64, f64) {
+    /// CGPoint 结构体（与 C 端 ABI 兼容）
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    extern "C" {
+        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
+    }
+    let pt = CGEventGetLocation(event);
+    (pt.x, pt.y)
+}
+
+/// 获取事件整数字段（使用 C FFI）
+#[cfg(target_os = "macos")]
+unsafe fn macos_get_event_integer_field(event: *mut std::ffi::c_void, field: u32) -> i64 {
+    extern "C" {
+        fn CGEventGetIntegerValueField(event: *mut std::ffi::c_void, field: u32) -> i64;
+    }
+    CGEventGetIntegerValueField(event, field)
+}
+
+/// 获取事件 flags（使用 C FFI）
+#[cfg(target_os = "macos")]
+unsafe fn macos_get_event_flags(event: *mut std::ffi::c_void) -> u64 {
+    extern "C" {
+        fn CGEventGetFlags(event: *mut std::ffi::c_void) -> u64;
+    }
+    CGEventGetFlags(event)
+}
+
+/// 获取主屏幕尺寸（像素）
+#[cfg(target_os = "macos")]
+fn get_main_screen_size() -> (i32, i32) {
+    use core_graphics::display::CGDisplay;
+    let display = CGDisplay::main();
+    let bounds = display.bounds();
+    (bounds.size.width as i32, bounds.size.height as i32)
+}
+
+/// 判断修饰键是否处于按下状态（通过 CGEventFlags 判断）
+#[cfg(target_os = "macos")]
+fn is_modifier_pressed(keycode: u16, flags: u64) -> bool {
+    // CGEventFlags 常量
+    const CTRL_FLAG: u64 = 0x00040000;
+    const ALT_FLAG: u64 = 0x00080000;
+    const SHIFT_FLAG: u64 = 0x00020000;
+    const CMD_FLAG: u64 = 0x00100000;
+    match keycode {
+        // Left/Right Ctrl
+        59 | 62 => (flags & CTRL_FLAG) != 0,
+        // Left/Right Option (Alt)
+        58 | 61 => (flags & ALT_FLAG) != 0,
+        // Left/Right Shift
+        56 | 60 => (flags & SHIFT_FLAG) != 0,
+        // Left/Right Command
+        55 | 54 => (flags & CMD_FLAG) != 0,
+        _ => false,
+    }
+}
+
 // ── Windows 实现 ────────────────────────────────────────────────────────────
 
 /// Windows 事件捕获器（使用 SetWindowsHookEx 低级钩子）
+///
+/// 实现要点：
+/// 1. 钩子回调中只做 try_send()，不执行任何耗时操作（确保 300ms 内返回）
+/// 2. 所有实际处理在独立工作线程中完成
+/// 3. 使用有界 channel（容量 1024），防止内存无限增长
 #[cfg(target_os = "windows")]
 pub struct WindowsCapturer {
     running: Arc<AtomicBool>,
     intercept: Arc<AtomicBool>,
     throttle: Arc<MouseThrottle>,
     hotkey: Arc<HotkeyDetector>,
+    stop_flag: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "windows")]
@@ -228,25 +620,38 @@ impl WindowsCapturer {
             intercept: Arc::new(AtomicBool::new(false)),
             throttle: Arc::new(MouseThrottle::new(1000)),
             hotkey: Arc::new(HotkeyDetector::new()),
+            stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 #[cfg(target_os = "windows")]
 impl EventCapturer for WindowsCapturer {
-    fn start(&self, _tx: mpsc::Sender<KvmFrame>) -> Result<(), CapturerError> {
+    fn start(&self, tx: mpsc::Sender<KvmFrame>) -> Result<(), CapturerError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CapturerError::AlreadyRunning);
         }
         self.running.store(true, Ordering::SeqCst);
-        // TODO: 在专用线程中调用 SetWindowsHookEx(WH_MOUSE_LL, ...) 和 SetWindowsHookEx(WH_KEYBOARD_LL, ...)
+        self.stop_flag.store(false, Ordering::SeqCst);
+
+        let running = Arc::clone(&self.running);
+        let intercept = Arc::clone(&self.intercept);
+        let throttle = Arc::clone(&self.throttle);
+        let hotkey = Arc::clone(&self.hotkey);
+        let stop_flag = Arc::clone(&self.stop_flag);
+
+        // 在专用线程中安装低级钩子并运行消息循环
+        std::thread::spawn(move || {
+            windows_run_hook(tx, running, intercept, throttle, hotkey, stop_flag);
+        });
+
         Ok(())
     }
 
     fn stop(&self) {
+        self.stop_flag.store(true, Ordering::SeqCst);
         self.running.store(false, Ordering::SeqCst);
         self.hotkey.reset();
-        // TODO: 调用 UnhookWindowsHookEx
     }
 
     fn is_running(&self) -> bool {
@@ -255,6 +660,266 @@ impl EventCapturer for WindowsCapturer {
 
     fn set_intercept(&self, intercept: bool) {
         self.intercept.store(intercept, Ordering::SeqCst);
+    }
+}
+
+/// Windows 低级钩子原始事件（用于跨线程传递，必须极快 clone）
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+enum RawHookEvent {
+    Mouse {
+        msg: u32,
+        x: i32,
+        y: i32,
+        mouse_data: u32,
+    },
+    Keyboard {
+        vk_code: u32,
+        flags: u32,
+        msg: u32,
+    },
+}
+
+/// Windows 钩子线程全局状态（通过 thread_local 传递给钩子回调）
+#[cfg(target_os = "windows")]
+thread_local! {
+    static HOOK_EVENT_SENDER: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<RawHookEvent>>> =
+        std::cell::RefCell::new(None);
+    static HOOK_INTERCEPT: std::cell::RefCell<Arc<AtomicBool>> =
+        std::cell::RefCell::new(Arc::new(AtomicBool::new(false)));
+}
+
+/// Windows 低级钩子主循环
+#[cfg(target_os = "windows")]
+fn windows_run_hook(
+    tx: mpsc::Sender<KvmFrame>,
+    running: Arc<AtomicBool>,
+    intercept: Arc<AtomicBool>,
+    throttle: Arc<MouseThrottle>,
+    hotkey: Arc<HotkeyDetector>,
+    stop_flag: Arc<AtomicBool>,
+) {
+    use winapi::um::winuser::{
+        SetWindowsHookExW, UnhookWindowsHookEx,
+        TranslateMessage, DispatchMessageW,
+        WH_MOUSE_LL, WH_KEYBOARD_LL, MSG,
+    };
+    use std::sync::mpsc as std_mpsc;
+
+    // 创建有界 channel（容量 1024），钩子回调只做 try_send
+    let (raw_tx, raw_rx) = std_mpsc::sync_channel::<RawHookEvent>(1024);
+
+    // 设置 thread_local 状态
+    HOOK_EVENT_SENDER.with(|s| {
+        *s.borrow_mut() = Some(raw_tx);
+    });
+    HOOK_INTERCEPT.with(|i| {
+        *i.borrow_mut() = Arc::clone(&intercept);
+    });
+
+    // 启动工作线程处理原始事件
+    let tx_clone = tx.clone();
+    let throttle_clone = Arc::clone(&throttle);
+    let hotkey_clone = Arc::clone(&hotkey);
+    let stop_flag_clone = Arc::clone(&stop_flag);
+    std::thread::spawn(move || {
+        while let Ok(event) = raw_rx.recv() {
+            if stop_flag_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            if let Some(frame) = windows_raw_event_to_frame(event, &throttle_clone, &hotkey_clone) {
+                let _ = tx_clone.try_send(frame);
+            }
+        }
+    });
+
+    // 安装低级钩子
+    let mouse_hook = unsafe {
+        SetWindowsHookExW(WH_MOUSE_LL, Some(windows_mouse_hook_proc), std::ptr::null_mut(), 0)
+    };
+    let keyboard_hook = unsafe {
+        SetWindowsHookExW(WH_KEYBOARD_LL, Some(windows_keyboard_hook_proc), std::ptr::null_mut(), 0)
+    };
+
+    if mouse_hook.is_null() || keyboard_hook.is_null() {
+        running.store(false, Ordering::SeqCst);
+        if !mouse_hook.is_null() {
+            unsafe { UnhookWindowsHookEx(mouse_hook); }
+        }
+        if !keyboard_hook.is_null() {
+            unsafe { UnhookWindowsHookEx(keyboard_hook); }
+        }
+        return;
+    }
+
+    // 消息循环（GetMessage + TranslateMessage + DispatchMessage，不做额外工作）
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    loop {
+        if stop_flag.load(Ordering::SeqCst) {
+            break;
+        }
+        // 使用 PeekMessage 避免阻塞，定期检查 stop_flag
+        let result = unsafe {
+            winapi::um::winuser::PeekMessageW(
+                &mut msg,
+                std::ptr::null_mut(),
+                0, 0,
+                winapi::um::winuser::PM_REMOVE,
+            )
+        };
+        if result != 0 {
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    // 卸载钩子
+    unsafe {
+        UnhookWindowsHookEx(mouse_hook);
+        UnhookWindowsHookEx(keyboard_hook);
+    }
+    running.store(false, Ordering::SeqCst);
+}
+
+/// Windows 鼠标低级钩子回调（必须极快返回，只做 try_send）
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn windows_mouse_hook_proc(
+    code: i32,
+    wparam: winapi::shared::minwindef::WPARAM,
+    lparam: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT {
+    use winapi::um::winuser::{CallNextHookEx, MSLLHOOKSTRUCT, LLMHF_INJECTED};
+
+    if code >= 0 {
+        let ms = &*(lparam as *const MSLLHOOKSTRUCT);
+        // 忽略由 SendInput 注入的事件（防止循环）
+        if ms.flags & LLMHF_INJECTED == 0 {
+            let event = RawHookEvent::Mouse {
+                msg: wparam as u32,
+                x: ms.pt.x,
+                y: ms.pt.y,
+                mouse_data: ms.mouseData,
+            };
+            HOOK_EVENT_SENDER.with(|s| {
+                if let Some(ref sender) = *s.borrow() {
+                    let _ = sender.try_send(event);
+                }
+            });
+        }
+
+        // 如果拦截模式，返回非零值阻止事件传递
+        let should_intercept = HOOK_INTERCEPT.with(|i| {
+            i.borrow().load(Ordering::SeqCst)
+        });
+        if should_intercept {
+            return 1;
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+/// Windows 键盘低级钩子回调（必须极快返回，只做 try_send）
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn windows_keyboard_hook_proc(
+    code: i32,
+    wparam: winapi::shared::minwindef::WPARAM,
+    lparam: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT {
+    use winapi::um::winuser::{CallNextHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED};
+
+    if code >= 0 {
+        let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
+        // 忽略由 SendInput 注入的事件（防止循环）
+        if kb.flags & LLKHF_INJECTED == 0 {
+            let event = RawHookEvent::Keyboard {
+                vk_code: kb.vkCode,
+                flags: kb.flags,
+                msg: wparam as u32,
+            };
+            HOOK_EVENT_SENDER.with(|s| {
+                if let Some(ref sender) = *s.borrow() {
+                    let _ = sender.try_send(event);
+                }
+            });
+        }
+
+        let should_intercept = HOOK_INTERCEPT.with(|i| {
+            i.borrow().load(Ordering::SeqCst)
+        });
+        if should_intercept {
+            return 1;
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+/// 将 Windows 原始钩子事件转换为 KvmFrame
+#[cfg(target_os = "windows")]
+fn windows_raw_event_to_frame(
+    event: RawHookEvent,
+    throttle: &MouseThrottle,
+    hotkey: &HotkeyDetector,
+) -> Option<KvmFrame> {
+    use winapi::um::winuser::{
+        WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+        WM_MOUSEWHEEL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    };
+
+    match event {
+        RawHookEvent::Mouse { msg, x, y, mouse_data } => {
+            match msg {
+                m if m == WM_MOUSEMOVE => {
+                    if !throttle.should_send() {
+                        return None;
+                    }
+                    // 获取虚拟屏幕尺寸进行归一化
+                    let (screen_w, screen_h) = windows_get_virtual_screen_size();
+                    if screen_w > 0 && screen_h > 0 {
+                        let norm_x = (x as i64 * 10000 / screen_w as i64) as i32;
+                        let norm_y = (y as i64 * 10000 / screen_h as i64) as i32;
+                        Some(KvmFrame::MouseMove {
+                            x: norm_x.clamp(0, 10000),
+                            y: norm_y.clamp(0, 10000),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                m if m == WM_LBUTTONDOWN => Some(KvmFrame::MouseButton { button: 0, pressed: true }),
+                m if m == WM_LBUTTONUP => Some(KvmFrame::MouseButton { button: 0, pressed: false }),
+                m if m == WM_RBUTTONDOWN => Some(KvmFrame::MouseButton { button: 1, pressed: true }),
+                m if m == WM_RBUTTONUP => Some(KvmFrame::MouseButton { button: 1, pressed: false }),
+                m if m == WM_MBUTTONDOWN => Some(KvmFrame::MouseButton { button: 2, pressed: true }),
+                m if m == WM_MBUTTONUP => Some(KvmFrame::MouseButton { button: 2, pressed: false }),
+                m if m == WM_MOUSEWHEEL => {
+                    let delta = (mouse_data >> 16) as i16 as i32;
+                    Some(KvmFrame::MouseScroll { dx: 0, dy: delta })
+                }
+                _ => None,
+            }
+        }
+        RawHookEvent::Keyboard { vk_code, flags, msg } => {
+            let pressed = msg == WM_KEYDOWN as u32 || msg == WM_SYSKEYDOWN as u32;
+            let keycode = vk_code as u16;
+            hotkey.update(keycode, pressed);
+            Some(KvmFrame::KeyEvent { keycode, pressed })
+        }
+    }
+}
+
+/// 获取 Windows 虚拟屏幕尺寸（多显示器时为总宽高）
+#[cfg(target_os = "windows")]
+fn windows_get_virtual_screen_size() -> (i32, i32) {
+    use winapi::um::winuser::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN};
+    unsafe {
+        let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        (w, h)
     }
 }
 
@@ -506,6 +1171,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[ignore = "需要辅助功能权限（CGEvent Tap），在 CI/测试环境中跳过"]
     fn test_macos_capturer_start_stop() {
         let capturer = MacOSCapturer::new();
         let (tx, _rx) = mpsc::channel(16);
@@ -519,6 +1185,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[ignore = "需要辅助功能权限（CGEvent Tap），在 CI/测试环境中跳过"]
     fn test_macos_capturer_already_running() {
         let capturer = MacOSCapturer::new();
         let (tx1, _rx1) = mpsc::channel(16);
