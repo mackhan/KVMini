@@ -162,6 +162,9 @@ fn main() {
             // 启动被控端 UDP 广播监听（所有设备启动时都监听，主控端扫描时能发现）
             platform::start_udp_discovery_listener();
 
+            // 启动显示器变化监听（每 3 秒检测一次，变化时通知前端）
+            monitor::start_monitor_watcher(app.handle());
+
             #[cfg(debug_assertions)]
             {
                 let window = app.get_window("main").unwrap();

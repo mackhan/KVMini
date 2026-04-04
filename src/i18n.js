@@ -121,6 +121,16 @@ const MESSAGES = {
     optionLocalBelow: '下方（鼠标→上边缘切换）',
     hintTriggerEdge: '当前：鼠标超出',
     hintTriggerEdgeSuffix: '时切换到远端',
+    labelMonitorCount: '本机显示器数量:',
+    labelMonitorList: '显示器列表',
+    labelPrimaryMonitor: '主显示器',
+    labelMonitorResolution: '分辨率',
+    labelMonitorDpi: 'DPI 缩放',
+    labelMonitorOffset: '偏移',
+    btnRefreshMonitors: '刷新显示器',
+    msgMonitorsRefreshed: '显示器信息已刷新',
+    msgMonitorsChanged: '检测到显示器配置变化，已自动更新',
+    hintMultiMonitor: '多显示器模式：鼠标到达任意显示器边缘时触发切换',
 
     // 语言与主题设置
     titleAppearance: '外观',
@@ -304,6 +314,16 @@ const MESSAGES = {
     optionLocalBelow: 'Below (mouse → top edge to switch)',
     hintTriggerEdge: 'Current: mouse crosses',
     hintTriggerEdgeSuffix: 'to switch to remote',
+    labelMonitorCount: 'Local monitor count:',
+    labelMonitorList: 'Monitor List',
+    labelPrimaryMonitor: 'Primary',
+    labelMonitorResolution: 'Resolution',
+    labelMonitorDpi: 'DPI Scale',
+    labelMonitorOffset: 'Offset',
+    btnRefreshMonitors: 'Refresh Monitors',
+    msgMonitorsRefreshed: 'Monitor info refreshed',
+    msgMonitorsChanged: 'Display configuration changed, updated automatically',
+    hintMultiMonitor: 'Multi-monitor: switching triggers when mouse reaches any display edge',
 
     // Language & Theme settings
     titleAppearance: 'Appearance',

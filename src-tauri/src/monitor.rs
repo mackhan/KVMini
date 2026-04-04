@@ -8,6 +8,7 @@
 /// 坐标归一化基于虚拟桌面总尺寸（所有显示器的包围盒），而非单个显示器。
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 /// 显示器信息
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -297,6 +298,31 @@ pub fn get_monitors() -> Vec<MonitorInfo> {
 #[tauri::command]
 pub fn get_virtual_desktop_info() -> VirtualDesktop {
     get_virtual_desktop()
+}
+
+/// 启动显示器变化监听（在 setup 中调用）
+/// 当显示器配置变化时，通过 Tauri 事件 `monitors-changed` 通知前端
+pub fn start_monitor_watcher(app_handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut last_monitors = enumerate_monitors_platform();
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let current_monitors = enumerate_monitors_platform();
+
+            // 比较显示器数量或分辨率是否变化
+            let changed = current_monitors.len() != last_monitors.len()
+                || current_monitors.iter().zip(last_monitors.iter()).any(|(a, b)| {
+                    a.width != b.width || a.height != b.height
+                        || a.offset_x != b.offset_x || a.offset_y != b.offset_y
+                });
+
+            if changed {
+                last_monitors = current_monitors;
+                let _ = app_handle.emit_all("monitors-changed", ());
+            }
+        }
+    });
 }
 
 #[cfg(test)]

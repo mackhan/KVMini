@@ -1121,6 +1121,9 @@ async function initDisplayLayout() {
 
     if (!select || !preview) return;
 
+    // 加载真实显示器信息
+    await refreshMonitors();
+
     // 加载已保存的布局配置
     try {
         if (invoke) {
@@ -1129,7 +1132,7 @@ async function initDisplayLayout() {
                 select.value = config.layout;
                 updateLayoutPreview(config.layout, preview, hintEdge);
             }
-            // 显示本机屏幕尺寸
+            // 显示本机屏幕尺寸（优先使用真实显示器数据）
             if (config && config.local_screen_width && localSizeEl) {
                 localSizeEl.textContent = `${config.local_screen_width}×${config.local_screen_height}`;
             }
@@ -1177,16 +1180,101 @@ async function initDisplayLayout() {
             const dy = relY - centerY;
 
             if (Math.abs(dx) > Math.abs(dy)) {
-                // 水平方向
                 newLayout = dx < 0 ? 'LocalRightOfRemote' : 'LocalLeftOfRemote';
             } else {
-                // 垂直方向
                 newLayout = dy < 0 ? 'LocalBelowRemote' : 'LocalAboveRemote';
             }
 
             select.value = newLayout;
             updateLayoutPreview(newLayout, preview, hintEdge);
         });
+    }
+
+    // 监听后端 monitors-changed 事件（显示器配置变化时自动刷新）
+    if (!window.__monitorsListenerRegistered && window.__TAURI__) {
+        window.__monitorsListenerRegistered = true;
+        window.__TAURI__.event.listen('monitors-changed', () => {
+            refreshMonitors();
+            const { t } = window.i18n;
+            showToast(t('msgMonitorsChanged'));
+        });
+    }
+}
+
+/**
+ * 刷新显示器列表（调用后端 get_monitors）
+ */
+async function refreshMonitors() {
+    const monitorList = document.getElementById('monitor-list');
+    const countBadge = document.getElementById('monitor-count-badge');
+    const localSizeEl = document.getElementById('local-display-size');
+    const { t } = window.i18n;
+
+    if (!monitorList) return;
+
+    try {
+        if (!invoke) return;
+        const monitors = await invoke('get_monitors');
+
+        // 更新显示器数量徽章
+        if (countBadge) countBadge.textContent = monitors.length;
+
+        // 更新本机显示器预览尺寸（使用主显示器）
+        const primary = monitors.find(m => m.is_primary) || monitors[0];
+        if (primary && localSizeEl) {
+            localSizeEl.textContent = `${primary.width}×${primary.height}`;
+        }
+
+        // 渲染显示器列表
+        if (monitors.length === 0) {
+            monitorList.innerHTML = `<div class="monitor-list-empty">-</div>`;
+            return;
+        }
+
+        monitorList.innerHTML = monitors.map((m, idx) => `
+            <div class="monitor-item ${m.is_primary ? 'monitor-primary' : ''}">
+                <div class="monitor-item-icon">🖥</div>
+                <div class="monitor-item-info">
+                    <div class="monitor-item-name">
+                        ${t('labelMonitorResolution')}: ${m.width}×${m.height}
+                        ${m.is_primary ? `<span class="monitor-primary-badge">${t('labelPrimaryMonitor')}</span>` : ''}
+                    </div>
+                    <div class="monitor-item-detail">
+                        ${t('labelMonitorDpi')}: ${(m.dpi_scale * 100).toFixed(0)}%
+                        &nbsp;|&nbsp;
+                        ${t('labelMonitorOffset')}: (${m.offset_x}, ${m.offset_y})
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        // 多显示器时显示提示
+        if (monitors.length > 1) {
+            monitorList.innerHTML += `
+                <div class="monitor-multi-hint">
+                    <span>💡</span> ${t('hintMultiMonitor')}
+                </div>
+            `;
+        }
+
+    } catch (e) {
+        // 降级：使用 window.screen
+        if (countBadge) countBadge.textContent = '1';
+        if (localSizeEl) localSizeEl.textContent = `${window.screen.width}×${window.screen.height}`;
+        if (monitorList) monitorList.innerHTML = `
+            <div class="monitor-item monitor-primary">
+                <div class="monitor-item-icon">🖥</div>
+                <div class="monitor-item-info">
+                    <div class="monitor-item-name">
+                        ${t('labelMonitorResolution')}: ${window.screen.width}×${window.screen.height}
+                        <span class="monitor-primary-badge">${t('labelPrimaryMonitor')}</span>
+                    </div>
+                    <div class="monitor-item-detail">
+                        ${t('labelMonitorDpi')}: ${Math.round(window.devicePixelRatio * 100)}%
+                    </div>
+                </div>
+            </div>
+        `;
     }
 }
 

@@ -294,6 +294,19 @@
                 <div class="settings-section">
                     <h4 data-i18n="settingsDisplay">显示器布局</h4>
                     <p class="settings-hint" data-i18n="hintDisplayLayout">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
+
+                    <!-- 本机显示器列表 -->
+                    <div class="monitor-list-section">
+                        <div class="monitor-list-header">
+                            <span data-i18n="labelMonitorList">显示器列表</span>
+                            <span id="monitor-count-badge" class="monitor-count-badge">1</span>
+                            <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器" onclick="refreshMonitors()">↺</button>
+                        </div>
+                        <div id="monitor-list" class="monitor-list">
+                            <!-- 由 JS 动态填充 -->
+                        </div>
+                    </div>
+
                     <div class="display-layout-container" id="display-layout-container">
                         <!-- 布局预览区域 -->
                         <div class="display-layout-preview" id="display-layout-preview">
