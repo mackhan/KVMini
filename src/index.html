@@ -290,6 +290,37 @@
                     </div>
                 </div>
 
+                <!-- 剪贴板共享 -->
+                <div class="settings-section">
+                    <h4 data-i18n="settingsClipboard">剪贴板共享</h4>
+                    <div class="settings-item">
+                        <label data-i18n="labelClipboardSync">跨设备剪贴板同步:</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="clipboard-sync" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）</p>
+                </div>
+
+                <!-- 安全与加密 -->
+                <div class="settings-section">
+                    <h4 data-i18n="settingsSecurity">安全与加密</h4>
+                    <div class="settings-item">
+                        <label data-i18n="labelEnableTls">TLS 1.3 加密传输:</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="enable-tls" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <p class="feature-hint" data-i18n="hintEnableTls">开启后所有键鼠数据和剪贴板内容均加密传输，关闭后显示安全警告</p>
+                    <div class="settings-item" id="tls-fingerprint-row">
+                        <label data-i18n="labelLocalFingerprint">本机证书指纹:</label>
+                        <span id="local-tls-fingerprint" class="tls-fingerprint-text">加载中...</span>
+                        <button class="btn btn-small" onclick="copyTlsFingerprint()" data-i18n="btnCopyFingerprint">复制</button>
+                    </div>
+                </div>
+
                 <!-- 显示器布局配置 -->
                 <div class="settings-section">
                     <h4 data-i18n="settingsDisplay">显示器布局</h4>
@@ -340,6 +371,28 @@
                     <button class="btn btn-outline" data-i18n="btnCancel" onclick="closeSettings()">取消</button>
                 </div>
                 <div class="settings-version" id="settings-version">v0.1.4</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TLS 指纹确认对话框 -->
+    <div id="tls-confirm-modal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <h2>🔐 <span data-i18n="tlsConfirmTitle">首次连接安全确认</span></h2>
+            </div>
+            <div class="modal-body">
+                <p data-i18n="tlsConfirmDesc">检测到来自新设备的连接请求，请确认对端证书指纹是否与对端显示的一致：</p>
+                <div class="tls-fingerprint-box">
+                    <span id="tls-confirm-fingerprint" class="tls-fingerprint-text"></span>
+                </div>
+                <p class="feature-hint" data-i18n="tlsConfirmHint">如果指纹与对端显示的不一致，请拒绝连接，可能存在中间人攻击风险。</p>
+                <div id="tls-confirm-address" style="font-size:12px;color:#6b7280;margin-top:4px;"></div>
+            </div>
+            <div class="modal-footer" style="gap:12px;">
+                <button class="btn btn-primary" id="tls-trust-btn" data-i18n="btnTrustAndConnect">信任并连接</button>
+                <button class="btn btn-outline" id="tls-reject-btn" data-i18n="btnRejectConnection">拒绝连接</button>
             </div>
         </div>
     </div>

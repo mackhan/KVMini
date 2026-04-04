@@ -120,20 +120,27 @@ fn macos_clipboard_poll_loop(
 }
 
 /// 获取 macOS NSPasteboard changeCount
+/// 使用 pbpaste 读取当前剪贴板内容，计算其哈希值作为变化标识。
+/// 只有内容真正变化时哈希才会改变，避免每 200ms 都触发发送。
 #[cfg(target_os = "macos")]
 fn macos_get_change_count() -> i64 {
-    // 通过 pbpaste 命令获取剪贴板内容（简化实现）
-    // 实际生产中应使用 objc crate 调用 NSPasteboard API
-    // 这里使用 pbpaste 的退出码变化来检测变化
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // 简化：使用时间戳作为变化计数（实际应调用 NSPasteboard.changeCount）
-    // 真实实现需要 objc crate：
-    // let pasteboard: id = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
-    // let count: NSInteger = unsafe { msg_send![pasteboard, changeCount] };
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64 / 200 // 每 200ms 一个时间槽
+    // 读取当前剪贴板内容，计算简单哈希作为变化标识
+    // 真实生产实现应使用 objc crate 调用 NSPasteboard.changeCount：
+    //   let pasteboard: id = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+    //   let count: NSInteger = unsafe { msg_send![pasteboard, changeCount] };
+    // 当前使用内容哈希替代，效果等价：只有内容变化时才触发同步
+    let content = std::process::Command::new("pbpaste")
+        .output()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+
+    // 使用 FNV-1a 简单哈希（无需额外依赖）
+    let mut hash: i64 = 0xcbf29ce484222325_u64 as i64;
+    for byte in &content {
+        hash ^= *byte as i64;
+        hash = hash.wrapping_mul(0x100000001b3_u64 as i64);
+    }
+    hash
 }
 
 /// 读取 macOS 剪贴板文本

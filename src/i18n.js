@@ -196,6 +196,28 @@ const MESSAGES = {
     // 布局触发边缘（动态文字）
     triggerEdgeHintPrefix: '当前：鼠标超出',
     triggerEdgeHintSuffix: '时切换到远端',
+
+    // 剪贴板共享
+    settingsClipboard: '剪贴板共享',
+    labelClipboardSync: '跨设备剪贴板同步:',
+    hintClipboardSync: '开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）',
+
+    // 安全与加密
+    settingsSecurity: '安全与加密',
+    labelEnableTls: 'TLS 1.3 加密传输:',
+    hintEnableTls: '开启后所有键鼠数据和剪贴板内容均加密传输，关闭后显示安全警告',
+    labelLocalFingerprint: '本机证书指纹:',
+    btnCopyFingerprint: '复制',
+    tlsFingerprintCopied: '指纹已复制到剪贴板',
+    tlsFingerprintLoadFailed: '指纹加载失败',
+
+    // TLS 指纹确认对话框
+    tlsConfirmTitle: '首次连接安全确认',
+    tlsConfirmDesc: '检测到来自新设备的连接请求，请确认对端证书指纹是否与对端显示的一致：',
+    tlsConfirmHint: '如果指纹与对端显示的不一致，请拒绝连接，可能存在中间人攻击风险。',
+    btnTrustAndConnect: '信任并连接',
+    btnRejectConnection: '拒绝连接',
+    tlsDisabledWarning: '⚠️ TLS 加密已关闭，键鼠数据将以明文传输，存在安全风险',
   },
 
   en: {
@@ -389,6 +411,28 @@ const MESSAGES = {
     // Layout trigger edge (dynamic text)
     triggerEdgeHintPrefix: 'Current: mouse crosses',
     triggerEdgeHintSuffix: 'to switch to remote',
+
+    // Clipboard sharing
+    settingsClipboard: 'Clipboard Sharing',
+    labelClipboardSync: 'Cross-device clipboard sync:',
+    hintClipboardSync: 'When enabled, text copied on one device can be pasted on the other (plain text only, truncated at 1MB)',
+
+    // Security & Encryption
+    settingsSecurity: 'Security & Encryption',
+    labelEnableTls: 'TLS 1.3 Encrypted Transport:',
+    hintEnableTls: 'When enabled, all keyboard/mouse data and clipboard content is encrypted. Disabling shows a security warning.',
+    labelLocalFingerprint: 'Local Certificate Fingerprint:',
+    btnCopyFingerprint: 'Copy',
+    tlsFingerprintCopied: 'Fingerprint copied to clipboard',
+    tlsFingerprintLoadFailed: 'Failed to load fingerprint',
+
+    // TLS fingerprint confirmation dialog
+    tlsConfirmTitle: 'First Connection Security Check',
+    tlsConfirmDesc: 'A connection request from a new device was detected. Please verify the remote certificate fingerprint matches what is shown on the remote device:',
+    tlsConfirmHint: 'If the fingerprint does not match, reject the connection — there may be a man-in-the-middle attack.',
+    btnTrustAndConnect: 'Trust & Connect',
+    btnRejectConnection: 'Reject',
+    tlsDisabledWarning: '⚠️ TLS encryption is disabled. Keyboard/mouse data will be transmitted in plaintext.',
   },
 };
 

@@ -97,6 +97,11 @@ function initApp() {
         // 外观设置
         languageSelect: document.getElementById('language-select'),
         themeSelect: document.getElementById('theme-select'),
+        // 剪贴板共享
+        clipboardSync: document.getElementById('clipboard-sync'),
+        // TLS 加密
+        enableTls: document.getElementById('enable-tls'),
+        localTlsFingerprint: document.getElementById('local-tls-fingerprint'),
         // 版本号
         appVersion: document.getElementById('app-version'),
         settingsVersion: document.getElementById('settings-version'),
@@ -594,6 +599,74 @@ function closeSettings() {
     elements.settingsModal.classList.add('hidden');
 }
 
+// ─── TLS 指纹相关 ────────────────────────────────────────────────────────────
+
+/** 加载本机 TLS 证书指纹并显示在设置页 */
+async function loadLocalTlsFingerprint() {
+    if (!elements.localTlsFingerprint || !invoke) return;
+    try {
+        const fp = await invoke('get_local_tls_fingerprint');
+        // 只显示前 32 个字符（前 10 个字节），避免过长
+        elements.localTlsFingerprint.textContent = fp ? fp.substring(0, 47) + '...' : '-';
+        elements.localTlsFingerprint.title = fp || '';
+    } catch (e) {
+        elements.localTlsFingerprint.textContent = window.i18n.t('tlsFingerprintLoadFailed');
+    }
+}
+
+/** 复制本机 TLS 指纹到剪贴板 */
+async function copyTlsFingerprint() {
+    if (!invoke) return;
+    try {
+        const fp = await invoke('get_local_tls_fingerprint');
+        if (fp) {
+            await navigator.clipboard.writeText(fp);
+            showSuccess(window.i18n.t('tlsFingerprintCopied'));
+        }
+    } catch (e) {
+        showError(window.i18n.t('tlsFingerprintLoadFailed'));
+    }
+}
+
+/**
+ * 显示 TLS 指纹确认对话框（首次连接时调用）
+ * @param {string} address - 对端地址 IP:Port
+ * @param {string} fingerprint - 对端证书指纹
+ * @returns {Promise<boolean>} 用户是否信任
+ */
+function showTlsConfirmDialog(address, fingerprint) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('tls-confirm-modal');
+        const fpEl = document.getElementById('tls-confirm-fingerprint');
+        const addrEl = document.getElementById('tls-confirm-address');
+        const trustBtn = document.getElementById('tls-trust-btn');
+        const rejectBtn = document.getElementById('tls-reject-btn');
+        if (!modal || !fpEl) { resolve(false); return; }
+
+        // 只显示前 47 个字符，完整指纹放 title
+        fpEl.textContent = fingerprint ? fingerprint.substring(0, 47) + '...' : fingerprint;
+        fpEl.title = fingerprint || '';
+        if (addrEl) addrEl.textContent = `对端地址：${address}`;
+
+        modal.classList.remove('hidden');
+
+        const cleanup = () => modal.classList.add('hidden');
+
+        trustBtn.onclick = async () => {
+            cleanup();
+            if (invoke) {
+                try {
+                    await invoke('trust_peer_certificate', { address, fingerprint });
+                } catch (e) {
+                    console.warn('保存信任记录失败:', e);
+                }
+            }
+            resolve(true);
+        };
+        rejectBtn.onclick = () => { cleanup(); resolve(false); };
+    });
+}
+
 // 将设置加载到 UI
 const DEFAULT_HOTKEY = 'Ctrl+Alt+S';
 function loadSettingsToUI() {
@@ -605,6 +678,14 @@ function loadSettingsToUI() {
     elements.autoReconnect.checked = appState.settings.autoReconnect;
     elements.autoStart.checked = appState.settings.autoStart;
     elements.startMinimized.checked = appState.settings.startMinimized;
+    // 剪贴板共享
+    if (elements.clipboardSync) {
+        elements.clipboardSync.checked = appState.settings.clipboardSync !== false;
+    }
+    // TLS 加密
+    if (elements.enableTls) {
+        elements.enableTls.checked = appState.settings.enableTls !== false;
+    }
     // 外观设置
     if (elements.languageSelect) {
         elements.languageSelect.value = appState.settings.language || 'zh';
@@ -612,16 +693,25 @@ function loadSettingsToUI() {
     if (elements.themeSelect) {
         elements.themeSelect.value = appState.settings.theme || 'auto';
     }
+    // 加载本机 TLS 指纹
+    loadLocalTlsFingerprint();
 }
 
 // 保存设置
 async function saveSettings() {
+    const enableTls = elements.enableTls ? elements.enableTls.checked : true;
+    // TLS 关闭时显示安全警告
+    if (!enableTls) {
+        showError(window.i18n.t('tlsDisabledWarning'));
+    }
     appState.settings = {
         hotkey: elements.hotkeyInput.dataset.hotkey || '',
         preferConnectionType: elements.preferConnectionType.value,
         autoReconnect: elements.autoReconnect.checked,
         autoStart: elements.autoStart.checked,
         startMinimized: elements.startMinimized.checked,
+        clipboardSync: elements.clipboardSync ? elements.clipboardSync.checked : true,
+        enableTls,
         language: elements.languageSelect ? elements.languageSelect.value : (appState.settings.language || 'zh'),
         theme: elements.themeSelect ? elements.themeSelect.value : (appState.settings.theme || 'auto'),
     };
