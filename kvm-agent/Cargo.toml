@@ -1,10 +1,13 @@
 [package]
 name = "kvm-agent"
 version = "0.2.0"
-description = "KVM Agent - Mac 端 KVM 程序（支持主控端/被控端角色切换）"
+description = "KVM Agent - 对等 KVM 程序（支持双向连接、心跳保活、自动重连）"
 authors = ["KVM Share Team"]
 license = "MIT"
 edition = "2021"
+
+# 独立于根 workspace
+[workspace]
 
 [[bin]]
 name = "kvm-agent"
@@ -12,8 +15,16 @@ path = "src/main.rs"
 
 [dependencies]
 
+# macOS / Linux TCP Keep-Alive 需要 libc
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+libc = "0.2"
+
 # macOS 特定依赖（仅在 macOS 上编译）
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"
 core-foundation = "0.9"
 objc = "0.2"
+
+# Windows 特定依赖
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Networking_WinSock"] }

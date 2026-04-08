@@ -33,7 +33,7 @@ mod control;
 mod integration_tests;
 
 use connection_manager::{discover_devices, connect_to_device, disconnect_devices, get_connection_status};
-use connection::manager::{connect_to_mac, disconnect_from_mac, get_win_connection_status, get_default_ips};
+use connection::manager::{connect_to_mac, disconnect_from_mac, reconnect_to_peer, get_win_connection_status, get_default_ips};
 use control::edge::{get_edge_config, set_edge_config};
 use control::hotkey::{get_hotkey_config, check_hotkey_available};
 use network::{discover_network_devices, connect_network_device};
@@ -163,6 +163,7 @@ fn main() {
             // 连接模块（新）
             connect_to_mac,
             disconnect_from_mac,
+            reconnect_to_peer,
             get_win_connection_status,
             get_default_ips,
             // 控制模块（新）
@@ -177,13 +178,17 @@ fn main() {
             // 启动时清理遗留进程
             let _ = platform::kill_legacy_process();
 
-            // Windows 端默认为主控端，通知前端初始角色
+            // 通知前端初始连接状态
             let app_handle = app.handle();
-            let _ = app_handle.emit_all("role-changed", serde_json::json!({
-                "role": "Client",
-                "display": "主控端"
+            let _ = app_handle.emit_all("connection-status", serde_json::json!({
+                "event_type": "disconnected",
+                "connected": false,
+                "peer_ip": null,
+                "message": "未连接",
+                "attempt": null,
+                "guide": null
             }));
-            log::info!("Windows 端启动，默认角色：主控端");
+            log::info!("KVM Share 启动，等待连接");
 
             // 启动被控端 UDP 广播监听（所有设备启动时都监听，主控端扫描时能发现）
             platform::start_udp_discovery_listener();

@@ -1,13 +1,11 @@
 /// 快捷键控制子模块（Mac 端）
 ///
-/// 监听全局快捷键，触发角色切换或其他控制操作。
+/// 监听全局快捷键，触发连接控制操作。
 /// macOS 使用 CGEventTap 实现全局快捷键监听。
 
 /// 快捷键动作
 #[derive(Debug, Clone, PartialEq)]
 pub enum HotkeyAction {
-    /// 切换主控/被控角色
-    ToggleRole,
     /// 断开当前连接
     Disconnect,
     /// 自定义动作（字符串标识）
@@ -17,7 +15,7 @@ pub enum HotkeyAction {
 /// 快捷键配置
 #[derive(Debug, Clone)]
 pub struct HotkeyConfig {
-    /// 快捷键描述（如 "Ctrl+Alt+K"）
+    /// 快捷键描述（如 "Ctrl+Alt+D"）
     pub shortcut: String,
     /// 触发的动作
     pub action: HotkeyAction,
@@ -44,11 +42,11 @@ impl HotkeyController {
         self.configs.push(config);
     }
 
-    /// 注册默认快捷键（Ctrl+Alt+K 切换角色）
+    /// 注册默认快捷键（Ctrl+Alt+D 断开连接）
     pub fn register_defaults(&mut self) {
         self.register(HotkeyConfig {
-            shortcut: "Ctrl+Alt+K".to_string(),
-            action: HotkeyAction::ToggleRole,
+            shortcut: "Ctrl+Alt+D".to_string(),
+            action: HotkeyAction::Disconnect,
         });
     }
 
@@ -80,7 +78,7 @@ mod tests {
         ctrl.register_defaults();
         assert_eq!(ctrl.registered().len(), 1);
 
-        ctrl.trigger(HotkeyAction::ToggleRole);
-        assert_eq!(*triggered.lock().unwrap(), Some(HotkeyAction::ToggleRole));
+        ctrl.trigger(HotkeyAction::Disconnect);
+        assert_eq!(*triggered.lock().unwrap(), Some(HotkeyAction::Disconnect));
     }
 }

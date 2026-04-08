@@ -1,27 +1,27 @@
 /// Mac 端系统托盘（菜单栏图标）
 ///
-/// 托盘直接驱动新的 ConnectionManager，支持：
-/// - 命令行交互（角色切换、状态查询）
+/// 托盘直接驱动 ConnectionManager，支持：
+/// - 命令行交互（连接/断开/重连/状态查询）
 /// - 定期状态打印
 /// - macOS 系统通知
 
 use std::sync::{Arc, Mutex};
-use crate::connection::{ConnectionManager, ConnectionRole};
+use crate::connection::ConnectionManager;
 use crate::control::{EdgeController, EdgeDirection, EdgeConfig};
 
 /// 启动托盘（阻塞，需在主线程调用）
 pub fn run_tray(
     conn_mgr: Arc<ConnectionManager>,
     edge_ctrl: Arc<Mutex<EdgeController>>,
-    windows_ip: &'static str,
+    peer_ip: &'static str,
 ) {
     #[cfg(target_os = "macos")]
-    run_tray_macos(conn_mgr, edge_ctrl, windows_ip);
+    run_tray_macos(conn_mgr, edge_ctrl, peer_ip);
 
     #[cfg(not(target_os = "macos"))]
     {
         println!("[Tray] 当前平台不支持系统托盘，以命令行模式运行");
-        run_tray_cli(conn_mgr, edge_ctrl, windows_ip);
+        run_tray_cli(conn_mgr, edge_ctrl, peer_ip);
     }
 }
 
@@ -30,7 +30,7 @@ pub fn run_tray(
 fn run_tray_macos(
     conn_mgr: Arc<ConnectionManager>,
     edge_ctrl: Arc<Mutex<EdgeController>>,
-    windows_ip: &'static str,
+    peer_ip: &'static str,
 ) {
     use std::process::Command;
 
@@ -39,14 +39,14 @@ fn run_tray_macos(
 
     let _ = Command::new("osascript")
         .arg("-e")
-        .arg(r#"display notification "KVM Agent 已启动，默认被控端，等待连接..." with title "KVM Agent""#)
+        .arg(r#"display notification "KVM Agent 已启动，监听端口 8889..." with title "KVM Agent""#)
         .spawn();
 
     // 命令行交互线程
     let cm = Arc::clone(&conn_mgr);
     let ec = Arc::clone(&edge_ctrl);
     std::thread::spawn(move || {
-        run_cli_loop(cm, ec, windows_ip);
+        run_cli_loop(cm, ec, peer_ip);
     });
 
     // 主循环：定期打印状态
@@ -58,13 +58,13 @@ fn run_tray_macos(
 fn run_tray_cli(
     conn_mgr: Arc<ConnectionManager>,
     edge_ctrl: Arc<Mutex<EdgeController>>,
-    windows_ip: &'static str,
+    peer_ip: &'static str,
 ) {
     print_help();
     let cm = Arc::clone(&conn_mgr);
     let ec = Arc::clone(&edge_ctrl);
     std::thread::spawn(move || {
-        run_cli_loop(cm, ec, windows_ip);
+        run_cli_loop(cm, ec, peer_ip);
     });
     run_status_loop(conn_mgr);
 }
@@ -73,7 +73,7 @@ fn run_tray_cli(
 fn run_cli_loop(
     conn_mgr: Arc<ConnectionManager>,
     edge_ctrl: Arc<Mutex<EdgeController>>,
-    windows_ip: &'static str,
+    default_peer_ip: &'static str,
 ) {
     use std::io::BufRead;
     let stdin = std::io::stdin();
@@ -81,7 +81,7 @@ fn run_cli_loop(
         match line {
             Ok(input) => {
                 let input = input.trim().to_string();
-                handle_command(&input, &conn_mgr, &edge_ctrl, windows_ip);
+                handle_command(&input, &conn_mgr, &edge_ctrl, default_peer_ip);
             }
             Err(_) => break,
         }
@@ -93,36 +93,33 @@ fn handle_command(
     input: &str,
     conn_mgr: &Arc<ConnectionManager>,
     edge_ctrl: &Arc<Mutex<EdgeController>>,
-    windows_ip: &'static str,
+    default_peer_ip: &'static str,
 ) {
     if input.starts_with("c ") {
-        // c <IP> - 切换为主控端并连接指定 IP
+        // c <IP> - 连接指定 IP
         let ip = input[2..].trim().to_string();
-        println!("[Tray] 切换为主控端，连接: {}", ip);
-        conn_mgr.switch_to_controller(Some(ip));
+        println!("[Tray] 发起连接: {}", ip);
+        conn_mgr.connect(Some(ip));
 
     } else if input == "c" {
-        // c - 切换为主控端，使用默认 Windows IP
-        println!("[Tray] 切换为主控端，连接默认 Windows IP: {}", windows_ip);
-        conn_mgr.switch_to_controller(Some(windows_ip.to_string()));
+        // c - 连接默认对端 IP
+        println!("[Tray] 发起连接（默认 IP: {}）", default_peer_ip);
+        conn_mgr.connect(Some(default_peer_ip.to_string()));
 
-    } else if input == "s" {
-        // s - 切换为被控端
-        println!("[Tray] 切换为被控端");
-        conn_mgr.switch_to_controlled();
+    } else if input == "l" || input == "listen" {
+        // l - 启动监听模式
+        println!("[Tray] 启动监听模式，等待对端连接...");
+        conn_mgr.start_listening();
 
-    } else if input == "toggle" || input == "t" {
-        // toggle - 切换角色
-        match conn_mgr.role() {
-            ConnectionRole::Controlled => {
-                println!("[Tray] 切换为主控端，连接: {}", windows_ip);
-                conn_mgr.switch_to_controller(Some(windows_ip.to_string()));
-            }
-            ConnectionRole::Controller => {
-                println!("[Tray] 切换为被控端");
-                conn_mgr.switch_to_controlled();
-            }
-        }
+    } else if input == "d" || input == "disconnect" {
+        // d - 断开连接
+        println!("[Tray] 手动断开连接");
+        conn_mgr.disconnect();
+
+    } else if input == "r" || input == "reconnect" {
+        // r - 重新连接
+        println!("[Tray] 手动重新连接（IP: {}）", conn_mgr.peer_ip());
+        conn_mgr.reconnect();
 
     } else if input == "status" {
         // status - 显示当前状态
@@ -162,63 +159,37 @@ fn print_help() {
     println!("────────────────────────────────────────");
     println!("  KVM Agent 命令行控制");
     println!("────────────────────────────────────────");
-    println!("  c [IP]          切换为主控端（可选指定 IP）");
-    println!("  s               切换为被控端");
-    println!("  t / toggle      切换角色");
+    println!("  c [IP]          连接对端（可选指定 IP）");
+    println!("  l / listen      启动监听模式（等待对端连接）");
+    println!("  d / disconnect  断开连接");
+    println!("  r / reconnect   重新连接");
     println!("  status          显示当前状态");
     println!("  edge <方向>     设置触发边缘（left/right/top/bottom）");
     println!("  help / ?        显示帮助");
-    println!("────────────────────────────────────────");
-    println!("  快捷键: Ctrl+Alt+K 切换主控/被控角色");
     println!("────────────────────────────────────────");
 }
 
 /// 打印当前状态
 fn print_status(conn_mgr: &Arc<ConnectionManager>) {
-    let role = conn_mgr.role();
+    let connected = conn_mgr.is_connected();
     let peer_ip = conn_mgr.peer_ip();
-    let role_str = match role {
-        ConnectionRole::Controlled => "被控端（等待 Windows 连接）",
-        ConnectionRole::Controller => "主控端（控制 Windows）",
-    };
-    println!("[状态] 角色: {}", role_str);
-    println!("[状态] 对端 IP: {}", peer_ip);
+    if connected {
+        println!("[状态] 已连接，对端 IP: {}", peer_ip);
+    } else {
+        println!("[状态] 未连接，上次对端 IP: {}", peer_ip);
+    }
 }
 
 /// 状态打印主循环
 fn run_status_loop(conn_mgr: Arc<ConnectionManager>) {
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(10));
-        let role = conn_mgr.role();
-        let role_str = match role {
-            ConnectionRole::Controlled => "被控端",
-            ConnectionRole::Controller => "主控端",
-        };
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let connected = conn_mgr.is_connected();
         let peer_ip = conn_mgr.peer_ip();
-        println!("[Tray] [{}] 对端: {}", role_str, peer_ip);
-    }
-}
-
-// ── 兼容旧接口（供 main.rs 中旧代码过渡使用）──────────────────────────────
-
-/// 托盘控制器（旧接口，保留兼容性）
-pub struct TrayController {
-    state: Arc<Mutex<crate::server::ConnectionState>>,
-    role_manager: Arc<crate::role_manager::RoleManager>,
-}
-
-impl TrayController {
-    pub fn new(
-        state: Arc<Mutex<crate::server::ConnectionState>>,
-        role_manager: Arc<crate::role_manager::RoleManager>,
-    ) -> Self {
-        Self { state, role_manager }
-    }
-
-    pub fn run(&self) {
-        println!("[Tray] 旧接口 TrayController::run() 已废弃，请使用 run_tray()");
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
+        if connected {
+            println!("[Tray] 已连接，对端: {}", peer_ip);
+        } else {
+            println!("[Tray] 未连接，上次对端: {}", peer_ip);
         }
     }
 }

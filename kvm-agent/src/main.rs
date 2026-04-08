@@ -3,27 +3,27 @@ mod discovery;
 mod input_executor;
 mod tray;
 
-// 新模块结构
+// 连接模块
 mod connection;
 mod control;
 
-// 保留旧模块（server.rs 供 tray.rs 的 ConnectionState 类型使用）
+// 保留旧模块（兼容性）
 mod server;
 mod role_manager;
 
 use std::sync::Arc;
-use connection::{ConnectionManager, ConnectionEvent, ConnectionRole};
+use connection::{ConnectionManager, ConnectionEvent};
 use control::{EdgeController, EdgeConfig, EdgeDirection, HotkeyController, HotkeyAction};
 
-/// Mac 端自身 IP
-const MAC_DEFAULT_IP: &str = "30.19.140.39";
-/// Windows 端默认 IP（Mac 端连接的目标）
-const WINDOWS_DEFAULT_IP: &str = "30.19.24.43";
+/// 对端默认 IP
+const DEFAULT_PEER_IP: &str = "30.19.24.43";
+/// 本机 IP（仅用于日志显示）
+const LOCAL_IP: &str = "30.19.140.39";
 
 fn main() {
     println!("========================================");
-    println!("  KVM Agent v0.2.0 - Mac 端 KVM 程序");
-    println!("  Mac IP: {}  Windows IP: {}", MAC_DEFAULT_IP, WINDOWS_DEFAULT_IP);
+    println!("  KVM Agent v0.3.0 - 对等 KVM 程序");
+    println!("  本机 IP: {}  对端 IP: {}", LOCAL_IP, DEFAULT_PEER_IP);
     println!("========================================");
 
     // 检测辅助功能权限
@@ -37,77 +37,65 @@ fn main() {
     let os_version = discovery::get_os_version();
     println!("[主程序] 主机名: {}，系统: {}", hostname, os_version);
 
-    // ── 创建连接管理器（Mac 端默认被控端）──────────────────────────────
+    // ── 创建连接管理器 ────────────────────────────────────────────────────
     let conn_mgr = Arc::new(ConnectionManager::new(|event| {
         match event {
-            ConnectionEvent::RoleChanged { role } => {
-                let role_name = match role {
-                    ConnectionRole::Controlled => "被控端",
-                    ConnectionRole::Controller => "主控端",
-                };
-                println!("[连接] 角色切换为: {}", role_name);
-                tray::send_notification("KVM Agent", &format!("已切换为{}", role_name));
-            }
             ConnectionEvent::Connected { peer_ip } => {
                 println!("[连接] 已连接到: {}", peer_ip);
                 tray::send_notification("KVM Agent", &format!("已连接到 {}", peer_ip));
             }
             ConnectionEvent::Disconnected => {
-                println!("[连接] 已断开连接");
+                println!("[连接] 连接已断开");
+                tray::send_notification("KVM Agent", "连接已断开，正在自动重连...");
             }
             ConnectionEvent::Error { error, guide } => {
                 eprintln!("[连接] 错误: {}", error);
-                eprintln!("[连接] 解决方案:");
                 for step in &guide {
                     eprintln!("  {}", step);
                 }
             }
-            ConnectionEvent::Reconnecting { attempt, max_attempts, peer_ip } => {
-                println!("[连接] 重连中（{}/{}）→ {}", attempt, max_attempts, peer_ip);
+            ConnectionEvent::Reconnecting { attempt, peer_ip } => {
+                println!("[连接] 重连中（第 {} 次）→ {}", attempt, peer_ip);
+                if attempt == 11 {
+                    tray::send_notification("KVM Agent", "重连失败，仍在后台尝试...");
+                }
+            }
+            ConnectionEvent::ReconnectSuccess { peer_ip } => {
+                println!("[连接] 重连成功，已连接到: {}", peer_ip);
+                tray::send_notification("KVM Agent", &format!("重连成功，已连接到 {}", peer_ip));
             }
             ConnectionEvent::Listening { port } => {
-                println!("[连接] 被控端监听端口 {}", port);
+                println!("[连接] 监听端口 {}", port);
             }
         }
     }));
 
-    // ── 创建屏幕边缘控制器（支持多显示器）──────────────────────────────
-    let mut edge_ctrl = EdgeController::new(1440, 900); // Mac 默认分辨率，运行时会更新
+    // ── 创建屏幕边缘控制器 ────────────────────────────────────────────────
+    let mut edge_ctrl = EdgeController::new(1440, 900);
     edge_ctrl.set_config(EdgeConfig {
-        trigger_edges: vec![EdgeDirection::Right], // 默认右边缘切换到 Windows
+        trigger_edges: vec![EdgeDirection::Right],
         threshold: 1,
         debounce_ms: 50,
     });
     let edge_ctrl = Arc::new(std::sync::Mutex::new(edge_ctrl));
 
-    // ── 创建快捷键控制器 ──────────────────────────────────────────────
+    // ── 创建快捷键控制器 ──────────────────────────────────────────────────
     let conn_mgr_hk = Arc::clone(&conn_mgr);
     let mut hotkey_ctrl = HotkeyController::new(move |action| {
         match action {
-            HotkeyAction::ToggleRole => {
-                let current = conn_mgr_hk.role();
-                match current {
-                    ConnectionRole::Controlled => {
-                        println!("[快捷键] 切换为主控端，连接 {}", WINDOWS_DEFAULT_IP);
-                        conn_mgr_hk.switch_to_controller(Some(WINDOWS_DEFAULT_IP.to_string()));
-                    }
-                    ConnectionRole::Controller => {
-                        println!("[快捷键] 切换为被控端");
-                        conn_mgr_hk.switch_to_controlled();
-                    }
-                }
-            }
             HotkeyAction::Disconnect => {
-                conn_mgr_hk.stop();
+                println!("[快捷键] 断开连接");
+                conn_mgr_hk.disconnect();
             }
             HotkeyAction::Custom(name) => {
                 println!("[快捷键] 自定义动作: {}", name);
             }
+            _ => {}
         }
     });
     hotkey_ctrl.register_defaults();
 
-    // ── 启动 UDP 发现监听线程 ──────────────────────────────────────────
+    // ── 启动 UDP 发现监听线程 ──────────────────────────────────────────────
     {
         let hn = hostname.clone();
         let os = os_version.clone();
@@ -118,29 +106,19 @@ fn main() {
         });
     }
 
-    // ── 启动鼠标边缘检测线程（主控端模式下轮询鼠标位置）──────────────
-    {
-        let edge = Arc::clone(&edge_ctrl);
-        let conn = Arc::clone(&conn_mgr);
-        std::thread::spawn(move || {
-            run_edge_detection_loop(edge, conn);
-        });
-    }
+    // ── 默认启动监听模式 ──────────────────────────────────────────────────
+    conn_mgr.start_listening();
+    println!("[主程序] KVM Agent 已启动，监听端口 8889，等待对端连接");
+    println!("[主程序] 对端默认 IP: {}，输入 'c' 主动发起连接", DEFAULT_PEER_IP);
 
-    // ── 默认启动被控端模式 ────────────────────────────────────────────
-    conn_mgr.switch_to_controlled();
-    println!("[主程序] Mac 端已启动，默认角色：被控端，监听端口 8889");
-    println!("[主程序] Windows 端默认 IP: {}，Mac 端 IP: {}", WINDOWS_DEFAULT_IP, MAC_DEFAULT_IP);
-    println!("[主程序] 快捷键 Ctrl+Alt+K 切换主控/被控角色");
-
-    // ── 主线程运行托盘（macOS 要求 UI 在主线程）──────────────────────
-    tray::run_tray(conn_mgr, edge_ctrl, WINDOWS_DEFAULT_IP);
+    // ── 主线程运行托盘（macOS 要求 UI 在主线程）──────────────────────────
+    tray::run_tray(conn_mgr, edge_ctrl, DEFAULT_PEER_IP);
 }
 
 /// 鼠标边缘检测循环（在独立线程中运行）
 ///
-/// 仅在主控端模式下检测鼠标位置，到达边缘时切换回被控端。
-/// 被控端模式下不检测（不需要捕获鼠标）。
+/// 仅在已连接状态下检测鼠标位置，到达边缘时断开连接（控制权交还本机）。
+#[allow(dead_code)]
 fn run_edge_detection_loop(
     edge_ctrl: Arc<std::sync::Mutex<EdgeController>>,
     conn_mgr: Arc<ConnectionManager>,
@@ -150,8 +128,8 @@ fn run_edge_detection_loop(
     loop {
         std::thread::sleep(Duration::from_millis(8)); // ~120Hz 轮询
 
-        // 仅主控端模式下检测边缘
-        if conn_mgr.role() != ConnectionRole::Controller {
+        // 仅已连接状态下检测边缘
+        if !conn_mgr.is_connected() {
             continue;
         }
 
@@ -167,9 +145,9 @@ fn run_edge_detection_loop(
                 "[边缘] 触发切换：方向={:?}，位置比例={}，显示器={}",
                 direction, pos_ratio, monitor_id
             );
-            // 到达边缘 → 切换回被控端（控制权交还给本机）
-            conn_mgr.switch_to_controlled();
-            tray::send_notification("KVM Agent", "已切换回被控端（鼠标回到 Mac）");
+            // 到达边缘 → 断开连接（控制权交还给本机）
+            conn_mgr.disconnect();
+            tray::send_notification("KVM Agent", "鼠标回到本机边缘，已断开连接");
         }
     }
 }

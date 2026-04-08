@@ -106,6 +106,12 @@ function initApp() {
         // 版本号
         appVersion: document.getElementById('app-version'),
         settingsVersion: document.getElementById('settings-version'),
+        // 重连相关
+        reconnectBtn: document.getElementById('reconnect-btn'),
+        reconnectStatusRow: document.getElementById('reconnect-status-row'),
+        reconnectStatusText: document.getElementById('reconnect-status-text'),
+        reconnectToast: document.getElementById('reconnect-toast'),
+        reconnectToastMessage: document.getElementById('reconnect-toast-message'),
     };
 
     setupEventListeners();
@@ -147,6 +153,9 @@ function prefillDefaultIp() {
 // 设置事件监听器
 function setupEventListeners() {
     elements.disconnectBtn.addEventListener('click', handleDisconnect);
+    if (elements.reconnectBtn) {
+        elements.reconnectBtn.addEventListener('click', handleReconnect);
+    }
     elements.settingsBtn.addEventListener('click', openSettings);
     elements.scanBtn.addEventListener('click', handleScan);
     elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
@@ -244,26 +253,81 @@ function setupEventListeners() {
         // 监听连接状态事件（后端主动通知）
         window.__TAURI__.event.listen('connection-status', (event) => {
             const payload = event.payload || {};
+            const eventType = payload.event_type || '';
             const connected = payload.connected === true;
             const peerIp = payload.peer_ip || null;
             const message = payload.message || '';
+            const attempt = payload.attempt || null;
 
-            if (connected) {
+            if (eventType === 'connected') {
+                // 连接成功
                 appState.connected = true;
                 appState.connectionType = 'TCP';
                 setConnectionStatus('connected');
+                hideReconnectStatus();
                 if (peerIp && elements.connectedDevice) {
                     elements.connectedDevice.textContent = peerIp;
                 }
-                if (message) showSuccess(message);
-            } else {
+                showSuccess(message || `已连接到 ${peerIp}`);
+                updateConnectionButtons(true);
+
+            } else if (eventType === 'reconnect_success') {
+                // 重连成功
+                appState.connected = true;
+                appState.connectionType = 'TCP';
+                setConnectionStatus('connected');
+                hideReconnectStatus();
+                if (peerIp && elements.connectedDevice) {
+                    elements.connectedDevice.textContent = peerIp;
+                }
+                showSuccess(message || '重连成功');
+                updateConnectionButtons(true);
+
+            } else if (eventType === 'disconnected') {
+                // 连接断开
                 appState.connected = false;
                 appState.connectionType = null;
                 setConnectionStatus('disconnected');
+                hideReconnectStatus();
                 if (elements.connectedDevice) {
                     elements.connectedDevice.textContent = '-';
                 }
-                if (message) showError(`⚠️ ${message}`);
+                showReconnectToast(message || '连接已断开');
+                updateConnectionButtons(false);
+
+            } else if (eventType === 'reconnecting') {
+                // 重连中
+                appState.connected = false;
+                setConnectionStatus('connecting');
+                showReconnectStatus(message, attempt);
+                updateConnectionButtons(false);
+
+            } else if (eventType === 'error') {
+                // 连接错误（不影响重连循环）
+                if (!appState.connected) {
+                    showError(`⚠️ ${message}`);
+                }
+
+            } else {
+                // 兼容旧格式
+                if (connected) {
+                    appState.connected = true;
+                    appState.connectionType = 'TCP';
+                    setConnectionStatus('connected');
+                    if (peerIp && elements.connectedDevice) {
+                        elements.connectedDevice.textContent = peerIp;
+                    }
+                    if (message) showSuccess(message);
+                    updateConnectionButtons(true);
+                } else {
+                    appState.connected = false;
+                    appState.connectionType = null;
+                    setConnectionStatus('disconnected');
+                    if (elements.connectedDevice) {
+                        elements.connectedDevice.textContent = '-';
+                    }
+                    updateConnectionButtons(false);
+                }
             }
         }).catch(e => console.warn('连接状态事件监听注册失败:', e));
     }
@@ -293,7 +357,8 @@ async function handleDisconnect() {
     if (!invoke) { showError('Tauri 环境未就绪'); return; }
     const { t } = window.i18n;
     try {
-        // 断开 TCP 连接（包括握手建立的连接）
+        // 断开 TCP 连接（包括握手建立的连接），停止自动重连
+        await invoke('disconnect_from_mac').catch(() => {});
         await invoke('disconnect_tcp').catch(() => {});
         await invoke('disconnect_devices').catch(() => {});
         // 停止输入捕获（Windows 特有）
@@ -301,12 +366,73 @@ async function handleDisconnect() {
         appState.connected = false;
         appState.connectionType = null;
         setConnectionStatus('disconnected');
+        hideReconnectStatus();
         stopLatencyCheck();
         hidePermissionWarning();
-        showSuccess(t('msgDisconnectSuccess'));
+        showSuccess(t('msgDisconnectSuccess') || '已手动断开连接');
+        updateConnectionButtons(false);
     } catch (error) {
         showError('断开连接错误: ' + error);
     }
+}
+
+// 处理手动重新连接
+async function handleReconnect() {
+    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    try {
+        setConnectionStatus('connecting');
+        showReconnectStatus('正在连接...', null);
+        updateConnectionButtons(false);
+        await invoke('reconnect_to_peer').catch(() => {});
+    } catch (error) {
+        showError('重新连接失败: ' + error);
+    }
+}
+
+// 更新断开/重连按钮显示状态
+function updateConnectionButtons(connected) {
+    if (elements.disconnectBtn) {
+        elements.disconnectBtn.disabled = !connected;
+        elements.disconnectBtn.classList.toggle('hidden', !connected);
+    }
+    if (elements.reconnectBtn) {
+        elements.reconnectBtn.classList.toggle('hidden', connected);
+    }
+}
+
+// 显示重连状态（状态面板中）
+function showReconnectStatus(message, attempt) {
+    if (elements.reconnectStatusRow) {
+        elements.reconnectStatusRow.style.display = '';
+    }
+    if (elements.reconnectStatusText) {
+        elements.reconnectStatusText.textContent = message || '正在重连...';
+    }
+    // 重连超过 10 次时显示 Toast 提示
+    if (attempt && attempt === 11) {
+        showReconnectToast('重连失败，仍在后台尝试...');
+    }
+}
+
+// 隐藏重连状态
+function hideReconnectStatus() {
+    if (elements.reconnectStatusRow) {
+        elements.reconnectStatusRow.style.display = 'none';
+    }
+}
+
+// 显示重连 Toast 提示（自动消失）
+let reconnectToastTimer = null;
+function showReconnectToast(message) {
+    if (!elements.reconnectToast) return;
+    if (elements.reconnectToastMessage) {
+        elements.reconnectToastMessage.textContent = message;
+    }
+    elements.reconnectToast.classList.remove('hidden');
+    if (reconnectToastTimer) clearTimeout(reconnectToastTimer);
+    reconnectToastTimer = setTimeout(() => {
+        if (elements.reconnectToast) elements.reconnectToast.classList.add('hidden');
+    }, 4000);
 }
 
 // 连接到特定设备
@@ -1293,6 +1419,8 @@ function updateControlStateUI(state) {
 function updateUI() {
     setConnectionStatus('disconnected');
     updateControlStateUI('Idle');
+    // 初始化按钮状态：未连接时显示"重新连接"按钮
+    updateConnectionButtons(false);
 }
 
 // ─── 工具函数 ───

@@ -76,6 +76,11 @@
                 <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
                 <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">未连接</span>
             </div>
+            <!-- 重连进度提示（重连中时显示） -->
+            <div class="status-item" id="reconnect-status-row" style="display:none;">
+                <span class="status-label">重连进度:</span>
+                <span id="reconnect-status-text" class="status-reconnecting">正在重连...</span>
+            </div>
             <div class="status-item">
                 <span class="status-label" data-i18n="labelControlState">控制状态:</span>
                 <span id="control-state" class="control-state-idle" data-i18n="controlStateIdle">各自独立</span>
@@ -106,7 +111,10 @@
 
         <!-- 控制按钮 -->
         <div class="controls">
+            <!-- 已连接时显示断开按钮 -->
             <button id="disconnect-btn" class="btn btn-secondary" disabled data-i18n="btnDisconnect">断开连接</button>
+            <!-- 断开/重连中时显示重新连接按钮 -->
+            <button id="reconnect-btn" class="btn btn-primary hidden" data-i18n="btnReconnect">重新连接</button>
             <button id="start-sharing-btn" class="btn btn-success hidden" data-i18n="btnStartSharing">▶ 开始共享</button>
             <button id="settings-btn" class="btn btn-outline" data-i18n="btnSettings">⚙ 设置</button>
         </div>
@@ -164,6 +172,11 @@
         </div>
 
         </div><!-- /.scrollable-content -->
+
+        <!-- 重连 Toast 提示 -->
+        <div id="reconnect-toast" class="reconnect-toast hidden">
+            <span id="reconnect-toast-message"></span>
+        </div>
 
         <!-- 错误提示（非 alert） -->
         <div id="error-toast" class="error-toast hidden">

@@ -99,6 +99,17 @@ header p {
     font-weight: 600;
 }
 
+.status-reconnecting {
+    color: #f59e0b;
+    font-weight: 600;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .status-connecting {
     color: #f59e0b;
     font-weight: 600;
@@ -423,6 +434,22 @@ header p {
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     z-index: 1000;
     max-width: 400px;
+    animation: toast-in 0.3s ease;
+}
+
+.reconnect-toast {
+    position: fixed;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+    padding: 12px 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    max-width: 420px;
     animation: toast-in 0.3s ease;
 }
 
