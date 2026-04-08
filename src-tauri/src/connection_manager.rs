@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tauri::Manager;
 use crate::types::{DeviceInfo, ConnectionType, ConnectionResult};
 use crate::network;
 use crate::usb;
@@ -114,17 +115,36 @@ pub async fn discover_devices() -> Result<Vec<DeviceInfo>, String> {
 }
 
 #[tauri::command]
-/// Tauri命令：连接到设备
-pub async fn connect_to_device(device_id: String) -> Result<ConnectionResult, String> {
+/// Tauri命令：连接到设备（连接成功后发送 connection-status 事件）
+pub async fn connect_to_device(
+    device_id: String,
+    app_handle: tauri::AppHandle,
+) -> Result<ConnectionResult, String> {
     let mut manager = CONNECTION_MANAGER.lock().await;
-    manager.connect_to_device(&device_id).await
+    let result = manager.connect_to_device(&device_id).await?;
+    if result.success {
+        // 通知前端连接成功
+        let _ = app_handle.emit_all("connection-status", serde_json::json!({
+            "connected": true,
+            "peer_ip": device_id,
+            "message": format!("已连接到: {}", device_id)
+        }));
+    }
+    Ok(result)
 }
 
 #[tauri::command]
-/// Tauri命令：断开连接
-pub async fn disconnect_devices() -> Result<(), String> {
+/// Tauri命令：断开连接（发送 connection-status 断开事件）
+pub async fn disconnect_devices(app_handle: tauri::AppHandle) -> Result<(), String> {
     let mut manager = CONNECTION_MANAGER.lock().await;
-    manager.disconnect()
+    manager.disconnect()?;
+    // 通知前端已断开
+    let _ = app_handle.emit_all("connection-status", serde_json::json!({
+        "connected": false,
+        "peer_ip": null,
+        "message": "已断开连接，可重新连接"
+    }));
+    Ok(())
 }
 
 #[tauri::command]

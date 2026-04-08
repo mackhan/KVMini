@@ -913,41 +913,20 @@ header p {
     margin: 0;
 }
 
-/* 角色切换 */
-.role-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 12px;
+/* 对等控制状态 */
+.control-state-idle {
+    color: #6b7280;
     font-weight: 600;
-    margin-right: 8px;
 }
 
-.role-server {
-    background: #dbeafe;
-    color: #1d4ed8;
-    border: 1px solid #93c5fd;
+.control-state-local {
+    color: #2563eb;
+    font-weight: 600;
 }
 
-.role-client {
-    background: #dcfce7;
-    color: #15803d;
-    border: 1px solid #86efac;
-}
-
-.btn-role-switch {
-    padding: 2px 10px;
-    font-size: 12px;
-    background: #f3f4f6;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #374151;
-    transition: background 0.15s;
-}
-
-.btn-role-switch:hover {
-    background: #e5e7eb;
+.control-state-remote {
+    color: #d97706;
+    font-weight: 600;
 }
 
 /* 显示器布局配置 */
@@ -1123,20 +1102,169 @@ header p {
 .display-layout-preview {
     position: relative;
     width: 100%;
-    height: 120px;
+    min-height: 120px;
+    max-height: 200px;
     background: #f3f4f6;
     border: 1px solid #e5e7eb;
     border-radius: 8px;
     display: flex;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 0;
     overflow: hidden;
+    padding: 12px 8px;
+    box-sizing: border-box;
 }
 
+/* 显示器组容器 */
+.monitor-group {
+    position: relative;
+    flex-shrink: 0;
+    cursor: grab;
+    user-select: none;
+}
+
+.monitor-group:active {
+    cursor: grabbing;
+}
+
+/* 单个显示器方块（尺寸由 JS 动态设置） */
+.monitor-block {
+    position: absolute;
+    border-radius: 5px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    overflow: hidden;
+    transition: box-shadow 0.15s;
+    box-sizing: border-box;
+}
+
+.monitor-block:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+/* 本机主显示器 */
+.monitor-block.local-primary {
+    background: #3b82f6;
+    color: white;
+    border: 2px solid #2563eb;
+}
+
+/* 本机副显示器 */
+.monitor-block.local-secondary {
+    background: #93c5fd;
+    color: #1e3a5f;
+    border: 2px solid #60a5fa;
+}
+
+/* 远端已连接显示器 */
+.monitor-block.remote-connected {
+    background: #9ca3af;
+    color: #1f2937;
+    border: 2px solid #6b7280;
+}
+
+/* 远端占位（未连接） */
+.monitor-block.remote-placeholder {
+    background: #f3f4f6;
+    color: #9ca3af;
+    border: 2px dashed #d1d5db;
+}
+
+/* 显示器方块内的标签 */
+.monitor-block-label {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90%;
+    text-align: center;
+}
+
+/* 主显示器标记 */
+.monitor-primary-tag {
+    font-size: 9px;
+    font-weight: 600;
+    background: rgba(255,255,255,0.3);
+    border-radius: 3px;
+    padding: 1px 4px;
+    line-height: 1.2;
+}
+
+/* 显示器分辨率文字 */
+.monitor-block-size {
+    font-size: 9px;
+    opacity: 0.85;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90%;
+    text-align: center;
+}
+
+/* 分隔线（方向箭头） */
+.layout-divider {
+    flex-shrink: 0;
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    color: #9ca3af;
+    font-weight: bold;
+    z-index: 1;
+    user-select: none;
+}
+
+/* 布局方向：本机在远端左侧（默认） */
+.display-layout-preview.layout-left {
+    flex-direction: row;
+}
+
+/* 布局方向：本机在远端右侧 */
+.display-layout-preview.layout-right {
+    flex-direction: row-reverse;
+}
+
+/* 布局方向：本机在远端上方 */
+.display-layout-preview.layout-above {
+    flex-direction: column;
+    min-height: 160px;
+}
+
+/* 布局方向：本机在远端下方 */
+.display-layout-preview.layout-below {
+    flex-direction: column-reverse;
+    min-height: 160px;
+}
+
+/* 上下布局时分隔线改为水平 */
+.display-layout-preview.layout-above .layout-divider,
+.display-layout-preview.layout-below .layout-divider {
+    width: 100%;
+    height: 24px;
+    border-top: 1px dashed #d1d5db;
+    font-size: 14px;
+}
+
+/* 左右布局时分隔线为垂直 */
+.display-layout-preview.layout-left .layout-divider,
+.display-layout-preview.layout-right .layout-divider {
+    height: 100%;
+    border-left: 1px dashed #d1d5db;
+    width: 28px;
+}
+
+/* 兼容旧样式 */
 .display-block {
-    width: 80px;
-    height: 60px;
     border-radius: 6px;
     display: flex;
     flex-direction: column;
@@ -1149,24 +1277,6 @@ header p {
     box-shadow: 0 2px 6px rgba(0,0,0,0.12);
 }
 
-.display-block:active {
-    cursor: grabbing;
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-}
-
-.local-display {
-    background: #3b82f6;
-    color: white;
-    border: 2px solid #2563eb;
-}
-
-.remote-display {
-    background: #e5e7eb;
-    color: #374151;
-    border: 2px solid #d1d5db;
-}
-
 .display-label {
     font-size: 13px;
     font-weight: 600;
@@ -1175,21 +1285,6 @@ header p {
 .display-size {
     font-size: 10px;
     opacity: 0.8;
-}
-
-/* 布局方向：本机在远端上方 */
-.display-layout-preview.layout-above {
-    flex-direction: column;
-}
-
-/* 布局方向：本机在远端下方 */
-.display-layout-preview.layout-below {
-    flex-direction: column-reverse;
-}
-
-/* 布局方向：本机在远端右侧 */
-.display-layout-preview.layout-right {
-    flex-direction: row-reverse;
 }
 
 .display-layout-select-row {
@@ -1508,10 +1603,28 @@ header {
     color: var(--text-muted);
 }
 
-.remote-display {
-    background: var(--item-bg-hover);
-    border-color: var(--panel-border);
-    color: var(--text-secondary);
+/* 深色主题：多显示器布局预览 */
+.monitor-block.local-secondary {
+    background: #1d4ed8;
+    color: #bfdbfe;
+    border-color: #2563eb;
+}
+
+.monitor-block.remote-connected {
+    background: #374151;
+    color: #e5e7eb;
+    border-color: #4b5563;
+}
+
+.monitor-block.remote-placeholder {
+    background: #1f2937;
+    color: #6b7280;
+    border-color: #4b5563;
+}
+
+.layout-divider {
+    color: #4b5563;
+    border-color: #4b5563;
 }
 
 .accessibility-overlay-card {

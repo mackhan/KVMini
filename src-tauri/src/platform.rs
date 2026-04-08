@@ -1516,7 +1516,8 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
             let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
 
             // 检查 TLS 设置，决定是否包裹 TLS 流
-            let tls_enabled = get_settings().map(|s| s.enable_tls).unwrap_or(true);
+            // TLS 暂时禁用：mac 端尚未实现 TLS，强制使用明文连接
+            let tls_enabled = false;
             let boxed_stream: Box<dyn ReadWrite> = if tls_enabled {
                 // TLS 模式：包裹为 TLS 客户端流
                 let tls_data_dir = {
@@ -1563,8 +1564,8 @@ pub async fn connect_by_ip(ip: String, port: u16) -> ConnectByIpResult {
 
             // 读取当前角色，决定启动主控端还是被控端循环
             let current_role = {
-                // 尝试从 Tauri 状态读取角色，默认为被控端
-                crate::role_manager::AppRole::Server // 默认被控端，前端可通过 set_role 切换
+                // connect_by_ip 是 Windows 主动连接 mac，Windows 是主控端
+                crate::role_manager::AppRole::Client
             };
 
             // 根据角色启动对应的事件循环

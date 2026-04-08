@@ -91,8 +91,10 @@ function initApp() {
         errorMsg: document.getElementById('error-msg'),
         errorClose: document.getElementById('error-close'),
         hintPanel: document.getElementById('hint-panel'),
-        // 角色徽章
-        currentRole: document.getElementById('current-role'),
+        // 控制状态
+        controlState: document.getElementById('control-state'),
+        // 已连接设备
+        connectedDevice: document.getElementById('connected-device'),
         // 外观设置
         languageSelect: document.getElementById('language-select'),
         themeSelect: document.getElementById('theme-select'),
@@ -113,6 +115,7 @@ function initApp() {
     loadLocalIp();
     initAppearance();
     initVersion();
+    prefillDefaultIp();
 
     // Windows 特有：hint-panel 仅在 Windows 下显示
     if (elements.hintPanel) {
@@ -120,6 +123,25 @@ function initApp() {
             (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
         elements.hintPanel.style.display = isWindows ? '' : 'none';
     }
+}
+
+/**
+ * 根据当前平台预填充手动连接 IP 输入框的默认值
+ * - Windows 端：预填 Mac 端 IP（30.19.140.39）
+ * - Mac 端：预填 Windows 端 IP（30.19.24.43）
+ * 仅在输入框为空时填入，不覆盖用户已输入的内容
+ */
+function prefillDefaultIp() {
+    if (!elements.manualIpInput) return;
+    // 已有内容则不覆盖
+    if (elements.manualIpInput.value.trim()) return;
+
+    const isWindows = navigator.userAgent.includes('Windows') ||
+        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
+
+    // Windows 端连接 Mac，Mac 端连接 Windows
+    const defaultIp = isWindows ? '30.19.140.39' : '30.19.24.43';
+    elements.manualIpInput.value = defaultIp;
 }
 
 // 设置事件监听器
@@ -202,21 +224,48 @@ function setupEventListeners() {
             }
         }).catch(e => console.warn('TLS 指纹验证事件监听注册失败:', e));
 
-        // 监听全局快捷键触发事件，切换主控/被控角色
+        // 监听全局快捷键触发事件，手动切换控制权
         window.__TAURI__.event.listen('hotkey-triggered', async () => {
             try {
-                // 切换角色：主控端 ↔ 被控端
-                const currentRole = await invoke('get_current_role');
-                const newRole = currentRole === 'Client' ? 'Server' : 'Client';
-                await invoke('set_role', { role: newRole });
-                const { t } = window.i18n;
-                const msg = newRole === 'Client' ? t('msgSwitchedToClient') : t('msgSwitchedToServer');
-                showSuccess(msg);
+                await invoke('toggle_control');
                 updateUI();
             } catch (e) {
-                console.warn('快捷键触发角色切换失败:', e);
+                console.warn('快捷键触发控制权切换失败:', e);
             }
         }).catch(e => console.warn('快捷键事件监听注册失败:', e));
+
+        // 监听控制状态变化事件（后端主动通知）
+        window.__TAURI__.event.listen('control-state-changed', (event) => {
+            const payload = event.payload || {};
+            const state = payload.state || 'Idle';
+            updateControlStateUI(state);
+        }).catch(e => console.warn('控制状态事件监听注册失败:', e));
+
+        // 监听连接状态事件（后端主动通知）
+        window.__TAURI__.event.listen('connection-status', (event) => {
+            const payload = event.payload || {};
+            const connected = payload.connected === true;
+            const peerIp = payload.peer_ip || null;
+            const message = payload.message || '';
+
+            if (connected) {
+                appState.connected = true;
+                appState.connectionType = 'TCP';
+                setConnectionStatus('connected');
+                if (peerIp && elements.connectedDevice) {
+                    elements.connectedDevice.textContent = peerIp;
+                }
+                if (message) showSuccess(message);
+            } else {
+                appState.connected = false;
+                appState.connectionType = null;
+                setConnectionStatus('disconnected');
+                if (elements.connectedDevice) {
+                    elements.connectedDevice.textContent = '-';
+                }
+                if (message) showError(`⚠️ ${message}`);
+            }
+        }).catch(e => console.warn('连接状态事件监听注册失败:', e));
     }
 }
 
@@ -882,10 +931,16 @@ function applyI18n() {
         }
     }
 
-    // 更新角色徽章
-    if (elements.currentRole) {
-        const isClient = elements.currentRole.classList.contains('role-client');
-        elements.currentRole.textContent = isClient ? t('roleClient') : t('roleServer');
+    // 更新控制状态文本
+    if (elements.controlState) {
+        const cls = elements.controlState.className;
+        if (cls.includes('control-state-local')) {
+            elements.controlState.textContent = t('controlStateLocal');
+        } else if (cls.includes('control-state-remote')) {
+            elements.controlState.textContent = t('controlStateRemote');
+        } else {
+            elements.controlState.textContent = t('controlStateIdle');
+        }
     }
 
     // 更新设备列表空状态文本
@@ -1217,9 +1272,27 @@ function showSuccess(message) {
     }, 3000);
 }
 
+// 更新控制状态 UI
+function updateControlStateUI(state) {
+    const el = elements.controlState;
+    if (!el) return;
+    const { t } = window.i18n;
+    if (state === 'LocalControlling') {
+        el.textContent = t('controlStateLocal');
+        el.className = 'control-state-local';
+    } else if (state === 'RemoteControlling') {
+        el.textContent = t('controlStateRemote');
+        el.className = 'control-state-remote';
+    } else {
+        el.textContent = t('controlStateIdle');
+        el.className = 'control-state-idle';
+    }
+}
+
 // 更新UI状态
 function updateUI() {
     setConnectionStatus('disconnected');
+    updateControlStateUI('Idle');
 }
 
 // ─── 工具函数 ───
@@ -1270,18 +1343,167 @@ const LAYOUT_PREVIEW_CLASS = {
 };
 
 /**
+ * 布局方向到分隔线箭头的映射
+ */
+const LAYOUT_DIVIDER_ARROW = {
+    'LocalLeftOfRemote':  '→',
+    'LocalRightOfRemote': '←',
+    'LocalAboveRemote':   '↓',
+    'LocalBelowRemote':   '↑',
+};
+
+/**
+ * 核心函数：渲染多显示器布局预览
+ * @param {Array} localMonitors  - 本机显示器数组（来自 get_monitors）
+ * @param {Array|null} remoteMonitors - 远端显示器数组（未连接时为 null）
+ * @param {string} layout - 布局方向枚举值
+ */
+function renderMonitorLayout(localMonitors, remoteMonitors, layout) {
+    const localGroup = document.getElementById('local-monitor-group');
+    const remoteGroup = document.getElementById('remote-monitor-group');
+    const divider = document.getElementById('layout-divider');
+    if (!localGroup || !remoteGroup) return;
+
+    // 更新分隔线箭头
+    if (divider) {
+        divider.textContent = LAYOUT_DIVIDER_ARROW[layout] || '→';
+    }
+
+    // ── 计算本机显示器包围盒 ──
+    const localBBox = calcBoundingBox(localMonitors);
+
+    // ── 计算远端显示器包围盒（占位时用默认尺寸） ──
+    const hasRemote = remoteMonitors && remoteMonitors.length > 0;
+    const remoteBBoxRaw = hasRemote
+        ? calcBoundingBox(remoteMonitors)
+        : { minX: 0, minY: 0, totalW: 1920, totalH: 1080 };
+
+    // ── 确定预览容器可用尺寸 ──
+    const preview = document.getElementById('display-layout-preview');
+    const isVertical = layout === 'LocalAboveRemote' || layout === 'LocalBelowRemote';
+    const containerW = preview ? preview.clientWidth - 16 : 400;
+    const containerH = preview ? preview.clientHeight - 24 : 140;
+    const dividerSize = 28; // 分隔线占用的像素
+
+    // ── 计算统一缩放比例 ──
+    // 两组显示器并排，需要在容器内同时放下
+    const totalPhysicalW = isVertical
+        ? Math.max(localBBox.totalW, remoteBBoxRaw.totalW)
+        : localBBox.totalW + remoteBBoxRaw.totalW;
+    const totalPhysicalH = isVertical
+        ? localBBox.totalH + remoteBBoxRaw.totalH
+        : Math.max(localBBox.totalH, remoteBBoxRaw.totalH);
+
+    const availW = isVertical ? containerW : containerW - dividerSize;
+    const availH = isVertical ? containerH - dividerSize : containerH;
+
+    const scaleX = availW / totalPhysicalW;
+    const scaleY = availH / totalPhysicalH;
+    const scale = Math.min(scaleX, scaleY, 1); // 不放大，只缩小
+
+    // ── 渲染本机显示器组 ──
+    renderMonitorGroup(localGroup, localMonitors, localBBox, scale, true);
+
+    // ── 渲染远端显示器组 ──
+    if (hasRemote) {
+        renderMonitorGroup(remoteGroup, remoteMonitors, remoteBBoxRaw, scale, false);
+    } else {
+        // 远端占位方块
+        const placeholderW = Math.max(Math.round(remoteBBoxRaw.totalW * scale), 60);
+        const placeholderH = Math.max(Math.round(remoteBBoxRaw.totalH * scale), 50);
+        remoteGroup.style.width = placeholderW + 'px';
+        remoteGroup.style.height = placeholderH + 'px';
+        remoteGroup.innerHTML = `
+            <div class="monitor-block remote-placeholder"
+                 style="left:0;top:0;width:${placeholderW}px;height:${placeholderH}px;"
+                 title="远端设备（未连接）">
+                <span class="monitor-block-label">远端</span>
+            </div>
+        `;
+    }
+}
+
+/**
+ * 计算一组显示器的包围盒
+ * @param {Array} monitors
+ * @returns {{ minX, minY, totalW, totalH }}
+ */
+function calcBoundingBox(monitors) {
+    if (!monitors || monitors.length === 0) {
+        return { minX: 0, minY: 0, totalW: 1920, totalH: 1080 };
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const m of monitors) {
+        const ox = m.offset_x || 0;
+        const oy = m.offset_y || 0;
+        minX = Math.min(minX, ox);
+        minY = Math.min(minY, oy);
+        maxX = Math.max(maxX, ox + m.width);
+        maxY = Math.max(maxY, oy + m.height);
+    }
+    return { minX, minY, totalW: maxX - minX, totalH: maxY - minY };
+}
+
+/**
+ * 渲染一组显示器方块到指定容器
+ * @param {HTMLElement} groupEl - 容器元素
+ * @param {Array} monitors - 显示器数组
+ * @param {{ minX, minY, totalW, totalH }} bbox - 包围盒
+ * @param {number} scale - 缩放比例
+ * @param {boolean} isLocal - 是否为本机显示器
+ */
+function renderMonitorGroup(groupEl, monitors, bbox, scale, isLocal) {
+    const MIN_SIZE = 40;
+    const groupW = Math.max(Math.round(bbox.totalW * scale), MIN_SIZE);
+    const groupH = Math.max(Math.round(bbox.totalH * scale), MIN_SIZE);
+
+    groupEl.style.width = groupW + 'px';
+    groupEl.style.height = groupH + 'px';
+
+    groupEl.innerHTML = monitors.map((m) => {
+        const ox = (m.offset_x || 0) - bbox.minX;
+        const oy = (m.offset_y || 0) - bbox.minY;
+        const left = Math.round(ox * scale);
+        const top = Math.round(oy * scale);
+        const w = Math.max(Math.round(m.width * scale), MIN_SIZE);
+        const h = Math.max(Math.round(m.height * scale), MIN_SIZE);
+
+        const isPrimary = isLocal && m.is_primary;
+        const cssClass = isLocal
+            ? (isPrimary ? 'local-primary' : 'local-secondary')
+            : 'remote-connected';
+
+        const dpiPct = m.dpi_scale ? Math.round(m.dpi_scale * 100) : 100;
+        const tooltip = `${m.width}×${m.height} | DPI: ${dpiPct}% | 偏移: (${m.offset_x || 0}, ${m.offset_y || 0})`;
+
+        // 方块内容：尺寸足够时显示分辨率文字
+        const showLabel = w >= 50 && h >= 36;
+        const showSize = w >= 55 && h >= 48;
+
+        return `
+            <div class="monitor-block ${cssClass}"
+                 style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;"
+                 title="${tooltip}">
+                ${showLabel ? `<span class="monitor-block-label">${isLocal ? (isPrimary ? '本机' : '副屏') : '远端'}</span>` : ''}
+                ${isPrimary ? `<span class="monitor-primary-tag">主</span>` : ''}
+                ${showSize ? `<span class="monitor-block-size">${m.width}×${m.height}</span>` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+/**
  * 初始化显示器布局配置 UI
  */
 async function initDisplayLayout() {
     const select = document.getElementById('display-layout-select');
     const preview = document.getElementById('display-layout-preview');
     const hintEdge = document.getElementById('trigger-edge-text');
-    const localDisplay = document.getElementById('local-display');
-    const localSizeEl = document.getElementById('local-display-size');
+    const localGroup = document.getElementById('local-monitor-group');
 
     if (!select || !preview) return;
 
-    // 加载真实显示器信息
+    // 加载真实显示器信息（同时触发布局渲染）
     await refreshMonitors();
 
     // 加载已保存的布局配置
@@ -1292,13 +1514,10 @@ async function initDisplayLayout() {
                 select.value = config.layout;
                 updateLayoutPreview(config.layout, preview, hintEdge);
             }
-            // 显示本机屏幕尺寸（优先使用真实显示器数据）
-            if (config && config.local_screen_width && localSizeEl) {
-                localSizeEl.textContent = `${config.local_screen_width}×${config.local_screen_height}`;
-            }
         }
     } catch (e) {
         // 加载失败使用默认值
+        updateLayoutPreview('LocalLeftOfRemote', preview, hintEdge);
     }
 
     // 监听下拉框变化
@@ -1306,14 +1525,14 @@ async function initDisplayLayout() {
         updateLayoutPreview(select.value, preview, hintEdge);
     });
 
-    // 拖拽支持（本机显示器方块）
-    if (localDisplay) {
-        localDisplay.addEventListener('dragstart', (e) => {
-            e.dataTransfer.setData('text/plain', 'local-display');
+    // 拖拽支持（本机显示器组）
+    if (localGroup) {
+        localGroup.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', 'local-monitor-group');
             preview.classList.add('drag-over');
         });
 
-        localDisplay.addEventListener('dragend', () => {
+        localGroup.addEventListener('dragend', () => {
             preview.classList.remove('drag-over');
         });
     }
@@ -1362,12 +1581,11 @@ async function initDisplayLayout() {
 }
 
 /**
- * 刷新显示器列表（调用后端 get_monitors）
+ * 刷新显示器列表（调用后端 get_monitors），并触发布局预览重新渲染
  */
 async function refreshMonitors() {
     const monitorList = document.getElementById('monitor-list');
     const countBadge = document.getElementById('monitor-count-badge');
-    const localSizeEl = document.getElementById('local-display-size');
     const { t } = window.i18n;
 
     if (!monitorList) return;
@@ -1376,51 +1594,60 @@ async function refreshMonitors() {
         if (!invoke) return;
         const monitors = await invoke('get_monitors');
 
+        // 存储到全局变量，供 renderMonitorLayout 使用
+        window._localMonitors = monitors;
+
         // 更新显示器数量徽章
         if (countBadge) countBadge.textContent = monitors.length;
-
-        // 更新本机显示器预览尺寸（使用主显示器）
-        const primary = monitors.find(m => m.is_primary) || monitors[0];
-        if (primary && localSizeEl) {
-            localSizeEl.textContent = `${primary.width}×${primary.height}`;
-        }
 
         // 渲染显示器列表
         if (monitors.length === 0) {
             monitorList.innerHTML = `<div class="monitor-list-empty">-</div>`;
-            return;
-        }
-
-        monitorList.innerHTML = monitors.map((m, idx) => `
-            <div class="monitor-item ${m.is_primary ? 'monitor-primary' : ''}">
-                <div class="monitor-item-icon">🖥</div>
-                <div class="monitor-item-info">
-                    <div class="monitor-item-name">
-                        ${t('labelMonitorResolution')}: ${m.width}×${m.height}
-                        ${m.is_primary ? `<span class="monitor-primary-badge">${t('labelPrimaryMonitor')}</span>` : ''}
-                    </div>
-                    <div class="monitor-item-detail">
-                        ${t('labelMonitorDpi')}: ${(m.dpi_scale * 100).toFixed(0)}%
-                        &nbsp;|&nbsp;
-                        ${t('labelMonitorOffset')}: (${m.offset_x}, ${m.offset_y})
+        } else {
+            monitorList.innerHTML = monitors.map((m) => `
+                <div class="monitor-item ${m.is_primary ? 'monitor-primary' : ''}">
+                    <div class="monitor-item-icon">🖥</div>
+                    <div class="monitor-item-info">
+                        <div class="monitor-item-name">
+                            ${t('labelMonitorResolution')}: ${m.width}×${m.height}
+                            ${m.is_primary ? `<span class="monitor-primary-badge">${t('labelPrimaryMonitor')}</span>` : ''}
+                        </div>
+                        <div class="monitor-item-detail">
+                            ${t('labelMonitorDpi')}: ${(m.dpi_scale * 100).toFixed(0)}%
+                            &nbsp;|&nbsp;
+                            ${t('labelMonitorOffset')}: (${m.offset_x}, ${m.offset_y})
+                        </div>
                     </div>
                 </div>
-            </div>
-        `).join('');
+            `).join('');
 
-        // 多显示器时显示提示
-        if (monitors.length > 1) {
-            monitorList.innerHTML += `
-                <div class="monitor-multi-hint">
-                    <span>💡</span> ${t('hintMultiMonitor')}
-                </div>
-            `;
+            // 多显示器时显示提示
+            if (monitors.length > 1) {
+                monitorList.innerHTML += `
+                    <div class="monitor-multi-hint">
+                        <span>💡</span> ${t('hintMultiMonitor')}
+                    </div>
+                `;
+            }
         }
+
+        // 触发布局预览重新渲染
+        const select = document.getElementById('display-layout-select');
+        const currentLayout = select ? select.value : 'LocalLeftOfRemote';
+        renderMonitorLayout(monitors, window._remoteMonitors || null, currentLayout);
 
     } catch (e) {
         // 降级：使用 window.screen
         if (countBadge) countBadge.textContent = '1';
-        if (localSizeEl) localSizeEl.textContent = `${window.screen.width}×${window.screen.height}`;
+        const fallbackMonitors = [{
+            width: window.screen.width,
+            height: window.screen.height,
+            offset_x: 0,
+            offset_y: 0,
+            dpi_scale: window.devicePixelRatio || 1,
+            is_primary: true,
+        }];
+        window._localMonitors = fallbackMonitors;
         if (monitorList) monitorList.innerHTML = `
             <div class="monitor-item monitor-primary">
                 <div class="monitor-item-icon">🖥</div>
@@ -1435,18 +1662,21 @@ async function refreshMonitors() {
                 </div>
             </div>
         `;
+        // 降级渲染
+        const select = document.getElementById('display-layout-select');
+        const currentLayout = select ? select.value : 'LocalLeftOfRemote';
+        renderMonitorLayout(fallbackMonitors, null, currentLayout);
     }
 }
 
 /**
- * 更新布局预览和提示文字
+ * 更新布局预览：切换方向 CSS 类、更新提示文字、更新分隔线箭头、重新渲染方块
  */
 function updateLayoutPreview(layout, preview, hintEdge) {
     const { t } = window.i18n;
-    // 移除所有布局类
-    preview.classList.remove('layout-left', 'layout-right', 'layout-above', 'layout-below');
 
-    // 添加对应布局类
+    // 切换布局方向 CSS 类
+    preview.classList.remove('layout-left', 'layout-right', 'layout-above', 'layout-below');
     const cls = LAYOUT_PREVIEW_CLASS[layout];
     if (cls) preview.classList.add(cls);
 
@@ -1461,6 +1691,13 @@ function updateLayoutPreview(layout, preview, hintEdge) {
         const edgeKey = edgeKeyMap[layout] || 'edgeRight';
         hintEdge.textContent = t(edgeKey);
     }
+
+    // 重新渲染多显示器方块
+    const localMonitors = window._localMonitors || null;
+    const remoteMonitors = window._remoteMonitors || null;
+    if (localMonitors) {
+        renderMonitorLayout(localMonitors, remoteMonitors, layout);
+    }
 }
 
 /**
@@ -1470,10 +1707,16 @@ async function saveLayoutConfig() {
     const select = document.getElementById('display-layout-select');
     if (!select || !invoke) return;
 
+    // 使用主显示器的真实分辨率
+    const localMonitors = window._localMonitors;
+    const primary = localMonitors && localMonitors.find(m => m.is_primary) || (localMonitors && localMonitors[0]);
+    const screenW = primary ? primary.width : window.screen.width;
+    const screenH = primary ? primary.height : window.screen.height;
+
     const config = {
         layout: select.value,
-        local_screen_width: window.screen.width,
-        local_screen_height: window.screen.height,
+        local_screen_width: screenW,
+        local_screen_height: screenH,
     };
 
     try {
@@ -1487,7 +1730,6 @@ async function saveLayoutConfig() {
 document.addEventListener('DOMContentLoaded', () => {
     // 延迟初始化，等待 invoke 可用
     setTimeout(initDisplayLayout, 500);
-    setTimeout(initRoleSwitch, 600);
     setTimeout(checkAccessibilityPermission, 800);
 });
 
@@ -1639,76 +1881,3 @@ async function openAccessibilitySettings() {
 
 // 暴露全局函数
 window.openAccessibilitySettings = openAccessibilitySettings;
-
-// ─── 角色切换 ─────────────────────────────────────────────────────────────
-
-/**
- * 当前角色状态
- */
-let currentRole = 'Server'; // 'Server' | 'Client'
-
-/**
- * 初始化角色切换 UI
- */
-async function initRoleSwitch() {
-    const switchBtn = document.getElementById('switch-role-btn');
-    if (!switchBtn) return;
-
-    // 加载当前角色
-    try {
-        if (invoke) {
-            const role = await invoke('get_current_role');
-            currentRole = role;
-            updateRoleUI(role);
-        }
-    } catch (e) {
-        // 使用默认值
-    }
-
-    // 监听切换按钮
-    switchBtn.addEventListener('click', async () => {
-        const newRole = currentRole === 'Server' ? 'Client' : 'Server';
-        await switchRole(newRole);
-    });
-}
-
-/**
- * 切换角色
- */
-async function switchRole(newRole) {
-    if (!invoke) return;
-    const { t } = window.i18n;
-
-    try {
-        await invoke('set_role', { newRole });
-        currentRole = newRole;
-        updateRoleUI(newRole);
-
-        const successMsg = newRole === 'Server' ? t('msgSwitchedToServer') : t('msgSwitchedToClient');
-        showSuccess(successMsg);
-
-        // 断开当前连接
-        if (appState.connected) {
-            await disconnectDevices();
-        }
-    } catch (e) {
-        showError(`角色切换失败: ${e}`);
-    }
-}
-
-/**
- * 更新角色 UI 显示
- */
-function updateRoleUI(role) {
-    const roleBadge = document.getElementById('current-role');
-    if (!roleBadge) return;
-    const { t } = window.i18n;
-
-    if (role === 'Server') {
-        roleBadge.textContent = t('roleServer');
-        roleBadge.className = 'role-badge role-server';
-    } else {
-        roleBadge.textContent = t('roleClient');
-        roleBadge.className = 'role-badge role-client';
-    }
-}

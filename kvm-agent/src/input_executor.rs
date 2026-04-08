@@ -1,17 +1,15 @@
 /// Mac 端输入事件执行器
 /// 仅在 macOS 上编译，使用 CGEvent API 模拟鼠标和键盘操作
-use crate::protocol::{InputEvent, MouseButton};
+use crate::protocol::KvmFrame;
 
 // ============================================================
 // 辅助功能权限检测（仅 macOS）
 // ============================================================
 
 /// 检测是否已获得辅助功能权限
-/// 返回 true 表示已授权，false 表示未授权
 #[cfg(target_os = "macos")]
 pub fn check_accessibility_permission() -> bool {
     use std::process::Command;
-    // 使用 osascript 检测辅助功能权限
     let output = Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to get name of every process")
@@ -27,7 +25,7 @@ pub fn check_accessibility_permission() -> bool {
     false
 }
 
-/// 打印辅助功能权限引导文案（适配 macOS 13+ 新版系统设置路径）
+/// 打印辅助功能权限引导文案
 pub fn print_accessibility_guide() {
     eprintln!("========================================");
     eprintln!("⚠️  KVM Agent 需要辅助功能权限才能控制鼠标和键盘");
@@ -46,11 +44,9 @@ pub fn print_accessibility_guide() {
 // ============================================================
 
 /// 将 Windows 虚拟键码（VK_*）转换为 macOS CGKeyCode
-/// 参考：https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
 pub fn win_keycode_to_mac(win_vk: u16) -> Option<u16> {
-    // 常用键映射表（Windows VK → macOS CGKeyCode）
     let mac_code = match win_vk {
-        // 字母键 A-Z（Windows VK_A=0x41，macOS kVK_ANSI_A=0x00）
+        // 字母键 A-Z
         0x41 => 0x00, // A
         0x42 => 0x0B, // B
         0x43 => 0x08, // C
@@ -157,8 +153,8 @@ mod macos_input {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::CGPoint;
 
-    /// 执行输入事件
-    pub fn execute_input_event(event: &InputEvent) {
+    /// 执行二进制帧输入事件
+    pub fn execute_frame(frame: &KvmFrame) {
         let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
             Ok(s) => s,
             Err(_) => {
@@ -167,9 +163,14 @@ mod macos_input {
             }
         };
 
-        match event {
-            InputEvent::MouseMove { x, y } => {
-                let point = CGPoint::new(*x as f64, *y as f64);
+        match frame {
+            KvmFrame::MouseMove { x, y } => {
+                // 坐标为归一化值 * 10000，需要转换为屏幕像素坐标
+                // 获取屏幕分辨率并还原实际坐标
+                let (screen_w, screen_h) = get_screen_size();
+                let px = (*x as f64 / 10000.0) * screen_w;
+                let py = (*y as f64 / 10000.0) * screen_h;
+                let point = CGPoint::new(px, py);
                 if let Ok(ev) = CGEvent::new_mouse_event(
                     source,
                     CGEventType::MouseMoved,
@@ -179,38 +180,18 @@ mod macos_input {
                     ev.post(CGEventTapLocation::HID);
                 }
             }
-            InputEvent::MouseDown { button } => {
-                let (ev_type, cg_btn) = mouse_button_to_cg_down(button);
-                // 获取当前鼠标位置
+            KvmFrame::MouseButton { button, pressed } => {
                 let pos = get_current_mouse_pos();
-                if let Ok(ev) = CGEvent::new_mouse_event(source, ev_type, pos, cg_btn) {
-                    ev.post(CGEventTapLocation::HID);
-                }
-            }
-            InputEvent::MouseUp { button } => {
-                let (ev_type, cg_btn) = mouse_button_to_cg_up(button);
-                let pos = get_current_mouse_pos();
-                if let Ok(ev) = CGEvent::new_mouse_event(source, ev_type, pos, cg_btn) {
-                    ev.post(CGEventTapLocation::HID);
-                }
-            }
-            InputEvent::KeyDown { keycode } => {
-                if let Some(mac_code) = win_keycode_to_mac(*keycode) {
-                    if let Ok(ev) = CGEvent::new_keyboard_event(source, mac_code, true) {
-                        ev.post(CGEventTapLocation::HID);
-                    }
+                let (ev_type, cg_btn) = if *pressed {
+                    mouse_button_to_cg_down(*button)
                 } else {
-                    eprintln!("[Input] 未知 keycode: 0x{:04X}", keycode);
+                    mouse_button_to_cg_up(*button)
+                };
+                if let Ok(ev) = CGEvent::new_mouse_event(source, ev_type, pos, cg_btn) {
+                    ev.post(CGEventTapLocation::HID);
                 }
             }
-            InputEvent::KeyUp { keycode } => {
-                if let Some(mac_code) = win_keycode_to_mac(*keycode) {
-                    if let Ok(ev) = CGEvent::new_keyboard_event(source, mac_code, false) {
-                        ev.post(CGEventTapLocation::HID);
-                    }
-                }
-            }
-            InputEvent::Scroll { dx, dy } => {
+            KvmFrame::MouseScroll { dx, dy } => {
                 if let Ok(ev) = CGEvent::new_scroll_event(
                     source,
                     ScrollEventUnit::Pixel,
@@ -222,43 +203,60 @@ mod macos_input {
                     ev.post(CGEventTapLocation::HID);
                 }
             }
+            KvmFrame::KeyEvent { keycode, pressed } => {
+                if let Some(mac_code) = win_keycode_to_mac(*keycode) {
+                    if let Ok(ev) = CGEvent::new_keyboard_event(source, mac_code, *pressed) {
+                        ev.post(CGEventTapLocation::HID);
+                    }
+                } else {
+                    eprintln!("[Input] 未知 keycode: 0x{:04X}", keycode);
+                }
+            }
+            KvmFrame::Heartbeat => {
+                // 心跳帧不执行输入操作，仅更新时间戳（由 server.rs 处理）
+            }
+            other => {
+                eprintln!("[Input] 收到非输入帧，忽略: {:?}", other);
+            }
         }
+    }
+
+    fn get_screen_size() -> (f64, f64) {
+        use core_graphics::display::CGDisplay;
+        let display = CGDisplay::main();
+        let bounds = display.bounds();
+        (bounds.size.width, bounds.size.height)
     }
 
     fn get_current_mouse_pos() -> CGPoint {
-        // 通过创建一个临时事件获取当前鼠标位置
-        CGPoint::new(0.0, 0.0) // 简化实现，实际使用时通过 CGEventGetLocation 获取
+        CGPoint::new(0.0, 0.0)
     }
 
-    fn mouse_button_to_cg_down(btn: &MouseButton) -> (CGEventType, CGMouseButton) {
+    fn mouse_button_to_cg_down(btn: u8) -> (CGEventType, CGMouseButton) {
         match btn {
-            MouseButton::Left => (CGEventType::LeftMouseDown, CGMouseButton::Left),
-            MouseButton::Right => (CGEventType::RightMouseDown, CGMouseButton::Right),
-            MouseButton::Middle => (CGEventType::OtherMouseDown, CGMouseButton::Center),
-            MouseButton::Side1 | MouseButton::Side2 => {
-                (CGEventType::OtherMouseDown, CGMouseButton::Center)
-            }
+            0 => (CGEventType::LeftMouseDown, CGMouseButton::Left),
+            1 => (CGEventType::RightMouseDown, CGMouseButton::Right),
+            2 => (CGEventType::OtherMouseDown, CGMouseButton::Center),
+            _ => (CGEventType::OtherMouseDown, CGMouseButton::Center),
         }
     }
 
-    fn mouse_button_to_cg_up(btn: &MouseButton) -> (CGEventType, CGMouseButton) {
+    fn mouse_button_to_cg_up(btn: u8) -> (CGEventType, CGMouseButton) {
         match btn {
-            MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
-            MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
-            MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
-            MouseButton::Side1 | MouseButton::Side2 => {
-                (CGEventType::OtherMouseUp, CGMouseButton::Center)
-            }
+            0 => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+            1 => (CGEventType::RightMouseUp, CGMouseButton::Right),
+            2 => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+            _ => (CGEventType::OtherMouseUp, CGMouseButton::Center),
         }
     }
 }
 
-/// 公开的输入事件执行入口（平台隔离）
+/// 公开的帧输入执行入口（平台隔离）
 #[cfg(target_os = "macos")]
-pub use macos_input::execute_input_event;
+pub use macos_input::execute_frame;
 
 /// 非 macOS 平台的空实现（编译占位）
 #[cfg(not(target_os = "macos"))]
-pub fn execute_input_event(event: &InputEvent) {
-    eprintln!("[Input] 当前平台不支持输入事件执行（仅 macOS）: {:?}", event);
+pub fn execute_frame(frame: &KvmFrame) {
+    eprintln!("[Input] 当前平台不支持输入事件执行（仅 macOS）: {:?}", frame);
 }

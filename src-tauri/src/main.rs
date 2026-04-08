@@ -26,10 +26,16 @@ mod keycode_map;
 mod clipboard;
 mod tls;
 mod monitor;
+// 新模块结构
+mod connection;
+mod control;
 #[cfg(test)]
 mod integration_tests;
 
 use connection_manager::{discover_devices, connect_to_device, disconnect_devices, get_connection_status};
+use connection::manager::{connect_to_mac, disconnect_from_mac, get_win_connection_status, get_default_ips};
+use control::edge::{get_edge_config, set_edge_config};
+use control::hotkey::{get_hotkey_config, check_hotkey_available};
 use network::{discover_network_devices, connect_network_device};
 use usb::{scan_usb_devices, connect_usb_device};
 use platform::{
@@ -154,11 +160,30 @@ fn main() {
             // 多显示器支持
             monitor::get_monitors,
             monitor::get_virtual_desktop_info,
+            // 连接模块（新）
+            connect_to_mac,
+            disconnect_from_mac,
+            get_win_connection_status,
+            get_default_ips,
+            // 控制模块（新）
+            get_edge_config,
+            set_edge_config,
+            get_hotkey_config,
+            check_hotkey_available,
         ])
         .manage(std::sync::Mutex::new(role_manager::AppRole::default()))
+        .manage(connection::manager::WinConnectionManager::new())
         .setup(|app| {
             // 启动时清理遗留进程
             let _ = platform::kill_legacy_process();
+
+            // Windows 端默认为主控端，通知前端初始角色
+            let app_handle = app.handle();
+            let _ = app_handle.emit_all("role-changed", serde_json::json!({
+                "role": "Client",
+                "display": "主控端"
+            }));
+            log::info!("Windows 端启动，默认角色：主控端");
 
             // 启动被控端 UDP 广播监听（所有设备启动时都监听，主控端扫描时能发现）
             platform::start_udp_discovery_listener();

@@ -1,0 +1,50 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "KVM Share: 启动开发模式",
+            "type": "shell",
+            "command": "npm run dev",
+            "options": {
+                "env": {
+                    "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": [],
+            "icon": {
+                "id": "play",
+                "color": "terminal.ansiGreen"
+            }
+        },
+        {
+            "label": "KVM Share: 构建发布版本",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "env": {
+                    "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}"
+                }
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": [],
+            "icon": {
+                "id": "package",
+                "color": "terminal.ansiBlue"
+            }
+        }
+    ]
+}

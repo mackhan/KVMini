@@ -73,13 +73,12 @@
         <!-- 状态面板 -->
         <div class="status-panel">
             <div class="status-item">
-                <span class="status-label" data-i18n="labelRole">当前角色:</span>
-                <span id="current-role" class="role-badge role-server" data-i18n="roleServer">被控端</span>
-                <button id="switch-role-btn" class="btn btn-role-switch" data-i18n="btnSwitch">切换</button>
+                <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
+                <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">未连接</span>
             </div>
             <div class="status-item">
-                <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
-                <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">断开</span>
+                <span class="status-label" data-i18n="labelControlState">控制状态:</span>
+                <span id="control-state" class="control-state-idle" data-i18n="controlStateIdle">各自独立</span>
             </div>
             <div class="status-item">
                 <span class="status-label" data-i18n="labelConnectedDevice">已连接设备:</span>
@@ -179,8 +178,8 @@
 
         <!-- Windows 操作提示（仅 Windows 端显示） -->
         <div class="hint-panel" id="hint-panel">
-            <p class="hint-text">💡 提示：连接成功后，将鼠标移到屏幕右边缘即可切换到 Mac 控制模式</p>
-            <p class="hint-text">💡 按 <kbd>Ctrl+Alt+Tab</kbd> 切换回 Windows 本地控制</p>
+            <p class="hint-text">💡 连接成功后，将鼠标移到屏幕边缘即可自动切换到对端控制模式</p>
+            <p class="hint-text">💡 按 <kbd>Ctrl+Alt+S</kbd> 可手动切换控制权，鼠标移回本机边缘自动归还</p>
         </div>
     </div>
 
@@ -340,13 +339,16 @@
 
                     <div class="display-layout-container" id="display-layout-container">
                         <!-- 布局预览区域 -->
-                        <div class="display-layout-preview" id="display-layout-preview">
-                            <div class="display-block local-display" id="local-display" draggable="true">
-                                <span class="display-label" data-i18n="labelLocalDisplay">本机</span>
-                                <span class="display-size" id="local-display-size">1920×1080</span>
+                        <div class="display-layout-preview layout-left" id="display-layout-preview">
+                            <!-- 本机显示器组（由 JS 动态填充） -->
+                            <div class="monitor-group" id="local-monitor-group" draggable="true">
+                                <!-- 动态生成本机显示器方块 -->
                             </div>
-                            <div class="display-block remote-display" id="remote-display">
-                                <span class="display-label" data-i18n="labelRemoteDisplay">远端</span>
+                            <!-- 分隔线（方向箭头） -->
+                            <div class="layout-divider" id="layout-divider">→</div>
+                            <!-- 远端显示器组（由 JS 动态填充） -->
+                            <div class="monitor-group" id="remote-monitor-group">
+                                <!-- 动态生成远端显示器方块 -->
                             </div>
                         </div>
                         <!-- 布局方向选择（备用：当拖拽不可用时） -->

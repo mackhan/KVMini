@@ -240,44 +240,47 @@ async fn handle_connection(
     }
 }
 
-/// 执行握手协议，返回握手后多读的剩余数据
+/// 执行握手协议（被控端：先读 Handshake，再回 HandshakeAck），返回握手后多读的剩余数据
 async fn perform_handshake(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
-    // 发送握手帧
-    let handshake = KvmFrame::Handshake {
-        version: PROTOCOL_VERSION,
-        platform: Platform::current(),
-    };
-    let bytes = protocol::encode(&handshake);
-    stream
-        .write_all(&bytes)
-        .await
-        .map_err(|e| format!("发送握手失败: {}", e))?;
-
-    // 等待握手响应（5 秒超时）
+    // 1. 等待主控端发来的 Handshake 帧（5 秒超时）
     let mut buf = vec![0u8; 256];
     let n = timeout(Duration::from_secs(5), stream.read(&mut buf))
         .await
-        .map_err(|_| "握手超时".to_string())?
-        .map_err(|e| format!("读取握手响应失败: {}", e))?;
+        .map_err(|_| "握手超时：等待主控端 Handshake 帧超时".to_string())?
+        .map_err(|e| format!("读取握手帧失败: {}", e))?;
 
     if n == 0 {
         return Err("握手时连接关闭".to_string());
     }
 
-    match protocol::decode(&buf[..n]) {
-        Ok((KvmFrame::HandshakeAck { version, .. }, consumed)) => {
+    // 2. 解码 Handshake 帧
+    let consumed = match protocol::decode(&buf[..n]) {
+        Ok((KvmFrame::Handshake { version, .. }, consumed)) => {
             if version != PROTOCOL_VERSION {
                 return Err(format!(
                     "协议版本不兼容：本端 {}，对端 {}",
                     PROTOCOL_VERSION, version
                 ));
             }
-            // 返回握手响应之后的剩余数据
-            Ok(buf[consumed..n].to_vec())
+            consumed
         }
-        Ok((frame, _)) => Err(format!("握手响应类型错误: {:?}", frame)),
-        Err(e) => Err(format!("握手响应解码失败: {}", e)),
-    }
+        Ok((frame, _)) => return Err(format!("握手帧类型错误（期望 Handshake，收到 {:?}）", frame)),
+        Err(e) => return Err(format!("握手帧解码失败: {}", e)),
+    };
+
+    // 3. 回复 HandshakeAck
+    let ack = KvmFrame::HandshakeAck {
+        version: PROTOCOL_VERSION,
+        platform: Platform::current(),
+    };
+    let ack_bytes = protocol::encode(&ack);
+    stream
+        .write_all(&ack_bytes)
+        .await
+        .map_err(|e| format!("发送 HandshakeAck 失败: {}", e))?;
+
+    // 返回握手帧之后多读的剩余数据
+    Ok(buf[consumed..n].to_vec())
 }
 
 /// 将解码后的帧分发给事件总线
@@ -309,9 +312,16 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
-    /// 辅助函数：执行客户端握手（模拟主控端）
+    /// 辅助函数：执行客户端握手（模拟主控端：先发 Handshake，等 HandshakeAck）
     async fn client_handshake(stream: &mut TcpStream) -> Result<(), String> {
-        // 读取服务端握手帧
+        // 1. 发送 Handshake 帧
+        let handshake = encode(&KvmFrame::Handshake {
+            version: PROTOCOL_VERSION,
+            platform: Platform::MacOS,
+        });
+        stream.write_all(&handshake).await.map_err(|e| e.to_string())?;
+
+        // 2. 等待 HandshakeAck
         let mut buf = vec![0u8; 64];
         let n = timeout(Duration::from_secs(5), stream.read(&mut buf))
             .await
@@ -319,20 +329,14 @@ mod tests {
             .map_err(|e| e.to_string())?;
 
         match protocol::decode(&buf[..n]) {
-            Ok((KvmFrame::Handshake { version, .. }, _)) => {
+            Ok((KvmFrame::HandshakeAck { version, .. }, _)) => {
                 if version != PROTOCOL_VERSION {
                     return Err("版本不兼容".to_string());
                 }
             }
-            _ => return Err("握手帧类型错误".to_string()),
+            _ => return Err("握手响应类型错误".to_string()),
         }
 
-        // 发送握手响应
-        let ack = encode(&KvmFrame::HandshakeAck {
-            version: PROTOCOL_VERSION,
-            platform: Platform::MacOS,
-        });
-        stream.write_all(&ack).await.map_err(|e| e.to_string())?;
         Ok(())
     }
 

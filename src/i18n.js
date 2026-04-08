@@ -13,6 +13,7 @@ const MESSAGES = {
     // 状态面板
     labelRole: '当前角色:',
     labelConnectionStatus: '连接状态:',
+    labelControlState: '控制状态:',
     labelConnectedDevice: '已连接设备:',
     labelConnectionType: '连接方式:',
     labelLocalIp: '本机 IP:',
@@ -21,7 +22,10 @@ const MESSAGES = {
     roleClient: '主控端',
     statusConnected: '已连接',
     statusConnecting: '连接中...',
-    statusDisconnected: '断开',
+    statusDisconnected: '未连接',
+    controlStateIdle: '各自独立',
+    controlStateLocal: '正在控制对方',
+    controlStateRemote: '对方正在控制本机',
 
     // 控制按钮
     btnScanDevices: '扫描设备',
@@ -232,6 +236,7 @@ const MESSAGES = {
     // Status panel
     labelRole: 'Role:',
     labelConnectionStatus: 'Status:',
+    labelControlState: 'Control:',
     labelConnectedDevice: 'Connected Device:',
     labelConnectionType: 'Connection:',
     labelLocalIp: 'Local IP:',
@@ -241,6 +246,9 @@ const MESSAGES = {
     statusConnected: 'Connected',
     statusConnecting: 'Connecting...',
     statusDisconnected: 'Disconnected',
+    controlStateIdle: 'Independent',
+    controlStateLocal: 'Controlling Remote',
+    controlStateRemote: 'Remote Controlling',
 
     // Control buttons
     btnScanDevices: 'Scan Devices',

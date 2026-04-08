@@ -8,6 +8,7 @@
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::sync::mpsc;
+use tauri::Manager;
 
 use crate::server::{KvmServer, ServerEvent};
 use crate::client::{KvmClient, ClientEvent};
@@ -24,7 +25,8 @@ pub enum AppRole {
 
 impl Default for AppRole {
     fn default() -> Self {
-        Self::Server
+        // Windows 端默认为主控端（采集并发送键鼠事件）
+        Self::Client
     }
 }
 
@@ -231,8 +233,14 @@ pub fn get_current_role(role: tauri::State<'_, std::sync::Mutex<AppRole>>) -> Ap
 pub async fn set_role(
     new_role: AppRole,
     role: tauri::State<'_, std::sync::Mutex<AppRole>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     *role.lock().unwrap() = new_role;
+    // 通知前端角色已切换
+    let _ = app_handle.emit_all("role-changed", serde_json::json!({
+        "role": format!("{:?}", new_role),
+        "display": new_role.to_string()
+    }));
     Ok(format!("角色已切换为: {}", new_role))
 }
 
