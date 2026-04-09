@@ -1114,9 +1114,9 @@ function updateOverlayI18n() {
     steps.forEach((el, i) => {
         if (stepKeys[i]) {
             const text = t(stepKeys[i]);
-            // step2 需要加粗 KVM Share
+            // step2 需要加粗 KVMini
             if (i === 1) {
-                el.innerHTML = text.replace('KVM Share', '<strong>KVM Share</strong>');
+                el.innerHTML = text.replace('KVMini', '<strong>KVMini</strong>');
             } else {
                 el.textContent = text;
             }
@@ -1316,7 +1316,7 @@ async function handleConnectionLost() {
         appState.connected = false;
         setConnectionStatus('disconnected');
         showError(window.i18n.t('reconnectFailed').replace('{max}', MAX_RECONNECT_ATTEMPTS));
-        window.Platform.showNotification('KVM Share', '连接已断开，请手动重连').catch(() => {});
+        window.Platform.showNotification('KVMini', '连接已断开，请手动重连').catch(() => {});
         return;
     }
 

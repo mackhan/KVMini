@@ -22,6 +22,6 @@
     "jest-environment-jsdom": "^30.3.0",
     "ts-jest": "^29.1.2"
   },
-  "author": "KVM Share Team",
+  "author": "KVMini Team",
   "license": "MIT"
 }

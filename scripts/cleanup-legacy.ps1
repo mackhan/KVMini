@@ -57,8 +57,8 @@ Write-Host ""
 Write-Host "🎉 清理完成！" -ForegroundColor Green
 $kvmProcesses = Get-Process -Name "KVM*" -ErrorAction SilentlyContinue
 if ($kvmProcesses) {
-    Write-Host "当前运行的 KVM Share 进程：" -ForegroundColor Cyan
+    Write-Host "当前运行的 KVMini 进程：" -ForegroundColor Cyan
     $kvmProcesses | Format-Table Name, Id, CPU -AutoSize
 } else {
-    Write-Host "（无运行中的 KVM Share 进程）" -ForegroundColor Gray
+    Write-Host "（无运行中的 KVMini 进程）" -ForegroundColor Gray
 }

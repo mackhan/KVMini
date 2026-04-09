@@ -53,5 +53,5 @@ if [ "$FOUND_DAEMON" = false ]; then
 fi
 
 echo ""
-echo "🎉 清理完成！当前运行的 KVM Share 进程："
-pgrep -la "KVM Share" 2>/dev/null || echo "（无运行中的 KVM Share 进程）"
+echo "🎉 清理完成！当前运行的 KVMini 进程："
+pgrep -la "kvmini" 2>/dev/null || echo "（无运行中的 KVMini 进程）"

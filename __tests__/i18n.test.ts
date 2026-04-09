@@ -35,7 +35,7 @@ describe('i18n 多语言模块', () => {
     });
 
     it('t() 默认返回中文文本', () => {
-      expect(t('appTitle')).toBe('KVM Share');
+      expect(t('appTitle')).toBe('KVMini');
       expect(t('btnScanDevices')).toBe('扫描设备');
       expect(t('statusDisconnected')).toBe('未连接');
     });
@@ -100,7 +100,7 @@ describe('i18n 多语言模块', () => {
     it('key 不存在时降级返回中文翻译', () => {
       setLocale('en');
       // appTitle 在中英文都有，应返回英文
-      expect(t('appTitle')).toBe('KVM Share');
+      expect(t('appTitle')).toBe('KVMini');
     });
 
     it('key 完全不存在时返回 key 本身', () => {
@@ -128,7 +128,7 @@ describe('i18n 多语言模块', () => {
     it('辅助功能遮罩相关 key 翻译正确（中文）', () => {
       setLocale('zh');
       expect(t('overlayStep1')).toBe('点击下方"前往授权"按钮');
-      expect(t('overlayStep2')).toBe('在系统设置中找到 KVM Share，打开开关');
+      expect(t('overlayStep2')).toBe('在系统设置中找到 KVMini，打开开关');
       expect(t('overlayStep3')).toBe('返回应用，权限授予后自动继续');
       expect(t('overlayPollingHint')).toBe('⏳ 等待授权中，授权后将自动继续...');
     });
@@ -136,7 +136,7 @@ describe('i18n 多语言模块', () => {
     it('辅助功能遮罩相关 key 翻译正确（英文）', () => {
       setLocale('en');
       expect(t('overlayStep1')).toBe('Click the "Authorize" button below');
-      expect(t('overlayStep2')).toBe('Find KVM Share in System Settings and enable it');
+      expect(t('overlayStep2')).toBe('Find KVMini in System Settings and enable it');
       expect(t('overlayStep3')).toBe('Return to the app, it will continue automatically after authorization');
       expect(t('overlayPollingHint')).toBe('⏳ Waiting for authorization...');
     });

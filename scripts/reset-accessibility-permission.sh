@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 重置 KVM Share 辅助功能权限（TCC 缓存清理）
+# 重置 KVMini 辅助功能权限（TCC 缓存清理）
 # 用途：当系统显示已授权但应用仍提示未授权时使用
 # 使用方法：bash scripts/reset-accessibility-permission.sh
 
@@ -39,7 +39,7 @@ else
         echo "✅ 数据库记录清除成功"
     else
         echo "❌ 清除失败，请手动操作："
-        echo "   系统设置 → 隐私与安全性 → 辅助功能 → 找到 KVM Share → 删除后重新添加"
+        echo "   系统设置 → 隐私与安全性 → 辅助功能 → 找到 KVMini → 删除后重新添加"
     fi
 fi
 

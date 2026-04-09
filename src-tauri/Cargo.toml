@@ -2,7 +2,7 @@
 name = "kvmini"
 version.workspace = true
 description = "Cross-platform mouse and keyboard sharing software"
-authors = ["KVM Share Team"]
+authors = ["KVMini Team"]
 license = "MIT"
 edition = "2021"
 

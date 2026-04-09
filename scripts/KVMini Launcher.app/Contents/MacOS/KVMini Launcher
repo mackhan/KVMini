@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# 定位项目根目录（此脚本在 scripts/KVMini Launcher.app/Contents/MacOS/ 下，向上4级即为项目根）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# 检查 package.json 是否存在
+if [ ! -f "$PROJECT_DIR/package.json" ]; then
+    osascript -e 'display alert "KVMini Launcher" message "找不到项目目录，请确认 KVMini Launcher.app 在项目的 scripts 目录下。"'
+    exit 1
+fi
+
+# 检查 npm 是否可用（兼容 nvm 等工具）
+export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -1)/bin"
+
+if ! command -v npm &>/dev/null; then
+    osascript -e 'display alert "KVMini Launcher" message "未找到 npm，请先安装 Node.js（推荐通过 Homebrew：brew install node）"'
+    exit 1
+fi
+
+# 在新终端窗口中构建并安装
+osascript <<EOF
+tell application "Terminal"
+    activate
+    set newTab to do script "cd '$PROJECT_DIR' && npm run build && echo '构建完成，正在安装...' && cp -R 'src-tauri/target/release/bundle/macos/KVMini.app' /Applications/ && echo '安装完成！正在启动...' && open '/Applications/KVMini.app'"
+end tell
+EOF
