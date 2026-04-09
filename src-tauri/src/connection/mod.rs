@@ -1,20 +1,313 @@
-/// src-tauri Windows 端连接模块
-///
-/// 管理 Windows 端所有连接相关功能：
-/// - `error`：连接错误管理，提供用户友好的错误提示和解决方案引导
-/// - `manager`：连接生命周期管理（连接/断开/重连）
-///
-/// Windows 端默认为主控端（IP: 30.19.24.43），Mac 端默认为被控端（IP: 30.19.140.39）
+//! 连接管理模块
+//!
+//! 使用 kvm-core 的 ConnectionManager 管理 TCP 连接。
+//! 两端对等，任意一端都可以发起连接或接受连接。
+//! 通过 Tauri 事件向前端推送连接状态变更。
 
-pub mod error;
-pub mod manager;
+use std::sync::Arc;
+use tauri::Manager;
+use tokio::sync::Mutex;
+use serde::{Serialize, Deserialize};
 
-pub use error::{ConnectError, ErrorGuide};
-pub use manager::WinConnectionManager;
+use kvm_core::network::{ConnectionManager, ConnectionState, NetworkEvent, HandshakeInfo};
+use kvm_core::protocol::Platform;
+use kvm_core::platform::VirtualDesktop;
 
-/// Windows 端默认 IP
-pub const WINDOWS_DEFAULT_IP: &str = "30.19.24.43";
-/// Mac 端默认 IP（Windows 端连接的目标）
-pub const MAC_DEFAULT_IP: &str = "30.19.140.39";
-/// 默认端口
-pub const DEFAULT_PORT: u16 = 8889;
+/// 默认 TCP 端口
+pub const DEFAULT_PORT: u16 = 23456;
+
+/// 连接状态（序列化给前端）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionStatus {
+    pub connected: bool,
+    pub peer_ip: Option<String>,
+    pub peer_platform: Option<String>,
+    pub message: String,
+    pub state: String,
+}
+
+/// 连接事件（推送给前端）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionEvent {
+    pub event_type: String,
+    pub connected: bool,
+    pub peer_ip: Option<String>,
+    pub message: String,
+    pub attempt: Option<u32>,
+    pub guide: Option<Vec<String>>,
+}
+
+impl ConnectionEvent {
+    pub fn from_state(state: &ConnectionState, peer_ip: Option<&str>) -> Self {
+        match state {
+            ConnectionState::Disconnected => Self {
+                event_type: "disconnected".to_string(),
+                connected: false,
+                peer_ip: peer_ip.map(|s| s.to_string()),
+                message: "未连接".to_string(),
+                attempt: None,
+                guide: None,
+            },
+            ConnectionState::Connecting => Self {
+                event_type: "connecting".to_string(),
+                connected: false,
+                peer_ip: peer_ip.map(|s| s.to_string()),
+                message: format!("正在连接到 {}...", peer_ip.unwrap_or("")),
+                attempt: None,
+                guide: None,
+            },
+            ConnectionState::Connected => Self {
+                event_type: "connected".to_string(),
+                connected: true,
+                peer_ip: peer_ip.map(|s| s.to_string()),
+                message: format!("已连接到 {}", peer_ip.unwrap_or("")),
+                attempt: None,
+                guide: None,
+            },
+            ConnectionState::Reconnecting { attempt } => Self {
+                event_type: "reconnecting".to_string(),
+                connected: false,
+                peer_ip: peer_ip.map(|s| s.to_string()),
+                message: format!("正在重连（第 {} 次）→ {}", attempt, peer_ip.unwrap_or("")),
+                attempt: Some(*attempt),
+                guide: None,
+            },
+        }
+    }
+
+    pub fn listening(port: u16) -> Self {
+        Self {
+            event_type: "listening".to_string(),
+            connected: false,
+            peer_ip: None,
+            message: format!("监听端口 {}，等待对端连接...", port),
+            attempt: None,
+            guide: None,
+        }
+    }
+
+    pub fn error(msg: &str) -> Self {
+        Self {
+            event_type: "error".to_string(),
+            connected: false,
+            peer_ip: None,
+            message: msg.to_string(),
+            attempt: None,
+            guide: Some(vec![
+                "检查对端是否已启动 KVMini".to_string(),
+                "检查防火墙是否放行端口".to_string(),
+                "确认 IP 地址是否正确".to_string(),
+            ]),
+        }
+    }
+}
+
+/// KVM 连接管理器（Tauri 托管状态）
+pub struct KvmConnectionManager {
+    /// kvm-core 连接管理器
+    inner: Arc<ConnectionManager>,
+    /// 当前对端 IP
+    peer_ip: Arc<Mutex<String>>,
+    /// 停止信号（用于停止事件监听循环）
+    stop_tx: Arc<tokio::sync::Notify>,
+}
+
+impl KvmConnectionManager {
+    pub fn new() -> Self {
+        let (mgr, _event_rx) = ConnectionManager::new(DEFAULT_PORT);
+        Self {
+            inner: Arc::new(mgr),
+            peer_ip: Arc::new(Mutex::new(String::new())),
+            stop_tx: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    /// 获取当前对端 IP
+    pub async fn peer_ip(&self) -> String {
+        self.peer_ip.lock().await.clone()
+    }
+
+    /// 设置对端 IP
+    pub async fn set_peer_ip(&self, ip: String) {
+        *self.peer_ip.lock().await = ip;
+    }
+
+    /// 获取连接状态
+    pub async fn get_status(&self) -> ConnectionStatus {
+        let state = self.inner.state().await;
+        let peer_ip = self.peer_ip.lock().await.clone();
+        let peer_ip_opt = if peer_ip.is_empty() { None } else { Some(peer_ip.as_str()) };
+        let event = ConnectionEvent::from_state(&state, peer_ip_opt);
+        ConnectionStatus {
+            connected: event.connected,
+            peer_ip: event.peer_ip,
+            peer_platform: None,
+            message: event.message,
+            state: event.event_type,
+        }
+    }
+
+    /// 启动事件监听循环，将 NetworkEvent 转发给前端
+    pub fn start_event_loop(&self, app: tauri::AppHandle) {
+        let mut rx = self.inner.subscribe();
+        let peer_ip = Arc::clone(&self.peer_ip);
+        let stop = Arc::clone(&self.stop_tx);
+
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop.notified() => break,
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let ip = peer_ip.lock().await.clone();
+                                let ip_opt = if ip.is_empty() { None } else { Some(ip.as_str()) };
+                                let conn_event = match &event {
+                                    NetworkEvent::ConnectionStateChanged(state) => {
+                                        Some(ConnectionEvent::from_state(state, ip_opt))
+                                    }
+                                    NetworkEvent::Error(msg) => {
+                                        Some(ConnectionEvent::error(msg))
+                                    }
+                                    NetworkEvent::PeerHandshake(info) => {
+                                        let platform_str = format!("{:?}", info.platform);
+                                        Some(ConnectionEvent {
+                                            event_type: "peer_info".to_string(),
+                                            connected: true,
+                                            peer_ip: ip_opt.map(|s| s.to_string()),
+                                            message: format!("对端平台: {}", platform_str),
+                                            attempt: None,
+                                            guide: None,
+                                        })
+                                    }
+                                    NetworkEvent::LatencyUpdated(ms) => {
+                                        Some(ConnectionEvent {
+                                            event_type: "latency".to_string(),
+                                            connected: true,
+                                            peer_ip: ip_opt.map(|s| s.to_string()),
+                                            message: format!("延迟: {}ms", ms),
+                                            attempt: None,
+                                            guide: None,
+                                        })
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(ev) = conn_event {
+                                    let _ = app.emit_all("connection-status", ev);
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// 停止所有网络活动
+    #[allow(dead_code)]
+    pub fn stop(&self) {
+        self.inner.stop();
+        self.stop_tx.notify_waiters();
+    }
+}
+
+impl Default for KvmConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Tauri 命令 ──────────────────────────────────────────────────────────────
+
+/// 获取本机平台信息（用于握手）
+fn local_handshake_info() -> HandshakeInfo {
+    #[cfg(target_os = "windows")]
+    let platform = Platform::Windows;
+    #[cfg(target_os = "macos")]
+    let platform = Platform::MacOS;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let platform = Platform::Unknown;
+
+    HandshakeInfo::new(platform, VirtualDesktop::from_monitors(vec![]))
+}
+
+/// Tauri 命令：启动监听模式（等待对端连接）
+#[tauri::command]
+pub async fn start_listening(
+    app_handle: tauri::AppHandle,
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<String, String> {
+    let addr = mgr.inner.start_listening().await
+        .map_err(|e| e.to_string())?;
+    let _ = app_handle.emit_all("connection-status", ConnectionEvent::listening(addr.port()));
+    Ok(format!("已启动监听，端口 {}", addr.port()))
+}
+
+/// Tauri 命令：主动连接对端
+#[tauri::command]
+pub async fn connect_to_peer(
+    peer_ip: Option<String>,
+    app_handle: tauri::AppHandle,
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<String, String> {
+    let ip = match peer_ip {
+        Some(ip) if !ip.is_empty() => ip,
+        _ => mgr.peer_ip().await,
+    };
+
+    if ip.is_empty() {
+        return Err("请输入对端 IP 地址".to_string());
+    }
+
+    mgr.set_peer_ip(ip.clone()).await;
+
+    let local_info = local_handshake_info();
+    let _ = app_handle.emit_all("connection-status", ConnectionEvent::from_state(
+        &ConnectionState::Connecting, Some(&ip)
+    ));
+
+    let inner = Arc::clone(&mgr.inner);
+    let ip_clone = ip.clone();
+    let app_clone = app_handle.clone();
+
+    tauri::async_runtime::spawn(async move {
+        match inner.connect_to(&ip_clone, DEFAULT_PORT, local_info).await {
+            Ok(_peer_info) => {
+                log::info!("[连接] 已连接到 {}", ip_clone);
+            }
+            Err(e) => {
+                log::error!("[连接] 连接失败: {}", e);
+                let _ = app_clone.emit_all("connection-status", ConnectionEvent::error(&e.to_string()));
+            }
+        }
+    });
+
+    Ok(format!("正在连接到 {}...", ip))
+}
+
+/// Tauri 命令：断开连接
+#[tauri::command]
+pub async fn disconnect_peer(
+    app_handle: tauri::AppHandle,
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<(), String> {
+    mgr.inner.disconnect().await;
+    let _ = app_handle.emit_all("connection-status", ConnectionEvent {
+        event_type: "disconnected".to_string(),
+        connected: false,
+        peer_ip: None,
+        message: "已手动断开连接".to_string(),
+        attempt: None,
+        guide: None,
+    });
+    Ok(())
+}
+
+/// Tauri 命令：获取连接状态
+#[tauri::command]
+pub async fn get_connection_status(
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<ConnectionStatus, String> {
+    Ok(mgr.get_status().await)
+}

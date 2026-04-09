@@ -1134,16 +1134,14 @@ function updateOverlayI18n() {
 
 /**
  * 初始化版本号显示
- * 优先从 Tauri API 读取，降级使用 HTML 静态值
+ * 通过 Platform.getAppVersion() 从后端读取，两端保持一致
  */
 async function initVersion() {
-    let version = 'v0.1.4'; // 静态降级值
+    let version = 'v0.2.0'; // 静态降级值（仅在 Tauri 未就绪时使用）
 
     try {
-        if (window.__TAURI__?.app?.getVersion) {
-            const v = await window.__TAURI__.app.getVersion();
-            if (v) version = `v${v}`;
-        }
+        const v = await window.Platform.getAppVersion();
+        if (v) version = `v${v}`;
     } catch (e) {
         // 降级使用静态值
     }

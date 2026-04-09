@@ -1,6 +1,6 @@
 [package]
 name = "kvm-share"
-version = "0.1.5"
+version.workspace = true
 description = "Cross-platform mouse and keyboard sharing software"
 authors = ["KVM Share Team"]
 license = "MIT"
@@ -10,19 +10,16 @@ edition = "2021"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
+kvm-core = { path = "../kvm-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "1.8", features = [ "shell-open", "system-tray", "notification-all", "global-shortcut"] }
+tauri = { version = "1.8", features = [ "shell-open", "system-tray", "notification-all", "global-shortcut-all"] }
 tokio = { version = "1.0", features = ["full"] }
 lazy_static = "1.4"
 dirs = "5.0"
 log = "0.4"
-rcgen = "0.13"
-sha2 = "0.10"
+env_logger = "0.11"
 if-addrs = "0.13"
-rustls = { version = "0.23", features = ["ring"] }
-tokio-rustls = "0.26"
-rustls-pemfile = "2.0"
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -30,7 +27,9 @@ tempfile = "3.0"
 # macOS 平台特定依赖
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
-core-graphics = "0.23"
+core-graphics = { version = "0.23", features = ["highsierra"] }
+objc = "0.2"
+block = "0.1"
 
 # Windows 平台特定依赖
 [target.'cfg(target_os = "windows")'.dependencies]

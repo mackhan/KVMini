@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "kvm-core",
-    "kvm-win",
-    "kvm-mac",
     "src-tauri",
 ]
 resolver = "2"

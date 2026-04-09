@@ -38,6 +38,24 @@ async function safeInvoke(cmd, args = {}, fallback = null) {
     }
 }
 
+// ─── 版本信息 API ───
+
+/**
+ * 从后端读取应用版本号（两端保持一致，不使用硬编码值）
+ * @returns {Promise<string>} 版本号字符串，如 "0.2.0"
+ */
+async function getAppVersion() {
+    return safeInvoke('get_app_version', {}, '0.2.0');
+}
+
+/**
+ * 获取当前平台名称
+ * @returns {Promise<string>} "Windows" | "macOS"
+ */
+async function getPlatform() {
+    return safeInvoke('get_platform', {}, 'Unknown');
+}
+
 // ─── 设置 API ───
 
 /**
@@ -46,45 +64,125 @@ async function safeInvoke(cmd, args = {}, fallback = null) {
  */
 async function getSettings() {
     return safeInvoke('get_settings', {}, {
-        hotkey: '',
-        preferConnectionType: 'auto',
-        autoReconnect: true,
-        autoStart: false,
-        startMinimized: false,
+        peer_ip: '',
+        port: 23456,
+        switch_hotkey: 'Ctrl+Alt+S',
+        edge_trigger: true,
+        edge_threshold: 5,
+        clipboard_sync: true,
+        autostart: false,
+        auto_reconnect: true,
+        reconnect_max_attempts: 0,
+        reconnect_interval_secs: 3,
     });
 }
 
 /**
  * 保存应用设置
- * @param {AppSettings} settings
+ * @param {AppSettings} config
  */
-async function saveSettings(settings) {
-    return safeInvoke('save_settings', { settings }, undefined);
-}
-
-// ─── 连接历史 API ───
-
-/**
- * 获取连接历史记录
- * @returns {Promise<HistoryEntry[]>}
- */
-async function getConnectionHistory() {
-    return safeInvoke('get_connection_history', {}, []);
+async function saveSettings(config) {
+    return safeInvoke('save_settings', { config }, undefined);
 }
 
 /**
- * 保存连接历史条目
- * @param {HistoryEntry} entry
+ * 重置为默认设置
+ * @returns {Promise<AppSettings>}
  */
-async function saveConnectionHistory(entry) {
-    return safeInvoke('save_connection_history', { entry }, undefined);
+async function resetSettings() {
+    return safeInvoke('reset_settings', {}, undefined);
+}
+
+// ─── 连接 API ───
+
+/**
+ * 启动监听模式（等待对端连接）
+ * @returns {Promise<string>}
+ */
+async function startListening() {
+    return safeInvoke('start_listening', {}, '');
 }
 
 /**
- * 清除连接历史记录
+ * 主动连接对端
+ * @param {string} peerIp - 对端 IP 地址
+ * @returns {Promise<string>}
  */
-async function clearConnectionHistory() {
-    return safeInvoke('clear_connection_history', {}, undefined);
+async function connectToPeer(peerIp) {
+    return safeInvoke('connect_to_peer', { peer_ip: peerIp }, '');
+}
+
+/**
+ * 断开连接
+ */
+async function disconnectPeer() {
+    return safeInvoke('disconnect_peer', {}, undefined);
+}
+
+/**
+ * 获取连接状态
+ * @returns {Promise<ConnectionStatus>}
+ */
+async function getConnectionStatus() {
+    return safeInvoke('get_connection_status', {}, {
+        connected: false,
+        peer_ip: null,
+        peer_platform: null,
+        message: '未连接',
+        state: 'disconnected',
+    });
+}
+
+// ─── 本机信息 API ───
+
+/**
+ * 获取本机局域网 IP 地址列表
+ * @returns {Promise<string[]>}
+ */
+async function getLocalIp() {
+    return safeInvoke('get_local_ip', {}, []);
+}
+
+// ─── 自启动 API ───
+
+/**
+ * 获取自启动状态
+ * @returns {Promise<boolean>}
+ */
+async function getAutostartStatus() {
+    return safeInvoke('get_autostart_status', {}, false);
+}
+
+/**
+ * 设置自启动
+ * @param {boolean} enabled
+ */
+async function setAutostart(enabled) {
+    return safeInvoke('set_autostart', { enabled }, undefined);
+}
+
+// ─── macOS 辅助功能权限 API ───
+
+/**
+ * 检查 macOS 辅助功能权限状态
+ * @returns {Promise<string>} "已授权" | "未授权" | "N/A"
+ */
+async function checkAccessibilityPermission() {
+    return safeInvoke('check_accessibility_permission', {}, 'N/A');
+}
+
+/**
+ * 请求 macOS 辅助功能权限（弹出系统对话框）
+ */
+async function requestAccessibilityPermission() {
+    return safeInvoke('request_accessibility_permission', {}, undefined);
+}
+
+/**
+ * 打开 macOS 辅助功能设置页面
+ */
+async function openAccessibilitySettings() {
+    return safeInvoke('open_accessibility_settings', {}, undefined);
 }
 
 // ─── 系统通知 API ───
@@ -98,148 +196,112 @@ async function showNotification(title, body) {
     return safeInvoke('show_tray_notification', { title, body }, undefined);
 }
 
-// ─── 全局快捷键 API ───
+// ─── 兼容接口（映射旧接口到新命令，避免main.js大规模改动） ───
 
 /**
- * 注册全局快捷键
- * @param {string} hotkey - 快捷键字符串，如 "Ctrl+Alt+K"
- */
-async function registerGlobalHotkey(hotkey) {
-    return safeInvoke('register_global_hotkey', { hotkey }, undefined);
-}
-
-// ─── 延迟检测 API ───
-
-/**
- * 获取当前连接延迟（毫秒）
- * @returns {Promise<number|null>}
- */
-async function getLatency() {
-    return safeInvoke('get_latency', {}, null);
-}
-
-// ─── 遗留进程清理 API ───
-
-/**
- * 检测并终止 kvnshare 遗留进程
- * @returns {Promise<boolean>} - true 表示找到并终止了遗留进程
- */
-async function killLegacyProcess() {
-    return safeInvoke('kill_legacy_process', {}, false);
-}
-
-// ─── 本机信息 API ───
-
-/**
- * 获取本机局域网 IP 地址列表
- * @returns {Promise<string[]>}
- */
-async function getLocalIp() {
-    return safeInvoke('get_local_ip', {}, []);
-}
-
-// ─── 设备发现与连接 API ───
-
-/**
- * 发现所有可用设备
- * @returns {Promise<DeviceInfo[]>}
- */
-async function discoverDevices() {
-    return safeInvoke('discover_devices', {}, []);
-}
-
-/**
- * 连接到指定设备
- * @param {string} deviceId
- * @returns {Promise<ConnectionResult>}
- */
-async function connectToDevice(deviceId) {
-    return safeInvoke('connect_to_device', { deviceId }, { success: false, error: 'Tauri 未就绪' });
-}
-
-/**
- * 断开连接
- */
-async function disconnectDevices() {
-    return safeInvoke('disconnect_devices', {}, undefined);
-}
-
-/**
- * 获取连接状态
- * @returns {Promise<string|null>}
- */
-async function getConnectionStatus() {
-    return safeInvoke('get_connection_status', {}, null);
-}
-
-// ─── 跨网段直连 API ───
-
-/**
- * 通过手动输入的 IP 地址直接发起 TCP 连接（跨网段直连）
- * @param {string} ip - 目标 IPv4 地址
- * @param {number} port - 目标端口
- * @returns {Promise<{success: boolean, errorType: string, errorMessage: string}>}
+ * 通过 IP 直连（映射到 connect_to_peer）
+ * @param {string} ip
+ * @param {number} port
  */
 async function connectByIp(ip, port) {
-    return safeInvoke('connect_by_ip', { ip, port }, {
-        success: false,
-        errorType: 'tauri_unavailable',
-        errorMessage: 'Tauri 未就绪',
-    });
+    try {
+        await safeInvoke('connect_to_peer', { peer_ip: ip }, '');
+        return { success: true, errorType: null, errorMessage: null };
+    } catch (e) {
+        return { success: false, errorType: 'connection_failed', errorMessage: String(e) };
+    }
 }
 
 /**
- * 获取本机所有非回环 IPv4 网卡及其 IP 地址列表
+ * 获取连接历史（本地存储实现，后端无此接口）
+ * @returns {Promise<Array>}
+ */
+async function getConnectionHistory() {
+    try {
+        const raw = localStorage.getItem('kvmini_connection_history');
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+/**
+ * 保存连接历史条目（本地存储实现）
+ * @param {object} entry
+ */
+async function saveConnectionHistory(entry) {
+    try {
+        const history = await getConnectionHistory();
+        const exists = history.findIndex(h => h.ip === entry.ip);
+        if (exists >= 0) history.splice(exists, 1);
+        history.unshift({ ...entry, lastConnected: Date.now() });
+        if (history.length > 20) history.splice(20);
+        localStorage.setItem('kvmini_connection_history', JSON.stringify(history));
+    } catch {}
+}
+
+/**
+ * 清除连接历史（本地存储实现）
+ */
+async function clearConnectionHistory() {
+    localStorage.removeItem('kvmini_connection_history');
+}
+
+/**
+ * 获取网络接口列表（映射到 get_local_ip）
  * @returns {Promise<Array<{name: string, ip: string}>>}
  */
 async function getNetworkInterfaces() {
-    return safeInvoke('get_network_interfaces', {}, []);
+    const ips = await getLocalIp();
+    return ips.map((ip, i) => ({ name: `网卡 ${i + 1}`, ip }));
 }
 
 /**
- * 设置 KVMini 服务端监听地址和端口
- * @param {string} ip - 监听 IP（"0.0.0.0" 表示所有网卡）
- * @param {number} port - 监听端口（1024-65535）
+ * 设置监听地址（新架构中端口在配置中统一管理，此处为兼容存根）
  */
 async function setListenAddress(ip, port) {
-    return safeInvoke('set_listen_address', { ip, port }, undefined);
+    // 新架构中端口通过 save_settings 统一管理
+    return undefined;
 }
 
 /**
- * 获取当前监听配置
+ * 获取监听配置（从设置中读取）
  * @returns {Promise<{ip: string, port: number}>}
  */
 async function getListenConfig() {
-    return safeInvoke('get_listen_config', {}, { ip: '0.0.0.0', port: 8889 });
+    const settings = await getSettings();
+    return { ip: '0.0.0.0', port: settings.port || 23456 };
 }
 
 // ─── 导出 ───
 window.Platform = {
     init: initPlatform,
+    // 版本信息
+    getAppVersion,
+    getPlatform,
     // 设置
     getSettings,
     saveSettings,
-    // 历史记录
+    resetSettings,
+    // 连接
+    startListening,
+    connectToPeer,
+    disconnectPeer,
+    getConnectionStatus,
+    // 本机信息
+    getLocalIp,
+    // 自启动
+    getAutostartStatus,
+    setAutostart,
+    // macOS 权限
+    checkAccessibilityPermission,
+    requestAccessibilityPermission,
+    openAccessibilitySettings,
+    // 通知
+    showNotification,
+    // 兼容接口
+    connectByIp,
     getConnectionHistory,
     saveConnectionHistory,
     clearConnectionHistory,
-    // 通知
-    showNotification,
-    // 快捷键
-    registerGlobalHotkey,
-    // 延迟
-    getLatency,
-    // 遗留进程
-    killLegacyProcess,
-    // 本机信息
-    getLocalIp,
-    // 设备
-    discoverDevices,
-    connectToDevice,
-    disconnectDevices,
-    getConnectionStatus,
-    // 跨网段直连
-    connectByIp,
     getNetworkInterfaces,
     setListenAddress,
     getListenConfig,
