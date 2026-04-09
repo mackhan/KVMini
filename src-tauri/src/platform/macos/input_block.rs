@@ -3,23 +3,16 @@
 use kvm_core::error::KvmResult;
 use kvm_core::platform::InputBlocker;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct MacInputBlocker {
     blocked: Arc<AtomicBool>,
-    _tap_handle: Mutex<Option<BlockTapHandle>>,
-}
-
-struct BlockTapHandle {
-    #[cfg(target_os = "macos")]
-    _tap: core_graphics::event::CGEventTap,
 }
 
 impl MacInputBlocker {
     pub fn new() -> Self {
         Self {
             blocked: Arc::new(AtomicBool::new(false)),
-            _tap_handle: Mutex::new(None),
         }
     }
 }
@@ -32,9 +25,8 @@ impl InputBlocker for MacInputBlocker {
         #[cfg(target_os = "macos")]
         {
             let blocked = Arc::clone(&self.blocked);
-            match create_block_tap(blocked) {
-                Ok(handle) => { *self._tap_handle.lock().unwrap() = Some(handle); }
-                Err(e) => { log::warn!("[Mac] 创建屏蔽 EventTap 失败: {}，降级为软屏蔽", e); }
+            if let Err(e) = create_block_tap(blocked) {
+                log::warn!("[Mac] 创建屏蔽 EventTap 失败: {}，降级为软屏蔽", e);
             }
         }
         Ok(())
@@ -42,7 +34,6 @@ impl InputBlocker for MacInputBlocker {
 
     fn unblock_input(&self) -> KvmResult<()> {
         self.blocked.store(false, Ordering::SeqCst);
-        *self._tap_handle.lock().unwrap() = None;
         log::info!("[Mac] 本地键鼠已恢复");
         Ok(())
     }
@@ -53,22 +44,26 @@ impl InputBlocker for MacInputBlocker {
 }
 
 #[cfg(target_os = "macos")]
-fn create_block_tap(blocked: Arc<AtomicBool>) -> KvmResult<BlockTapHandle> {
+fn create_block_tap(blocked: Arc<AtomicBool>) -> KvmResult<()> {
     use core_graphics::event::{
-        CGEventMask, CGEventTap, CGEventTapLocation,
+        CGEventTap, CGEventTapLocation,
         CGEventTapOptions, CGEventTapPlacement, CGEventType,
     };
     use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
 
-    let mask = CGEventMask::new(vec![
+    let mask = vec![
         CGEventType::MouseMoved,
-        CGEventType::LeftMouseDown, CGEventType::LeftMouseUp,
-        CGEventType::RightMouseDown, CGEventType::RightMouseUp,
-        CGEventType::OtherMouseDown, CGEventType::OtherMouseUp,
+        CGEventType::LeftMouseDown,
+        CGEventType::LeftMouseUp,
+        CGEventType::RightMouseDown,
+        CGEventType::RightMouseUp,
+        CGEventType::OtherMouseDown,
+        CGEventType::OtherMouseUp,
         CGEventType::ScrollWheel,
-        CGEventType::KeyDown, CGEventType::KeyUp,
+        CGEventType::KeyDown,
+        CGEventType::KeyUp,
         CGEventType::FlagsChanged,
-    ]);
+    ];
 
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
@@ -87,5 +82,5 @@ fn create_block_tap(blocked: Arc<AtomicBool>) -> KvmResult<BlockTapHandle> {
     run_loop.add_source(&loop_source, unsafe { kCFRunLoopDefaultMode });
     tap.enable();
 
-    Ok(BlockTapHandle { _tap: tap })
+    Ok(())
 }

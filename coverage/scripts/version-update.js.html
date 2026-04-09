@@ -23,9 +23,9 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">28.26% </span>
+                <span class="strong">25.45% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>13/46</span>
+                <span class='fraction'>14/55</span>
             </div>
         
             
@@ -37,16 +37,16 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">33.33% </span>
+                <span class="strong">28.57% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>2/6</span>
+                <span class='fraction'>2/7</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">28.26% </span>
+                <span class="strong">25.45% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>13/46</span>
+                <span class='fraction'>14/55</span>
             </div>
         
             
@@ -158,12 +158,34 @@
 <a name='L93'></a><a href='#L93'>93</a>
 <a name='L94'></a><a href='#L94'>94</a>
 <a name='L95'></a><a href='#L95'>95</a>
-<a name='L96'></a><a href='#L96'>96</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -229,6 +251,13 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -236,6 +265,19 @@
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -261,6 +303,7 @@ const path = require('path');
 // 文件路径
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
 const cargoTomlPath = path.join(__dirname, '..', 'src-tauri', 'Cargo.toml');
+const workspaceCargoTomlPath = path.join(__dirname, '..', 'Cargo.toml');
 &nbsp;
 // 验证版本格式
 function validateVersion(version) {
@@ -321,6 +364,25 @@ function <span class="fstat-no" title="function not covered" >updateCargoToml(</
   }
 }
 &nbsp;
+// 更新根目录 workspace Cargo.toml 版本号
+function <span class="fstat-no" title="function not covered" >updateWorkspaceCargoToml(</span>newVersion) {
+<span class="cstat-no" title="statement not covered" >  try {</span>
+    let cargoContent = <span class="cstat-no" title="statement not covered" >fs.readFileSync(workspaceCargoTomlPath, 'utf8');</span>
+    
+    // 匹配 [workspace.package] 块中的 version 行
+<span class="cstat-no" title="statement not covered" >    cargoContent = cargoContent.replace(</span>
+      /(\[workspace\.package\][^\[]*version\s*=\s*\")[0-9.]+(\")/s,
+      `$1${newVersion}$2`
+    );
+    
+<span class="cstat-no" title="statement not covered" >    fs.writeFileSync(workspaceCargoTomlPath, cargoContent);</span>
+<span class="cstat-no" title="statement not covered" >    console.log(`✅ Updated workspace Cargo.toml version to ${newVersion}`);</span>
+  } catch (error) {
+<span class="cstat-no" title="statement not covered" >    console.error('Error updating workspace Cargo.toml:', error.message);</span>
+<span class="cstat-no" title="statement not covered" >    process.exit(1);</span>
+  }
+}
+&nbsp;
 // 主函数
 function <span class="fstat-no" title="function not covered" >main(</span>) {
 <span class="cstat-no" title="statement not covered" >  console.log('🚀 Starting version update...');</span>
@@ -333,6 +395,7 @@ function <span class="fstat-no" title="function not covered" >main(</span>) {
   
 <span class="cstat-no" title="statement not covered" >  updatePackageJson(newVersion);</span>
 <span class="cstat-no" title="statement not covered" >  updateCargoToml(newVersion);</span>
+<span class="cstat-no" title="statement not covered" >  updateWorkspaceCargoToml(newVersion);</span>
   
 <span class="cstat-no" title="statement not covered" >  console.log('🎉 Version update completed successfully!');</span>
 <span class="cstat-no" title="statement not covered" >  console.log(`\nNext steps:`);</span>
@@ -348,14 +411,14 @@ function <span class="fstat-no" title="function not covered" >main(</span>) {
 <span class="cstat-no" title="statement not covered" >  main();</span>
 }
 &nbsp;
-module.exports = { validateVersion, getCurrentVersion, incrementVersion, updatePackageJson, updateCargoToml, main };</pre></td></tr></table></pre>
+module.exports = { validateVersion, getCurrentVersion, incrementVersion, updatePackageJson, updateCargoToml, updateWorkspaceCargoToml, main };</pre></td></tr></table></pre>
 
                 <div class='push'></div><!-- for sticky footer -->
             </div><!-- /wrapper -->
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-04-04T13:35:29.593Z
+                at 2026-04-09T17:54:44.270Z
             </div>
         <script src="../prettify.js"></script>
         <script>

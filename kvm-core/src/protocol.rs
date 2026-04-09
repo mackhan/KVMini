@@ -482,8 +482,6 @@ fn check_min_payload(payload: &[u8], min: usize) -> KvmResult<()> {
 pub async fn read_frame_async<R: tokio::io::AsyncReadExt + Unpin>(
     reader: &mut R,
 ) -> KvmResult<KvmFrame> {
-    use tokio::io::AsyncReadExt;
-
     let mut header = [0u8; HEADER_SIZE];
     reader.read_exact(&mut header).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -522,7 +520,6 @@ pub async fn write_frame_async<W: tokio::io::AsyncWriteExt + Unpin>(
     writer: &mut W,
     frame: &KvmFrame,
 ) -> KvmResult<()> {
-    use tokio::io::AsyncWriteExt;
     let bytes = encode(frame);
     writer.write_all(&bytes).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::BrokenPipe {

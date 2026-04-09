@@ -16,7 +16,7 @@ set -e
 
 CERT_NAME="KVMini Dev"
 # Tauri 开发构建的可执行文件路径
-BINARY_PATH="src-tauri/target/debug/kvm-share"
+BINARY_PATH="src-tauri/target/debug/kvmini"
 # Tauri 应用包路径（如果存在）
 APP_BUNDLE_PATH="src-tauri/target/debug/bundle/macos/KVM Share.app"
 

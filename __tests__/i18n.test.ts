@@ -37,7 +37,7 @@ describe('i18n 多语言模块', () => {
     it('t() 默认返回中文文本', () => {
       expect(t('appTitle')).toBe('KVM Share');
       expect(t('btnScanDevices')).toBe('扫描设备');
-      expect(t('statusDisconnected')).toBe('断开');
+      expect(t('statusDisconnected')).toBe('未连接');
     });
   });
 
@@ -60,7 +60,7 @@ describe('i18n 多语言模块', () => {
       setLocale('en');
       setLocale('zh');
       expect(t('btnScanDevices')).toBe('扫描设备');
-      expect(t('statusDisconnected')).toBe('断开');
+      expect(t('statusDisconnected')).toBe('未连接');
     });
 
     it('传入无效语言时不改变当前语言', () => {

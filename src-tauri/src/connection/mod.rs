@@ -5,7 +5,7 @@
 //! 通过 Tauri 事件向前端推送连接状态变更。
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 use serde::{Serialize, Deserialize};
 
@@ -193,7 +193,7 @@ impl KvmConnectionManager {
                                     _ => None,
                                 };
                                 if let Some(ev) = conn_event {
-                                    let _ = app.emit_all("connection-status", ev);
+                                let _ = app.emit("connection-status", ev);
                                 }
                             }
                             Err(_) => break,
@@ -240,7 +240,7 @@ pub async fn start_listening(
 ) -> Result<String, String> {
     let addr = mgr.inner.start_listening().await
         .map_err(|e| e.to_string())?;
-    let _ = app_handle.emit_all("connection-status", ConnectionEvent::listening(addr.port()));
+    let _ = app_handle.emit("connection-status", ConnectionEvent::listening(addr.port()));
     Ok(format!("已启动监听，端口 {}", addr.port()))
 }
 
@@ -263,7 +263,7 @@ pub async fn connect_to_peer(
     mgr.set_peer_ip(ip.clone()).await;
 
     let local_info = local_handshake_info();
-    let _ = app_handle.emit_all("connection-status", ConnectionEvent::from_state(
+    let _ = app_handle.emit("connection-status", ConnectionEvent::from_state(
         &ConnectionState::Connecting, Some(&ip)
     ));
 
@@ -278,7 +278,7 @@ pub async fn connect_to_peer(
             }
             Err(e) => {
                 log::error!("[连接] 连接失败: {}", e);
-                let _ = app_clone.emit_all("connection-status", ConnectionEvent::error(&e.to_string()));
+                let _ = app_clone.emit("connection-status", ConnectionEvent::error(&e.to_string()));
             }
         }
     });
@@ -293,7 +293,7 @@ pub async fn disconnect_peer(
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<(), String> {
     mgr.inner.disconnect().await;
-    let _ = app_handle.emit_all("connection-status", ConnectionEvent {
+    let _ = app_handle.emit("connection-status", ConnectionEvent {
         event_type: "disconnected".to_string(),
         connected: false,
         peer_ip: None,

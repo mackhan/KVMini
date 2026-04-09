@@ -3,7 +3,11 @@
     windows_subsystem = "windows"
 )]
 
-use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayMenu, SystemTrayMenuItem};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 
 // ── 模块声明 ──────────────────────────────────────────────────────────────
 #[macro_use]
@@ -82,23 +86,6 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
-// ── 系统托盘 ──────────────────────────────────────────────────────────────
-
-fn build_tray_menu() -> SystemTrayMenu {
-    let show       = CustomMenuItem::new("show",       "显示窗口");
-    let connect    = CustomMenuItem::new("connect",    "连接设备");
-    let disconnect = CustomMenuItem::new("disconnect", "断开连接");
-    let quit       = CustomMenuItem::new("quit",       "退出");
-
-    SystemTrayMenu::new()
-        .add_item(show)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(connect)
-        .add_item(disconnect)
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(quit)
-}
-
 // ── 主函数 ────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -106,39 +93,29 @@ async fn main() {
     // 初始化日志
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let tray_menu  = build_tray_menu();
-    let system_tray = SystemTray::new().with_menu(tray_menu);
+    // 调试：捕获 panic 消息
+    #[cfg(debug_assertions)]
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            eprintln!("[PANIC HOOK] panic info: {}", info);
+            if let Some(location) = info.location() {
+                eprintln!("[PANIC HOOK] location: {}:{}:{}", location.file(), location.line(), location.column());
+            }
+            if let Some(msg) = info.payload().downcast_ref::<&str>() {
+                eprintln!("[PANIC HOOK] message: {}", msg);
+            } else if let Some(msg) = info.payload().downcast_ref::<String>() {
+                eprintln!("[PANIC HOOK] message: {}", msg);
+            }
+            default_hook(info);
+        }));
+    }
 
     tauri::Builder::default()
-        .system_tray(system_tray)
-        .on_system_tray_event(|app, event| {
-            use tauri::SystemTrayEvent;
-            match event {
-                SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                    "show" => {
-                        if let Some(w) = app.get_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                    "connect"    => { let _ = app.emit_all("tray-connect", ()); }
-                    "disconnect" => { let _ = app.emit_all("tray-disconnect", ()); }
-                    "quit"       => { std::process::exit(0); }
-                    _ => {}
-                },
-                SystemTrayEvent::LeftClick { .. } => {
-                    if let Some(w) = app.get_window("main") {
-                        if w.is_visible().unwrap_or(false) {
-                            let _ = w.hide();
-                        } else {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                }
-                _ => {}
-            }
-        })
+        // 注册 Tauri 2.x 插件
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 注册所有 Tauri 命令
         .invoke_handler(tauri::generate_handler![
             // 通用
@@ -165,7 +142,60 @@ async fn main() {
         // 托管连接管理器状态
         .manage(connection::KvmConnectionManager::new())
         .setup(|app| {
-            let app_handle = app.handle();
+            // ── 构建系统托盘菜单 ──────────────────────────────────────────
+            let show       = MenuItem::with_id(app, "show",       "显示窗口", true, None::<&str>)?;
+            let connect    = MenuItem::with_id(app, "connect",    "连接设备", true, None::<&str>)?;
+            let disconnect = MenuItem::with_id(app, "disconnect", "断开连接", true, None::<&str>)?;
+            let separator  = PredefinedMenuItem::separator(app)?;
+            let separator2 = PredefinedMenuItem::separator(app)?;
+            let quit       = MenuItem::with_id(app, "quit",       "退出",     true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[
+                &show,
+                &separator,
+                &connect,
+                &disconnect,
+                &separator2,
+                &quit,
+            ])?;
+
+            // ── 构建系统托盘图标 ──────────────────────────────────────────
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "connect"    => { let _ = app.emit("tray-connect", ()); }
+                    "disconnect" => { let _ = app.emit("tray-disconnect", ()); }
+                    "quit"       => { std::process::exit(0); }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
+            let app_handle = app.handle().clone();
 
             // 启动连接事件监听循环
             {
@@ -174,7 +204,7 @@ async fn main() {
             }
 
             // 推送初始连接状态
-            let _ = app_handle.emit_all("connection-status", connection::ConnectionEvent {
+            let _ = app_handle.emit("connection-status", connection::ConnectionEvent {
                 event_type: "disconnected".to_string(),
                 connected: false,
                 peer_ip: None,
@@ -189,7 +219,7 @@ async fn main() {
                 use platform::macos::permission::{check_accessibility, AccessibilityStatus};
                 if check_accessibility() != AccessibilityStatus::Granted {
                     log::warn!("[Mac] 辅助功能权限未授权，通知前端引导用户");
-                    let _ = app_handle.emit_all("accessibility-required", serde_json::json!({
+                    let _ = app_handle.emit("accessibility-required", serde_json::json!({
                         "message": "KVMini 需要辅助功能权限才能采集和注入键鼠事件",
                         "guide": [
                             "打开「系统设置」→「隐私与安全性」→「辅助功能」",
@@ -207,7 +237,7 @@ async fn main() {
 
             #[cfg(debug_assertions)]
             {
-                if let Some(window) = app.get_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }
             }

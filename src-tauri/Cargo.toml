@@ -1,5 +1,5 @@
 [package]
-name = "kvm-share"
+name = "kvmini"
 version.workspace = true
 description = "Cross-platform mouse and keyboard sharing software"
 authors = ["KVM Share Team"]
@@ -7,13 +7,16 @@ license = "MIT"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 kvm-core = { path = "../kvm-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "1.8", features = [ "shell-open", "system-tray", "notification-all", "global-shortcut-all"] }
+tauri = { version = "2", features = [ "tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
 tokio = { version = "1.0", features = ["full"] }
 lazy_static = "1.4"
 dirs = "5.0"
@@ -37,5 +40,9 @@ winapi = { version = "0.3", features = ["winuser", "winbase", "processthreadsapi
 winreg = "0.52"
 
 [features]
-default = ["custom-protocol"]
-custom-protocol = []
+default = []
+
+[lints.rust]
+# objc 0.2 的宏会产生 unexpected_cfgs(cargo-clippy) warning，这是上游问题
+unexpected_cfgs = "allow"
+

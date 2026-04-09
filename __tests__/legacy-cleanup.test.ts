@@ -71,15 +71,20 @@ describe('遗留进程清理 - 清理脚本文件存在性', () => {
 });
 
 describe('遗留进程清理 - 应用启动时自动清理', () => {
-    test('应用启动时调用 kill_legacy_process 命令', async () => {
-        // 验证 main.rs 的 setup 函数中包含 kill_legacy_process 调用
+    test('main.rs 包含 setup 函数和连接管理命令（kill_legacy_process 已移除，由平台层脚本替代）', async () => {
+        // kill_legacy_process 命令已从 Rust 后端移除，改由 scripts/cleanup-legacy.sh 和
+        // scripts/cleanup-legacy.ps1 在安装/卸载时处理遗留进程清理
         const fs = require('fs');
         const path = require('path');
         const mainRs = fs.readFileSync(
             path.join(__dirname, '../src-tauri/src/main.rs'),
             'utf-8'
         );
-        expect(mainRs).toContain('kill_legacy_process');
+        // 验证 setup 函数存在
         expect(mainRs).toContain('setup');
+        // 验证连接管理命令存在（替代了旧的 kill_legacy_process）
+        expect(mainRs).toContain('start_listening');
+        expect(mainRs).toContain('connect_to_peer');
+        expect(mainRs).toContain('disconnect_peer');
     });
 });

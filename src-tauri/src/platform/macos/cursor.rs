@@ -62,7 +62,6 @@ fn warp_cursor(x: i32, y: i32) -> KvmResult<()> {
 
 #[cfg(target_os = "macos")]
 fn get_cursor_position() -> KvmResult<(i32, i32)> {
-    use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
     #[repr(C)]
     struct NSPoint { x: f64, y: f64 }

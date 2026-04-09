@@ -4,10 +4,10 @@
 # 用途：当系统显示已授权但应用仍提示未授权时使用
 # 使用方法：bash scripts/reset-accessibility-permission.sh
 
-BUNDLE_ID="com.kvmshare.app"
-APP_NAME="KVM Share"
+BUNDLE_ID="com.kvmini.app"
+APP_NAME="KVMini"
 
-echo "🔧 KVM Share 辅助功能权限重置工具"
+echo "🔧 KVMini 辅助功能权限重置工具"
 echo "======================================"
 echo ""
 
@@ -46,10 +46,10 @@ fi
 echo ""
 echo "✅ 完成！请按以下步骤重新授权："
 echo ""
-echo "  1. 重新打开 KVM Share 应用"
+echo "  1. 重新打开 KVMini 应用"
 echo "  2. 应用会弹出权限引导页面"
 echo "  3. 点击「前往授权」按钮"
-echo "  4. 在系统设置中找到 KVM Share，打开开关"
+echo "  4. 在系统设置中找到 KVMini，打开开关"
 echo "  5. 返回应用，权限授予后自动继续"
 echo ""
 echo "💡 提示：如果仍然无效，请尝试重启 Mac 后再操作"

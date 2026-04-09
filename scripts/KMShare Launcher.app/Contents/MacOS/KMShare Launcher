@@ -18,10 +18,10 @@ if ! command -v npm &>/dev/null; then
     exit 1
 fi
 
-# 在新终端窗口中启动
+# 在新终端窗口中构建并安装
 osascript <<EOF
 tell application "Terminal"
     activate
-    set newTab to do script "cd '$PROJECT_DIR' && npm run dev"
+    set newTab to do script "cd '$PROJECT_DIR' && npm run build && echo '构建完成，正在安装...' && cp -R 'src-tauri/target/release/bundle/macos/KVM Share.app' /Applications/ && echo '安装完成！正在启动...' && open '/Applications/KVM Share.app'"
 end tell
 EOF

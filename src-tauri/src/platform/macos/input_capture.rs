@@ -50,20 +50,24 @@ fn start_event_tap(
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
 ) -> KvmResult<()> {
     use core_graphics::event::{
-        CGEventMask, CGEventTap, CGEventTapLocation,
+        CGEventTap, CGEventTapLocation,
         CGEventTapOptions, CGEventTapPlacement, CGEventType,
     };
     use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
 
-    let mask = CGEventMask::new(vec![
+    let mask = vec![
         CGEventType::MouseMoved,
-        CGEventType::LeftMouseDown, CGEventType::LeftMouseUp,
-        CGEventType::RightMouseDown, CGEventType::RightMouseUp,
-        CGEventType::OtherMouseDown, CGEventType::OtherMouseUp,
+        CGEventType::LeftMouseDown,
+        CGEventType::LeftMouseUp,
+        CGEventType::RightMouseDown,
+        CGEventType::RightMouseUp,
+        CGEventType::OtherMouseDown,
+        CGEventType::OtherMouseUp,
         CGEventType::ScrollWheel,
-        CGEventType::KeyDown, CGEventType::KeyUp,
+        CGEventType::KeyDown,
+        CGEventType::KeyUp,
         CGEventType::FlagsChanged,
-    ]);
+    ];
 
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
@@ -103,7 +107,7 @@ fn cg_event_to_raw(
     event_type: core_graphics::event::CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> Option<RawInputEvent> {
-    use core_graphics::event::{CGEventType, CGEventField};
+    use core_graphics::event::CGEventType;
     use kvm_core::platform::MouseButton;
 
     match event_type {
@@ -118,16 +122,19 @@ fn cg_event_to_raw(
         CGEventType::OtherMouseDown => Some(RawInputEvent::MouseDown { button: MouseButton::Middle }),
         CGEventType::OtherMouseUp   => Some(RawInputEvent::MouseUp   { button: MouseButton::Middle }),
         CGEventType::ScrollWheel => {
-            let dx = event.get_integer_value_field(CGEventField::ScrollWheelEventPointDeltaAxis2) as i32;
-            let dy = event.get_integer_value_field(CGEventField::ScrollWheelEventPointDeltaAxis1) as i32;
+            // ScrollWheelEventPointDeltaAxis2 = 97, ScrollWheelEventPointDeltaAxis1 = 96
+            let dx = event.get_integer_value_field(97) as i32;
+            let dy = event.get_integer_value_field(96) as i32;
             Some(RawInputEvent::Scroll { dx, dy })
         }
         CGEventType::KeyDown => {
-            let keycode = event.get_integer_value_field(CGEventField::KeyboardEventKeycode) as u16;
+            // KeyboardEventKeycode = 9
+            let keycode = event.get_integer_value_field(9) as u16;
             Some(RawInputEvent::KeyDown { native_keycode: keycode })
         }
         CGEventType::KeyUp => {
-            let keycode = event.get_integer_value_field(CGEventField::KeyboardEventKeycode) as u16;
+            // KeyboardEventKeycode = 9
+            let keycode = event.get_integer_value_field(9) as u16;
             Some(RawInputEvent::KeyUp { native_keycode: keycode })
         }
         _ => None,

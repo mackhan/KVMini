@@ -4,6 +4,9 @@
 //! 并通过条件编译选择当前平台的具体实现。
 //! 所有平台特定代码只在此目录下，通过 #[cfg(target_os)] 隔离。
 
+// 平台层实现已完成，但尚未接入主流程，暂时允许 dead_code
+#![allow(dead_code)]
+
 // 重新导出 kvm-core 的平台 trait（避免外部模块直接依赖 kvm-core）
 #[allow(unused_imports)]
 pub use kvm_core::platform::{

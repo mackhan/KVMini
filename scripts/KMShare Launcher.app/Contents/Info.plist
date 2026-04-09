@@ -7,11 +7,11 @@
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>com.kvmshare.launcher</string>
+    <string>com.kvmini.launcher</string>
     <key>CFBundleName</key>
-    <string>KMShare Launcher</string>
+    <string>KVMini Launcher</string>
     <key>CFBundleDisplayName</key>
-    <string>KMShare Launcher</string>
+    <string>KVMini Launcher</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

@@ -21,14 +21,14 @@ let invoke = null;
 
 /**
  * 安全获取 Tauri invoke 函数
- * 兼容 Tauri 1.x 的多种挂载方式
+ * 兼容 Tauri 2.x 的挂载方式
  */
 function getTauriInvoke() {
-    // Tauri 1.x: withGlobalTauri=true 时挂载到 window.__TAURI__.tauri.invoke
-    if (window.__TAURI__?.tauri?.invoke) {
-        return window.__TAURI__.tauri.invoke;
+    // Tauri 2.x: withGlobalTauri=true 时挂载到 window.__TAURI__.core.invoke
+    if (window.__TAURI__?.core?.invoke) {
+        return window.__TAURI__.core.invoke;
     }
-    // Tauri 1.x 部分版本直接挂载到 window.__TAURI__.invoke
+    // 兼容旧版本直接挂载到 window.__TAURI__.invoke
     if (window.__TAURI__?.invoke) {
         return window.__TAURI__.invoke;
     }

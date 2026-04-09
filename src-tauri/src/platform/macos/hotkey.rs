@@ -13,7 +13,8 @@ pub struct HotkeySpec {
 
 impl HotkeySpec {
     pub fn parse(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.to_lowercase().split('+').collect();
+        let lowered = s.to_lowercase();
+        let parts: Vec<&str> = lowered.split('+').collect();
         let mut modifiers: u64 = 0;
         let mut keycode: Option<u16> = None;
         for part in &parts {

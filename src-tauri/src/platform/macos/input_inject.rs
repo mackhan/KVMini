@@ -109,12 +109,16 @@ fn inject_key(native_keycode: u16, pressed: bool) -> KvmResult<()> {
 
 #[cfg(target_os = "macos")]
 fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
-    use core_graphics::event::{CGEvent, CGScrollEventUnit};
+    use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    // core-graphics 0.23 中 CGScrollEventUnit 是 u32 类型别名
+    // Line = 1, Pixel = 2
+    const SCROLL_UNIT_LINE: u32 = 1;
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
-    let event = CGEvent::new_scroll_event(source, CGScrollEventUnit::Line, 2, dy, dx, 0)
+    let event = CGEvent::new_scroll_event(source, SCROLL_UNIT_LINE, 2, dy, dx, 0)
         .map_err(|_| platform_err!("CGEvent::new_scroll_event", "创建滚轮事件失败"))?;
     event.post(core_graphics::event::CGEventTapLocation::HID);
     Ok(())

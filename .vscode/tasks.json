@@ -1,50 +1,100 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "KVM Share: 启动开发模式",
-            "type": "shell",
-            "command": "npm run dev",
-            "options": {
-                "env": {
-                    "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}"
-                }
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": [],
-            "icon": {
-                "id": "play",
-                "color": "terminal.ansiGreen"
-            }
-        },
-        {
-            "label": "KVM Share: 构建发布版本",
-            "type": "shell",
-            "command": "npm run build",
-            "options": {
-                "env": {
-                    "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}"
-                }
-            },
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": [],
-            "icon": {
-                "id": "package",
-                "color": "terminal.ansiBlue"
-            }
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build (debug)",
+      "type": "shell",
+      "command": "cargo build",
+      "args": [],
+      "options": {
+        "cwd": "${workspaceFolder}/src-tauri",
+        "env": {
+          "RUST_LOG": "debug"
         }
-    ]
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "cargo test build",
+      "type": "shell",
+      "command": "cargo test --no-run",
+      "args": [],
+      "options": {
+        "cwd": "${workspaceFolder}/src-tauri"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "cargo test",
+      "type": "shell",
+      "command": "cargo test",
+      "args": ["--", "--nocapture"],
+      "options": {
+        "cwd": "${workspaceFolder}/src-tauri",
+        "env": {
+          "RUST_LOG": "debug",
+          "RUST_BACKTRACE": "1"
+        }
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "npm test",
+      "type": "shell",
+      "command": "npm test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "tauri dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "RUST_LOG": "debug",
+          "RUST_BACKTRACE": "1"
+        }
+      },
+      "group": "build",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": {
+        "owner": "tauri",
+        "pattern": {
+          "regexp": "^error\\[.*\\].*$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Watching",
+          "endsPattern": "Running"
+        }
+      }
+    }
+  ]
 }
