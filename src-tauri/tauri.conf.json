@@ -1,6 +1,6 @@
 {
   "productName": "KVMini",
-  "identifier": "com.kvmini.app",
+  "identifier": "com.kvmini",
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",

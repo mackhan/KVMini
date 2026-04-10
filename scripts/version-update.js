@@ -7,6 +7,7 @@ const path = require('path');
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
 const cargoTomlPath = path.join(__dirname, '..', 'src-tauri', 'Cargo.toml');
 const workspaceCargoTomlPath = path.join(__dirname, '..', 'Cargo.toml');
+const indexHtmlPath = path.join(__dirname, '..', 'src', 'index.html');
 
 // 验证版本格式
 function validateVersion(version) {
@@ -86,6 +87,22 @@ function updateWorkspaceCargoToml(newVersion) {
   }
 }
 
+// 更新 src/index.html 中的 app-version meta 标签
+function updateIndexHtmlVersion(newVersion) {
+  try {
+    let htmlContent = fs.readFileSync(indexHtmlPath, 'utf8');
+    htmlContent = htmlContent.replace(
+      /<meta name="app-version" content="[0-9.]+"/,
+      `<meta name="app-version" content="${newVersion}"`
+    );
+    fs.writeFileSync(indexHtmlPath, htmlContent);
+    console.log(`✅ Updated index.html app-version meta to ${newVersion}`);
+  } catch (error) {
+    console.error('Error updating index.html:', error.message);
+    process.exit(1);
+  }
+}
+
 // 主函数
 function main() {
   console.log('🚀 Starting version update...');
@@ -99,6 +116,7 @@ function main() {
   updatePackageJson(newVersion);
   updateCargoToml(newVersion);
   updateWorkspaceCargoToml(newVersion);
+  updateIndexHtmlVersion(newVersion);
   
   console.log('🎉 Version update completed successfully!');
   console.log(`\nNext steps:`);
@@ -114,4 +132,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { validateVersion, getCurrentVersion, incrementVersion, updatePackageJson, updateCargoToml, updateWorkspaceCargoToml, main };
+module.exports = { validateVersion, getCurrentVersion, incrementVersion, updatePackageJson, updateCargoToml, updateWorkspaceCargoToml, updateIndexHtmlVersion, main };

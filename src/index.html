@@ -1,13 +1,15 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="app-version" content="0.1.10">
     <title>KVM Share - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
     <script>
-        (function() {
+        (function () {
             try {
                 var s = JSON.parse(localStorage.getItem('kvm_settings') || '{}');
                 var theme = s.theme || 'auto';
@@ -19,10 +21,11 @@
                     var mq = window.matchMedia('(prefers-color-scheme: dark)');
                     document.documentElement.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
                 }
-            } catch(e) {}
+            } catch (e) { }
         })();
     </script>
 </head>
+
 <body>
     <!-- 错误提示横幅 -->
     <div id="error-banner" class="error-banner" style="display:none;">
@@ -35,7 +38,7 @@
         <header>
             <h1 data-i18n="appTitle">KVM Share</h1>
             <p data-i18n="appSubtitle">跨平台鼠标键盘共享软件</p>
-<p class="app-version" id="app-version">v0.2.0</p>
+            <p class="app-version" id="app-version">v0.2.0</p>
         </header>
 
         <!-- macOS 辅助功能权限引导（全屏遮罩，未授权时强制显示，不可关闭） -->
@@ -44,7 +47,7 @@
                 <div class="accessibility-overlay-icon">🔐</div>
                 <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
                 <p class="accessibility-overlay-desc">
-                    KVM Share 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
+                    KVMini 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
                     请在系统设置中授权后，应用将自动继续。
                 </p>
                 <div class="accessibility-overlay-steps">
@@ -54,14 +57,15 @@
                     </div>
                     <div class="accessibility-step">
                         <span class="accessibility-step-num">2</span>
-                        <span>在系统设置中找到 <strong>KVM Share</strong>，打开开关</span>
+                        <span>在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
                     </div>
                     <div class="accessibility-step">
                         <span class="accessibility-step-num">3</span>
                         <span>返回应用，权限授予后自动继续</span>
                     </div>
                 </div>
-                <button id="open-accessibility-btn" class="btn btn-accessibility-overlay" onclick="openAccessibilitySettings()">
+                <button id="open-accessibility-btn" class="btn btn-accessibility-overlay"
+                    onclick="openAccessibilitySettings()">
                     前往授权 →
                 </button>
                 <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
@@ -122,54 +126,53 @@
         <!-- 可滚动内容区域（设备面板 + 历史面板） -->
         <div class="scrollable-content">
 
-        <!-- 设备发现面板 -->
-        <div class="devices-panel">
-            <div class="devices-panel-header">
-                <h3 data-i18n="availableDevices">可用设备</h3>
-                <button id="scan-btn" class="btn btn-scan">
-                    <span id="scan-icon">🔍</span>
-                    <span id="scan-text" data-i18n="btnScan">扫描设备</span>
-                </button>
-            </div>
-            <!-- 扫描动画 -->
-            <div id="scan-animation" class="scan-animation hidden">
-                <div class="scan-dot"></div>
-                <div class="scan-dot"></div>
-                <div class="scan-dot"></div>
-                <span data-i18n="scanningHint">正在扫描局域网设备...</span>
-            </div>
-            <div id="devices-list" class="devices-list">
-                <div class="no-devices">点击"扫描设备"发现局域网内的设备</div>
-            </div>
-            <!-- 手动连接区域（跨网段直连） -->
-            <div class="manual-connect-section">
-                <div class="manual-connect-header">
-                    <span class="manual-connect-title" data-i18n="manualConnectTitle">🔗 手动连接（跨网段）</span>
-                    <span class="manual-connect-hint" data-i18n="manualConnectHint">适用于不同网段的设备</span>
+            <!-- 设备发现面板 -->
+            <div class="devices-panel">
+                <div class="devices-panel-header">
+                    <h3 data-i18n="availableDevices">可用设备</h3>
+                    <button id="scan-btn" class="btn btn-scan">
+                        <span id="scan-icon">🔍</span>
+                        <span id="scan-text" data-i18n="btnScan">扫描设备</span>
+                    </button>
                 </div>
-                <div class="manual-connect-form">
-                    <input type="text" id="manual-ip-input" class="manual-ip-input"
-                           placeholder="请输入目标设备 IP 地址"
-                           data-i18n-placeholder="manualIpPlaceholder"
-                           maxlength="15">
-                    <input type="number" id="manual-port-input" class="manual-port-input"
-                           placeholder="端口" value="8889" min="1024" max="65535">
-                    <button id="manual-connect-btn" class="btn btn-manual-connect" data-i18n="btnManualConnect">连接</button>
+                <!-- 扫描动画 -->
+                <div id="scan-animation" class="scan-animation hidden">
+                    <div class="scan-dot"></div>
+                    <div class="scan-dot"></div>
+                    <div class="scan-dot"></div>
+                    <span data-i18n="scanningHint">正在扫描局域网设备...</span>
                 </div>
-                <div id="manual-connect-status" class="manual-connect-status hidden"></div>
+                <div id="devices-list" class="devices-list">
+                    <div class="no-devices">点击"扫描设备"发现局域网内的设备</div>
+                </div>
+                <!-- 手动连接区域（跨网段直连） -->
+                <div class="manual-connect-section">
+                    <div class="manual-connect-header">
+                        <span class="manual-connect-title" data-i18n="manualConnectTitle">🔗 手动连接（跨网段）</span>
+                        <span class="manual-connect-hint" data-i18n="manualConnectHint">适用于不同网段的设备</span>
+                    </div>
+                    <div class="manual-connect-form">
+                        <input type="text" id="manual-ip-input" class="manual-ip-input" placeholder="请输入目标设备 IP 地址"
+                            data-i18n-placeholder="manualIpPlaceholder" maxlength="15">
+                        <input type="number" id="manual-port-input" class="manual-port-input" placeholder="端口"
+                            value="8889" min="1024" max="65535">
+                        <button id="manual-connect-btn" class="btn btn-manual-connect"
+                            data-i18n="btnManualConnect">连接</button>
+                    </div>
+                    <div id="manual-connect-status" class="manual-connect-status hidden"></div>
+                </div>
             </div>
-        </div>
 
-        <!-- 连接历史面板 -->
-        <div class="history-panel">
-            <div class="history-panel-header">
-                <h3 data-i18n="connectionHistory">连接历史</h3>
-                <button id="clear-history-btn" class="btn btn-text" data-i18n="btnClearHistory">清除</button>
+            <!-- 连接历史面板 -->
+            <div class="history-panel">
+                <div class="history-panel-header">
+                    <h3 data-i18n="connectionHistory">连接历史</h3>
+                    <button id="clear-history-btn" class="btn btn-text" data-i18n="btnClearHistory">清除</button>
+                </div>
+                <div id="history-list" class="history-list">
+                    <div class="no-history">暂无连接历史</div>
+                </div>
             </div>
-            <div id="history-list" class="history-list">
-                <div class="no-history">暂无连接历史</div>
-            </div>
-        </div>
 
         </div><!-- /.scrollable-content -->
 
@@ -211,10 +214,9 @@
                     <div class="settings-item">
                         <label data-i18n="labelToggleFocus">切换控制焦点:</label>
                         <div class="hotkey-input-group">
-                            <input type="text" id="hotkey-input" class="hotkey-input" 
-                                   placeholder="点击此处录入快捷键（默认：Ctrl+Alt+S）" readonly
-                                   data-i18n-placeholder="hotkeyPlaceholder"
-                                   data-hotkey="">
+                            <input type="text" id="hotkey-input" class="hotkey-input"
+                                placeholder="点击此处录入快捷键（默认：Ctrl+Alt+S）" readonly
+                                data-i18n-placeholder="hotkeyPlaceholder" data-hotkey="">
                             <button class="btn btn-small" onclick="clearHotkey()" data-i18n="btnClearHotkey">清除</button>
                         </div>
                         <p class="feature-hint" data-i18n="hotkeyHint">按下此快捷键可在本机和远端之间切换键鼠控制权</p>
@@ -272,12 +274,13 @@
                     <p class="feature-hint" data-i18n="listenIfaceHint">选择本机用于接受远端连接的网络接口，通常选“所有网卡”即可</p>
                     <div class="settings-item">
                         <label data-i18n="labelListenPort">监听端口:</label>
-                        <input type="number" id="listen-port-input" class="settings-input-number"
-                               value="8889" min="1024" max="65535" placeholder="1024-65535">
+                        <input type="number" id="listen-port-input" class="settings-input-number" value="8889"
+                            min="1024" max="65535" placeholder="1024-65535">
                     </div>
                     <div class="settings-item">
                         <label style="color:#6b7280;font-size:12px;" data-i18n="labelListenAddress">对端连接地址:</label>
-                        <span id="listen-address-display" style="font-family:monospace;font-size:12px;color:#374151;">-</span>
+                        <span id="listen-address-display"
+                            style="font-family:monospace;font-size:12px;color:#374151;">-</span>
                     </div>
                 </div>
 
@@ -311,7 +314,8 @@
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
-                    <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）</p>
+                    <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）
+                    </p>
                 </div>
 
                 <!-- 安全与加密 -->
@@ -328,9 +332,11 @@
                     <div class="settings-item" id="tls-fingerprint-row">
                         <label data-i18n="labelLocalFingerprint">本机证书指纹:</label>
                         <span id="local-tls-fingerprint" class="tls-fingerprint-text">加载中...</span>
-                        <button class="btn btn-small" onclick="copyTlsFingerprint()" data-i18n="btnCopyFingerprint">复制</button>
+                        <button class="btn btn-small" onclick="copyTlsFingerprint()"
+                            data-i18n="btnCopyFingerprint">复制</button>
                     </div>
-                    <p class="feature-hint" id="tls-fingerprint-hint" data-i18n="tlsFingerprintHint">对端首次连接时需核对此指纹，确认一致后方可信任连接</p>
+                    <p class="feature-hint" id="tls-fingerprint-hint" data-i18n="tlsFingerprintHint">
+                        对端首次连接时需核对此指纹，确认一致后方可信任连接</p>
                 </div>
 
                 <!-- 显示器布局配置 -->
@@ -343,7 +349,8 @@
                         <div class="monitor-list-header">
                             <span data-i18n="labelMonitorList">显示器列表</span>
                             <span id="monitor-count-badge" class="monitor-count-badge">1</span>
-                            <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器" onclick="refreshMonitors()">↺</button>
+                            <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器"
+                                onclick="refreshMonitors()">↺</button>
                         </div>
                         <div id="monitor-list" class="monitor-list">
                             <!-- 由 JS 动态填充 -->
@@ -375,7 +382,8 @@
                             </select>
                         </div>
                         <div class="display-layout-hint" id="display-layout-hint">
-                            <span data-i18n="hintTriggerEdge">当前：鼠标超出</span> <strong id="trigger-edge-text">右边缘</strong> <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
+                            <span data-i18n="hintTriggerEdge">当前：鼠标超出</span> <strong id="trigger-edge-text">右边缘</strong>
+                            <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
                         </div>
                     </div>
                 </div>
@@ -385,7 +393,7 @@
                     <button class="btn btn-primary" data-i18n="btnSaveSettings" onclick="saveSettings()">保存设置</button>
                     <button class="btn btn-outline" data-i18n="btnCancel" onclick="closeSettings()">取消</button>
                 </div>
-<div class="settings-version" id="settings-version">v0.2.0</div>
+                <div class="settings-version" id="settings-version">v0.2.0</div>
             </div>
         </div>
     </div>
@@ -412,15 +420,16 @@
         </div>
     </div>
 
-<script src="i18n.js"></script>
-<script src="theme.js"></script>
-<script src="platform.js"></script>
-<script src="connection.js"></script>
-<script src="ui.js"></script>
-<script src="history.js"></script>
-<script src="settings.js"></script>
-<script src="layout.js"></script>
-<script src="accessibility.js"></script>
-<script src="main.js"></script>
+    <script src="i18n.js"></script>
+    <script src="theme.js"></script>
+    <script src="platform.js"></script>
+    <script src="connection.js"></script>
+    <script src="ui.js"></script>
+    <script src="history.js"></script>
+    <script src="settings.js"></script>
+    <script src="layout.js"></script>
+    <script src="accessibility.js"></script>
+    <script src="main.js"></script>
 </body>
+
 </html>

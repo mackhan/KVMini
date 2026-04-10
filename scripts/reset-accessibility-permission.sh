@@ -4,7 +4,7 @@
 # 用途：当系统显示已授权但应用仍提示未授权时使用
 # 使用方法：bash scripts/reset-accessibility-permission.sh
 
-BUNDLE_ID="com.kvmini.app"
+BUNDLE_ID="com.kvmini"
 APP_NAME="KVMini"
 
 echo "🔧 KVMini 辅助功能权限重置工具"

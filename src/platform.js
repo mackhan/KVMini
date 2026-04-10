@@ -27,7 +27,7 @@ function initPlatform(invokeFunc) {
  */
 async function safeInvoke(cmd, args = {}, fallback = null) {
     if (!_invoke) {
-        console.warn(`[Platform] Tauri 未就绪，命令 "${cmd}" 降级处理`);
+        console.warn(`[Platform] Tauri 未就绪，命令 "${cmd}" 降级处理`, cmd);
         return fallback;
     }
     try {
@@ -41,11 +41,22 @@ async function safeInvoke(cmd, args = {}, fallback = null) {
 // ─── 版本信息 API ───
 
 /**
+ * 从 HTML meta 标签读取版本号（降级用，由构建脚本注入）
+ * @returns {string} 版本号字符串，如 "0.1.8"
+ */
+function getVersionFromMeta() {
+    if (typeof document === 'undefined') return 'unknown';
+    const meta = document.querySelector('meta[name="app-version"]');
+    return meta ? meta.getAttribute('content') : 'unknown';
+}
+
+/**
  * 从后端读取应用版本号（两端保持一致，不使用硬编码值）
- * @returns {Promise<string>} 版本号字符串，如 "0.2.0"
+ * 降级时从 HTML meta 标签读取（由构建脚本注入 package.json 版本号）
+ * @returns {Promise<string>} 版本号字符串，如 "0.1.8"
  */
 async function getAppVersion() {
-    return safeInvoke('get_app_version', {}, '0.2.0');
+    return safeInvoke('get_app_version', {}, getVersionFromMeta());
 }
 
 /**

@@ -36,15 +36,53 @@ function getTauriInvoke() {
     return null;
 }
 
+/**
+ * 等待 window.__TAURI__ 就绪
+ * Tauri 2.x build 版本中，window.__TAURI__ 是通过注入脚本异步挂载的，
+ * DOMContentLoaded 触发时可能尚未就绪，需要轮询等待。
+ * @param {number} timeout - 超时毫秒数，默认 3000ms
+ * @param {number} interval - 轮询间隔毫秒数，默认 50ms
+ * @returns {Promise<boolean>} true=就绪，false=超时降级
+ */
+function waitForTauri(timeout = 3000, interval = 50) {
+    return new Promise((resolve) => {
+        // 已经就绪，立即 resolve
+        if (getTauriInvoke()) {
+            resolve(true);
+            return;
+        }
+
+        const startTime = Date.now();
+        const timer = setInterval(() => {
+            if (getTauriInvoke()) {
+                clearInterval(timer);
+                resolve(true);
+                return;
+            }
+            if (Date.now() - startTime >= timeout) {
+                clearInterval(timer);
+                console.warn(
+                    `[KVMini] waitForTauri 超时（${timeout}ms），window.__TAURI__ 状态:`,
+                    window.__TAURI__
+                );
+                resolve(false); // 降级模式启动
+            }
+        }, interval);
+    });
+}
+
 // DOM元素引用（在 DOMContentLoaded 后初始化）
 let elements = {};
 
 // 初始化应用
 function initApp() {
+    console.log('[KVMini] initApp 开始，window.__TAURI__ 就绪状态:', !!window.__TAURI__);
     // 安全获取 invoke
     invoke = getTauriInvoke();
     if (!invoke) {
-        console.warn('Tauri invoke 未就绪，部分功能不可用（非 Tauri 环境）');
+        console.warn('[KVMini] Tauri invoke 未就绪，部分功能不可用（非 Tauri 环境）');
+    } else {
+        console.log('[KVMini] invoke 已就绪，invoke 类型:', typeof invoke);
     }
 
     // 初始化平台抽象层
@@ -129,6 +167,13 @@ function initApp() {
             (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
         elements.hintPanel.style.display = isWindows ? '' : 'none';
     }
+
+    // 启动时检测辅助功能权限，未授权则显示引导遮罩（macOS 专属）
+    window.AccessibilityModule.checkAccessibilityPermission(invoke);
+
+    // 延迟初始化显示器布局配置（需要 invoke 就绪后才能调用后端）
+    // 注意：此处已在 waitForTauri 完成后执行，invoke 状态已确定
+    setTimeout(initDisplayLayout, 500);
 }
 
 /**
@@ -152,6 +197,10 @@ function prefillDefaultIp() {
 
 // 设置事件监听器
 function setupEventListeners() {
+    if (!elements.disconnectBtn) {
+        console.error('[KVMini] 严重错误：disconnect-btn 元素不存在，事件绑定失败！');
+        return;
+    }
     elements.disconnectBtn.addEventListener('click', handleDisconnect);
     if (elements.reconnectBtn) {
         elements.reconnectBtn.addEventListener('click', handleReconnect);
@@ -1135,15 +1184,20 @@ function updateOverlayI18n() {
 /**
  * 初始化版本号显示
  * 通过 Platform.getAppVersion() 从后端读取，两端保持一致
+ * 降级时从 HTML meta 标签读取（由构建脚本注入 package.json 版本号）
  */
 async function initVersion() {
-    let version = 'v0.2.0'; // 静态降级值（仅在 Tauri 未就绪时使用）
+    let version = 'vunknown';
 
     try {
         const v = await window.Platform.getAppVersion();
-        if (v) version = `v${v}`;
+        if (v && v !== 'unknown') {
+            version = `v${v}`;
+        } else {
+            console.warn('[KVMini] initVersion 降级：getAppVersion 返回空值，使用 meta 标签版本');
+        }
     } catch (e) {
-        // 降级使用静态值
+        console.warn('[KVMini] initVersion 降级：getAppVersion 调用失败:', e);
     }
 
     if (elements.appVersion) elements.appVersion.textContent = version;
@@ -1434,8 +1488,13 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
-// 启动应用
-document.addEventListener('DOMContentLoaded', initApp);
+// 启动应用：等待 window.__TAURI__ 就绪后再初始化
+// Tauri 2.x build 版本中 window.__TAURI__ 是异步注入的，DOMContentLoaded 时可能尚未就绪
+document.addEventListener('DOMContentLoaded', () => {
+    waitForTauri().then(() => {
+        initApp();
+    });
+});
 
 // 暴露全局函数用于 HTML 内联调用
 window.connectToDevice = connectToDevice;
@@ -1852,141 +1911,40 @@ async function saveLayoutConfig() {
     }
 }
 
-// 在 DOMContentLoaded 后初始化布局配置
-document.addEventListener('DOMContentLoaded', () => {
-    // 延迟初始化，等待 invoke 可用
-    setTimeout(initDisplayLayout, 500);
-    setTimeout(checkAccessibilityPermission, 800);
-});
+// 注意：布局配置初始化已移入 initApp() 中，在 waitForTauri 完成后调用
+// 不再使用独立的 DOMContentLoaded 监听器，避免 invoke 未就绪时的时序问题
 
-// ─── macOS 辅助功能权限检测 ───────────────────────────────────────────────
-
-/** 权限轮询定时器 ID */
-let accessibilityPollTimer = null;
+// ─── macOS 辅助功能权限检测（委托给 AccessibilityModule）────────────────────
 
 /**
  * 检测辅助功能权限，未授权时显示全屏遮罩引导
- * Windows 平台不需要此权限，直接跳过
  */
-async function checkAccessibilityPermission() {
-    const overlay = document.getElementById('accessibility-overlay');
-    if (!overlay || !invoke) return;
-
-    // Windows 平台不需要辅助功能权限，隐藏遮罩并返回
-    const isWindows = navigator.userAgent.includes('Windows') ||
-        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
-    if (isWindows) {
-        overlay.classList.add('hidden');
-        return;
-    }
-
-    try {
-        const status = await invoke('check_accessibility');
-        if (status === 'Denied') {
-            overlay.classList.remove('hidden');
-            // 启动轮询：每 2 秒检测一次，授权后自动隐藏
-            startAccessibilityPolling();
-        } else {
-            overlay.classList.add('hidden');
-            stopAccessibilityPolling();
-        }
-    } catch (e) {
-        // 检测失败，隐藏遮罩（不影响主功能）
-        overlay.classList.add('hidden');
-    }
+function checkAccessibilityPermission() {
+    window.AccessibilityModule.checkAccessibilityPermission(invoke);
 }
 
 /**
- * 启动权限轮询（每 2 秒检测一次）
- */
-function startAccessibilityPolling() {
-    if (accessibilityPollTimer) return; // 已在轮询中
-    accessibilityPollTimer = setInterval(async () => {
-        try {
-            const status = await invoke('check_accessibility');
-            if (status !== 'Denied') {
-                // 权限已授权，隐藏全屏遮罩并停止轮询
-                const overlay = document.getElementById('accessibility-overlay');
-                if (overlay) overlay.classList.add('hidden');
-                stopAccessibilityPolling();
-                // 权限授予后，若已连接则隐藏权限提示并恢复开始共享按钮
-                if (appState.connected) {
-                    hidePermissionWarning();
-                }
-            }
-        } catch (e) {
-            // 忽略轮询错误
-        }
-    }, 2000);
-}
-
-/**
- * 任务3：连接成功后检查辅助功能权限
- * - macOS 且权限 Denied：显示提示，禁用开始共享按钮
- * - macOS 且权限 Granted / Windows：隐藏提示，启用开始共享按钮
+ * 连接成功后检查辅助功能权限
  */
 async function checkPermissionAfterConnect() {
-    // 显示开始共享按钮
-    if (elements.startSharingBtn) {
-        elements.startSharingBtn.classList.remove('hidden');
-    }
-
-    // Windows 平台不需要权限检查
-    const isWindows = navigator.userAgent.includes('Windows') ||
-        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
-    if (isWindows || !invoke) {
-        hidePermissionWarning();
-        return;
-    }
-
-    try {
-        const status = await invoke('check_accessibility');
-        if (status === 'Denied') {
-            showPermissionWarning();
-        } else {
-            hidePermissionWarning();
-        }
-    } catch (e) {
-        // 检测失败，不影响主功能
-        hidePermissionWarning();
-    }
+    await window.AccessibilityModule.checkPermissionAfterConnect(elements, invoke);
 }
 
 /**
  * 显示连接后权限不足提示，禁用开始共享按钮
  */
 function showPermissionWarning() {
-    if (elements.permissionWarning) {
-        elements.permissionWarning.classList.remove('hidden');
-    }
-    if (elements.startSharingBtn) {
-        elements.startSharingBtn.disabled = true;
-    }
+    window.AccessibilityModule.showPermissionWarning(elements);
 }
 
 /**
  * 隐藏连接后权限不足提示，恢复开始共享按钮
  */
 function hidePermissionWarning() {
-    if (elements.permissionWarning) {
-        elements.permissionWarning.classList.add('hidden');
-    }
-    if (elements.startSharingBtn) {
-        elements.startSharingBtn.disabled = false;
-        // 断开连接时也隐藏开始共享按钮
-        if (!appState.connected) {
-            elements.startSharingBtn.classList.add('hidden');
-        }
-    }
-}
-
-/**
- * 停止权限轮询
- */
-function stopAccessibilityPolling() {
-    if (accessibilityPollTimer) {
-        clearInterval(accessibilityPollTimer);
-        accessibilityPollTimer = null;
+    window.AccessibilityModule.hidePermissionWarning(elements);
+    // 断开连接时隐藏开始共享按钮
+    if (elements.startSharingBtn && !appState.connected) {
+        elements.startSharingBtn.classList.add('hidden');
     }
 }
 
@@ -1994,15 +1952,7 @@ function stopAccessibilityPolling() {
  * 打开辅助功能设置页面
  */
 async function openAccessibilitySettings() {
-    if (!invoke) return;
-
-    try {
-        await invoke('open_accessibility_prefs');
-        // 3 秒后重新检测权限（用户可能已授权）
-        setTimeout(checkAccessibilityPermission, 3000);
-    } catch (e) {
-        showError(`无法打开系统偏好设置: ${e}`);
-    }
+    await window.AccessibilityModule.openAccessibilitySettings(invoke);
 }
 
 // 暴露全局函数

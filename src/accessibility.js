@@ -6,6 +6,11 @@
  * - 权限状态检测
  * - 轮询检测（授权后自动隐藏遮罩）
  * - 连接后权限检查
+ *
+ * 权限状态枚举（与 Rust 保持一致）：
+ * - "Granted"：已授权
+ * - "Denied"：未授权
+ * - "NA"：不适用（非 macOS 平台）
  */
 
 // ─── 纯函数：平台检测 ─────────────────────────────────────────────────────────
@@ -32,7 +37,11 @@ let _accessibilityPollTimer = null;
  */
 async function checkAccessibilityPermission(invoke) {
     const overlay = document.getElementById('accessibility-overlay');
-    if (!overlay || !invoke) return;
+    if (!overlay) return;
+    if (!invoke) {
+        console.warn('[Accessibility] invoke 未就绪，跳过权限检测（请确认 waitForTauri 已完成）');
+        return;
+    }
 
     // Windows 平台不需要辅助功能权限
     if (isWindowsPlatform()) {
@@ -42,14 +51,19 @@ async function checkAccessibilityPermission(invoke) {
 
     try {
         const status = await invoke('check_accessibility_permission');
-        if (status === 'Denied' || status === '未授权') {
+        console.log('[Accessibility] 权限检测结果:', status);
+        // 统一使用英文枚举：非 "Granted" 即显示遮罩（包括 "Denied"、"NA"、"Unknown" 等）
+        if (status !== 'Granted') {
+            console.log('[Accessibility] 权限未授权，显示引导遮罩');
             overlay.classList.remove('hidden');
             startAccessibilityPolling(invoke);
         } else {
+            console.log('[Accessibility] 权限已授权，隐藏遮罩');
             overlay.classList.add('hidden');
             stopAccessibilityPolling();
         }
-    } catch {
+    } catch (e) {
+        console.warn('[Accessibility] 权限检测异常，隐藏遮罩:', e);
         overlay.classList.add('hidden');
     }
 }
@@ -63,9 +77,13 @@ function startAccessibilityPolling(invoke) {
     _accessibilityPollTimer = setInterval(async () => {
         try {
             const status = await invoke('check_accessibility_permission');
-            if (status !== 'Denied' && status !== '未授权') {
+            // 统一使用英文枚举：Granted 表示已授权
+            if (status === 'Granted') {
                 const overlay = document.getElementById('accessibility-overlay');
-                if (overlay) overlay.classList.add('hidden');
+                if (overlay) {
+                    console.log('[Accessibility] 轮询检测到权限已授权，隐藏遮罩');
+                    overlay.classList.add('hidden');
+                }
                 stopAccessibilityPolling();
             }
         } catch {
@@ -103,7 +121,8 @@ async function checkPermissionAfterConnect(elements, invoke) {
 
     try {
         const status = await invoke('check_accessibility_permission');
-        if (status === 'Denied' || status === '未授权') {
+        // 统一使用英文枚举：非 "Granted" 即显示权限警告
+        if (status !== 'Granted') {
             showPermissionWarning(elements);
         } else {
             hidePermissionWarning(elements);

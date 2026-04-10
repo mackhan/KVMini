@@ -13,9 +13,9 @@ pub enum AccessibilityStatus {
 impl std::fmt::Display for AccessibilityStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Granted => write!(f, "已授权"),
-            Self::Denied  => write!(f, "未授权"),
-            Self::Unknown => write!(f, "未知"),
+            Self::Granted => write!(f, "Granted"),
+            Self::Denied  => write!(f, "Denied"),
+            Self::Unknown => write!(f, "NA"),
         }
     }
 }

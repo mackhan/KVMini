@@ -137,7 +137,7 @@ describe('Bug 3：主控端/被控端切换按钮正常工作', () => {
     let connected = true;
     await (window as any).__TAURI__.invoke('set_role', { newRole: 'Client' });
     if (connected) {
-      await (window as any).__TAURI__.invoke('disconnect_tcp').catch(() => {});
+      await (window as any).__TAURI__.invoke('disconnect_tcp').catch(() => { });
       connected = false;
     }
     expect(connected).toBe(false);
@@ -205,21 +205,21 @@ describe('连接流程完整性', () => {
 
 describe('macOS 辅助功能权限检测', () => {
   test('Denied 时显示遮罩', async () => {
-    mockInvoke.mockResolvedValueOnce('Denied');
-    const status = await (window as any).__TAURI__.invoke('check_accessibility');
-    expect(status === 'Denied').toBe(true);
+    mockInvoke.mockResolvedValueOnce('未授权');
+    const status = await (window as any).__TAURI__.invoke('check_accessibility_permission');
+    expect(status === '未授权' || status === 'Denied').toBe(true);
   });
 
   test('Granted 时隐藏遮罩', async () => {
-    mockInvoke.mockResolvedValueOnce('Granted');
-    const status = await (window as any).__TAURI__.invoke('check_accessibility');
-    expect(status === 'Denied').toBe(false);
+    mockInvoke.mockResolvedValueOnce('已授权');
+    const status = await (window as any).__TAURI__.invoke('check_accessibility_permission');
+    expect(status === '未授权' || status === 'Denied').toBe(false);
   });
 
-  test('open_accessibility_prefs 打开系统偏好设置', async () => {
+  test('open_accessibility_settings 打开系统偏好设置', async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
-    await (window as any).__TAURI__.invoke('open_accessibility_prefs');
-    expect(mockInvoke).toHaveBeenCalledWith('open_accessibility_prefs');
+    await (window as any).__TAURI__.invoke('open_accessibility_settings');
+    expect(mockInvoke).toHaveBeenCalledWith('open_accessibility_settings');
   });
 });
 
@@ -297,5 +297,68 @@ describe('快捷键录入', () => {
 
   test('Cmd+Space 正确解析', () => {
     expect(capture({ ctrlKey: false, altKey: false, shiftKey: false, metaKey: true, key: ' ' })).toBe('Cmd+ ');
+  });
+});
+
+// ── Bug #005：辅助功能权限遮罩文字应显示 KVMini 而非 KVM Share ──────────────
+
+describe('Bug #005：权限遮罩文字品牌名称正确', () => {
+  beforeEach(() => {
+    // 加载真实 HTML 内容
+    document.body.innerHTML = require('fs').readFileSync(
+      require('path').join(__dirname, '../src/index.html'),
+      'utf-8'
+    ).replace(/^[\s\S]*<body[^>]*>/, '').replace(/<\/body>[\s\S]*$/, '');
+  });
+
+  test('权限遮罩描述文字不包含 KVM Share', () => {
+    const desc = document.querySelector('.accessibility-overlay-desc');
+    expect(desc?.textContent).not.toContain('KVM Share');
+  });
+
+  test('权限遮罩步骤文字不包含 KVM Share', () => {
+    const steps = document.querySelector('.accessibility-overlay-steps');
+    expect(steps?.textContent).not.toContain('KVM Share');
+  });
+
+  test('权限遮罩描述文字包含 KVMini', () => {
+    const desc = document.querySelector('.accessibility-overlay-desc');
+    expect(desc?.textContent).toContain('KVMini');
+  });
+
+  test('权限遮罩步骤文字包含 KVMini', () => {
+    const steps = document.querySelector('.accessibility-overlay-steps');
+    expect(steps?.textContent).toContain('KVMini');
+  });
+});
+
+// ── Bug #006：启动时必须调用权限检测，否则权限引导永远不出现 ──────────────
+
+describe('Bug #006：main.js initApp 必须调用 checkAccessibilityPermission', () => {
+  test('main.js 源码中 initApp 函数必须调用 checkAccessibilityPermission', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const mainJs = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
+
+    // 提取 initApp 函数体（从 function initApp 到下一个顶层 function）
+    const initAppMatch = mainJs.match(/function initApp\(\)[^{]*\{([\s\S]*?)(?=\n\/\*\*|\nfunction |\n\/\/ ─)/);
+    expect(initAppMatch).not.toBeNull();
+
+    const initAppBody = initAppMatch![1];
+    // initApp 必须调用 checkAccessibilityPermission 或 AccessibilityModule.checkAccessibilityPermission
+    const callsPermissionCheck =
+      initAppBody.includes('checkAccessibilityPermission') ||
+      initAppBody.includes('AccessibilityModule.checkAccessibilityPermission');
+
+    expect(callsPermissionCheck).toBe(true);
+  });
+
+  test('main.js 中 checkAccessibilityPermission 调用必须传入 invoke', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const mainJs = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
+
+    // 确认调用时传入了 invoke 参数
+    expect(mainJs).toMatch(/checkAccessibilityPermission\s*\(\s*invoke\s*\)/);
   });
 });
