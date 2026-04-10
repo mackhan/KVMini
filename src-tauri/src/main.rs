@@ -189,26 +189,54 @@ fn emit_initial_status(app: &tauri::AppHandle) {
     });
 }
 
-/// 检查 macOS 辅助功能权限，未授权时通知前端引导用户
+/// 检查 macOS 辅助功能权限，并通知前端，权限不足时启动后台轮询
 fn check_macos_permission(app: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use platform::macos::permission::{check_accessibility, AccessibilityStatus};
-        if check_accessibility() != AccessibilityStatus::Granted {
+        let status = check_accessibility();
+        log::info!("[Mac] 辅助功能权限状态: {:?}", status);
+
+        if status == AccessibilityStatus::Granted {
+            // 已授权：通知前端隐藏遮罩
+            let _ = app.emit("accessibility://permission-granted", ());
+            log::info!("[Mac] 辅助功能权限已授权，通知前端");
+        } else {
+            // 未授权：通知前端显示引导遮罩，并启动后台轮询
             log::warn!("[Mac] 辅助功能权限未授权，通知前端引导用户");
-            let _ = app.emit("accessibility-required", serde_json::json!({
-                "message": "KVMini 需要辅助功能权限才能采集和注入键鼠事件",
-                "guide": [
-                    "打开「系统设置」→「隐私与安全性」→「辅助功能」",
-                    "找到 KVMini 并开启权限",
-                    "重启 KVMini 使权限生效"
-                ]
-            }));
+            let _ = app.emit("accessibility://permission-denied", ());
+            start_accessibility_polling(app.clone());
         }
     }
     // 非 macOS 平台无需权限检查
     #[cfg(not(target_os = "macos"))]
     let _ = app;
+}
+
+/// 启动后台权限轮询（每 2 秒检测一次，授权后发送 granted 事件并停止）
+#[cfg(target_os = "macos")]
+fn start_accessibility_polling(app: tauri::AppHandle) {
+    use platform::macos::permission::{check_accessibility, AccessibilityStatus};
+    use std::thread;
+    use std::time::Duration;
+
+    thread::spawn(move || {
+        log::info!("[Mac] 启动辅助功能权限轮询（每 2 秒）");
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            match check_accessibility() {
+                AccessibilityStatus::Granted => {
+                    log::info!("[Mac] 轮询检测到权限已授权，通知前端");
+                    let _ = app.emit("accessibility://permission-granted", ());
+                    break;
+                }
+                _ => {
+                    // 继续轮询
+                }
+            }
+        }
+        log::info!("[Mac] 辅助功能权限轮询已停止");
+    });
 }
 
 // ── 主函数 ────────────────────────────────────────────────────────────────

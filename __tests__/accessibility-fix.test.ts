@@ -71,101 +71,72 @@ describe('根因 A：main.js 底部第二个 DOMContentLoaded 监听器修复', 
     });
 });
 
-// ─── 根因 B：waitForTauri 超时后 invoke 为 null 时打印警告 ────────────────────
+// ─── 根因 B：新架构 - 前端不再主动 invoke，无需处理 invoke 为 null 的情况 ────────
 
-describe('根因 B：invoke 为 null 时 checkAccessibilityPermission 打印警告', () => {
-    test('invoke 为 null 时：应打印包含"invoke 未就绪"的警告日志', async () => {
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => { });
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(null);
-
-        expect(warnSpy).toHaveBeenCalledWith(
-            expect.stringContaining('invoke 未就绪')
-        );
-        warnSpy.mockRestore();
+describe('根因 B：新架构 - 前端不再主动 invoke', () => {
+    test('新架构：accessibility.js 不再包含 checkAccessibilityPermission 函数', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const content = fs.readFileSync(path.join(__dirname, '../src/accessibility.js'), 'utf-8');
+        expect(content).not.toContain('function checkAccessibilityPermission');
     });
 
-    test('invoke 为 null 时：不崩溃，不抛出错误', async () => {
-        await expect(
-            (window as any).AccessibilityModule.checkAccessibilityPermission(null)
-        ).resolves.not.toThrow();
+    test('新架构：accessibility.js 不再包含 startAccessibilityPolling 函数', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const content = fs.readFileSync(path.join(__dirname, '../src/accessibility.js'), 'utf-8');
+        expect(content).not.toContain('function startAccessibilityPolling');
     });
 
-    test('invoke 为 null 时：遮罩保持原状（不显示也不隐藏）', async () => {
-        const overlay = document.getElementById('accessibility-overlay');
-        // 初始状态：hidden
-        expect(overlay?.classList.contains('hidden')).toBe(true);
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(null);
-
-        // invoke 为 null 时，遮罩应保持 hidden（不能因为 invoke 未就绪就显示遮罩）
-        expect(overlay?.classList.contains('hidden')).toBe(true);
+    test('新架构：前端启动时不再主动调用 check_accessibility_permission（main.js 中不调用）', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const content = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
+        // main.js 中不应有 check_accessibility_permission 的直接调用
+        expect(content).not.toContain("invoke('check_accessibility_permission')");
     });
 });
+// ─── 根因 C：新架构 - Rust 推送事件，前端被动响应 ─────────────────────────
 
-// ─── 根因 C：Rust 返回英文枚举，JS 检测 status !== 'Granted' ─────────────────
+describe('根因 C：新架构 - Rust 推送事件，前端被动响应', () => {
+    let tauriListeners: Record<string, Function[]> = {};
 
-describe('根因 C：Rust 英文枚举返回值与 JS 检测条件统一', () => {
-    test('Rust 返回 "Denied" 时：应显示权限引导遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(false);
-        expect(mockInvoke).toHaveBeenCalledWith('check_accessibility_permission');
+    beforeEach(() => {
+        tauriListeners = {};
+        createAccessibilityDOM();
+        (window as any).__TAURI__ = {
+            invoke: jest.fn(),
+            event: {
+                listen: jest.fn((name: string, cb: Function) => {
+                    if (!tauriListeners[name]) tauriListeners[name] = [];
+                    tauriListeners[name].push(cb);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+        jest.resetModules();
+        require('../src/accessibility.js');
     });
 
-    test('Rust 返回 "Granted" 时：应隐藏权限引导遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-        // 先显示遮罩
+    test('Rust 发送 permission-denied 事件时：应显示权限引导遮罩', () => {
+        tauriListeners['accessibility://permission-denied']?.forEach(cb => cb({}));
+        const overlay = document.getElementById('accessibility-overlay');
+        expect(overlay?.classList.contains('hidden')).toBe(false);
+    });
+
+    test('Rust 发送 permission-granted 事件时：应隐藏权限引导遮罩', () => {
         document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
+        tauriListeners['accessibility://permission-granted']?.forEach(cb => cb({}));
         const overlay = document.getElementById('accessibility-overlay');
         expect(overlay?.classList.contains('hidden')).toBe(true);
     });
 
-    test('Rust 返回 "NA" 时：应显示权限引导遮罩（非 Granted 即显示）', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('NA');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(false);
-    });
-
-    test('Rust 返回 "Unknown" 时：应显示权限引导遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Unknown');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(false);
-    });
-
-    test('accessibility.js 中不应再使用中文字符串"未授权"作为检测条件', () => {
+    test('accessibility.js 中权限检测应使用 Tauri 事件而非 invoke', () => {
         const fs = require('fs');
         const path = require('path');
-        const accessibilityJsPath = path.join(__dirname, '../src/accessibility.js');
-        const content = fs.readFileSync(accessibilityJsPath, 'utf-8');
-
-        // 检测条件中不应出现中文"未授权"
-        // 允许注释中出现，但不允许在 if 条件中出现
-        const ifConditionMatches = content.match(/if\s*\([^)]*未授权[^)]*\)/g) || [];
-        expect(ifConditionMatches.length).toBe(0);
-    });
-
-    test('accessibility.js 中权限检测应使用 status !== "Granted" 逻辑', () => {
-        const fs = require('fs');
-        const path = require('path');
-        const accessibilityJsPath = path.join(__dirname, '../src/accessibility.js');
-        const content = fs.readFileSync(accessibilityJsPath, 'utf-8');
-
-        // 应包含 !== 'Granted' 或 status !== "Granted" 的检测逻辑
-        const hasGrantedCheck = content.includes("!== 'Granted'") || content.includes('!== "Granted"');
-        expect(hasGrantedCheck).toBe(true);
+        const content = fs.readFileSync(path.join(__dirname, '../src/accessibility.js'), 'utf-8');
+        expect(content).toContain('accessibility://permission-denied');
+        expect(content).toContain('accessibility://permission-granted');
     });
 
     test('permission.rs 中 Display 实现应返回英文枚举字符串', () => {
@@ -173,16 +144,12 @@ describe('根因 C：Rust 英文枚举返回值与 JS 检测条件统一', () =>
         const path = require('path');
         const permissionRsPath = path.join(__dirname, '../src-tauri/src/platform/macos/permission.rs');
         const content = fs.readFileSync(permissionRsPath, 'utf-8');
-
-        // Display 实现中不应再出现中文"已授权"/"未授权"
         expect(content).not.toMatch(/write!\(f,\s*"已授权"\)/);
         expect(content).not.toMatch(/write!\(f,\s*"未授权"\)/);
-        // 应包含英文枚举
         expect(content).toContain('"Granted"');
         expect(content).toContain('"Denied"');
     });
 });
-
 // ─── 根因 D：按钮点击 invoke 为 null 时显示明确错误提示 ──────────────────────
 
 describe('根因 D：按钮点击 invoke 为 null 时有明确错误提示', () => {
@@ -223,85 +190,59 @@ describe('根因 D：按钮点击 invoke 为 null 时有明确错误提示', () 
     });
 });
 
-// ─── 诊断日志完整性 ───────────────────────────────────────────────────────────
+// ─── 诊断日志完整性 ─────────────────────────────────────────────────────────────────
 
 describe('诊断日志：关键节点应有日志输出', () => {
-    test('checkAccessibilityPermission 调用时应打印 invoke 状态', async () => {
+    let tauriListeners: Record<string, Function[]> = {};
+
+    beforeEach(() => {
+        tauriListeners = {};
+        createAccessibilityDOM();
+        (window as any).__TAURI__ = {
+            invoke: jest.fn(),
+            event: {
+                listen: jest.fn((name: string, cb: Function) => {
+                    if (!tauriListeners[name]) tauriListeners[name] = [];
+                    tauriListeners[name].push(cb);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+        jest.resetModules();
+        require('../src/accessibility.js');
+    });
+
+    test('收到 permission-denied 事件时应打印日志', () => {
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => { });
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        // 应有日志输出（具体内容不限，只要有日志）
-        // 注意：这里只验证 invoke 为 null 时的警告，invoke 就绪时的日志在 main.js 中
+        tauriListeners['accessibility://permission-denied']?.forEach(cb => cb({}));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('permission-denied'));
         logSpy.mockRestore();
     });
 
-    test('权限遮罩显示时应打印日志', async () => {
+    test('收到 permission-granted 事件时应打印日志', () => {
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => { });
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        // 遮罩显示时应有日志
-        expect(logSpy).toHaveBeenCalledWith(
-            expect.stringContaining('权限')
-        );
-        logSpy.mockRestore();
-    });
-
-    test('权限遮罩隐藏时应打印日志', async () => {
-        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => { });
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        // 遮罩隐藏时应有日志
-        expect(logSpy).toHaveBeenCalledWith(
-            expect.stringContaining('权限')
-        );
+        tauriListeners['accessibility://permission-granted']?.forEach(cb => cb({}));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('permission-granted'));
         logSpy.mockRestore();
     });
 });
+// ─── 轮询：新架构 - 由 Rust 后台线程负责 ───────────────────────────────────────
 
-// ─── 轮询：英文枚举兼容性 ─────────────────────────────────────────────────────
-
-describe('权限轮询：英文枚举兼容性', () => {
-    beforeEach(() => {
-        jest.useFakeTimers();
+describe('轮询：新架构 - 由 Rust 后台线程负责', () => {
+    test('accessibility.js 不再包含前端轮询逻辑', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const content = fs.readFileSync(path.join(__dirname, '../src/accessibility.js'), 'utf-8');
+        expect(content).not.toContain('setInterval');
+        expect(content).not.toContain('startAccessibilityPolling');
     });
 
-    afterEach(() => {
-        jest.useRealTimers();
-    });
-
-    test('轮询中 Rust 返回 "Granted" 时应停止轮询并隐藏遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-
-        jest.advanceTimersByTime(2000);
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(true);
-    });
-
-    test('轮询中 Rust 返回 "Denied" 时应继续轮询，遮罩保持显示', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-
-        jest.advanceTimersByTime(2000);
-        await Promise.resolve();
-        await Promise.resolve();
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(false);
+    test('main.rs 中应包含 start_accessibility_polling 或后台轮询逻辑', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const content = fs.readFileSync(path.join(__dirname, '../src-tauri/src/main.rs'), 'utf-8');
+        // Rust 侧应有轮询逻辑
+        const hasPolling = content.includes('start_accessibility_polling') || content.includes('thread::sleep');
+        expect(hasPolling).toBe(true);
     });
 });

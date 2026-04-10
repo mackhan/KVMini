@@ -174,49 +174,66 @@ describe('getTauriInvoke - invoke 获取', () => {
     });
 });
 
-// ─── invoke 为 null 时 checkAccessibilityPermission 打印警告 ─────────────────
+// ─── 新架构：accessibility.js 事件监听器注册（需求 3.3） ─────────────────────
 
-describe('checkAccessibilityPermission - invoke 为 null 时的日志行为', () => {
+describe('新架构：accessibility.js 事件监听器注册', () => {
     beforeAll(() => {
         (window as any).i18n = { t: (key: string) => key };
-        require('../src/accessibility.js');
     });
 
     beforeEach(() => {
         document.body.innerHTML = `
             <div id="accessibility-overlay" class="accessibility-overlay hidden"></div>
         `;
-        // 重置为 macOS 环境
-        Object.defineProperty(navigator, 'userAgent', {
-            value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            configurable: true,
-        });
+        jest.resetModules();
     });
 
-    test('invoke 为 null 时：不崩溃，不抛出错误', async () => {
-        await expect(
-            (window as any).AccessibilityModule.checkAccessibilityPermission(null)
-        ).resolves.not.toThrow();
+    test('__TAURI__ 存在时：应注册 permission-denied 和 permission-granted 事件监听器', () => {
+        const listeners: Record<string, Function[]> = {};
+        (window as any).__TAURI__ = {
+            invoke: jest.fn(),
+            event: {
+                listen: jest.fn((name: string, cb: Function) => {
+                    if (!listeners[name]) listeners[name] = [];
+                    listeners[name].push(cb);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+
+        require('../src/accessibility.js');
+
+        expect(listeners['accessibility://permission-denied']?.length).toBeGreaterThan(0);
+        expect(listeners['accessibility://permission-granted']?.length).toBeGreaterThan(0);
     });
 
-    test('invoke 为 null 时：遮罩保持隐藏（不显示遮罩）', async () => {
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(null);
+    test('__TAURI__ 不存在时：不抛出异常', () => {
+        delete (window as any).__TAURI__;
+        expect(() => {
+            require('../src/accessibility.js');
+        }).not.toThrow();
+    });
+
+    test('收到 permission-denied 事件时：遮罩显示', () => {
+        const listeners: Record<string, Function[]> = {};
+        (window as any).__TAURI__ = {
+            invoke: jest.fn(),
+            event: {
+                listen: jest.fn((name: string, cb: Function) => {
+                    if (!listeners[name]) listeners[name] = [];
+                    listeners[name].push(cb);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+
+        require('../src/accessibility.js');
+
         const overlay = document.getElementById('accessibility-overlay');
-        // invoke 为 null 时，因为 !invoke 直接 return，遮罩应保持原状（hidden）
         expect(overlay?.classList.contains('hidden')).toBe(true);
-    });
 
-    test('invoke 为 null 时：应打印警告日志（需求 4.2）', async () => {
-        // 此测试验证修复后的行为：invoke 为 null 时应打印警告而非静默 return
-        // 当前实现是静默 return（这个测试会失败，驱动我们修改实现）
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => { });
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(null);
-
-        expect(warnSpy).toHaveBeenCalledWith(
-            expect.stringContaining('invoke 未就绪')
-        );
-        warnSpy.mockRestore();
+        listeners['accessibility://permission-denied']?.forEach(cb => cb({}));
+        expect(overlay?.classList.contains('hidden')).toBe(false);
     });
 });
 

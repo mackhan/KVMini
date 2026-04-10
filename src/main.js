@@ -166,24 +166,9 @@ function initApp() {
         elements.hintPanel.style.display = isWindows ? '' : 'none';
     }
 
-    // 启动时检测辅助功能权限，未授权则显示引导遮罩（macOS 专属）
-    // 异步执行权限检测，并在完成后写入诊断日志快照
-    (async () => {
-        let permissionStatus = null;
-        let overlayState = null;
+    // 新架构：权限检测由 Rust 侧主动推送事件，前端只需注册事件监听器
+    // 事件监听器和「前往授权」按钮绑定已在 accessibility.js 中完成
 
-        try {
-            await window.AccessibilityModule.checkAccessibilityPermission(invoke);
-            // 检测完成后读取遮罩状态
-            const overlay = document.getElementById('accessibility-overlay');
-            overlayState = overlay?.classList.contains('hidden') ? 'hidden' : 'shown';
-            permissionStatus = overlayState === 'hidden' ? 'Granted' : 'Denied';
-        } catch (e) {
-            permissionStatus = 'ERROR:' + e;
-            overlayState = 'unknown';
-        }
-
-    })();
     // 延迟初始化显示器布局配置（需要 invoke 就绪后才能调用后端）
     setTimeout(initDisplayLayout, 500);
 }
@@ -1951,13 +1936,6 @@ async function saveLayoutConfig() {
 // ─── macOS 辅助功能权限检测（委托给 AccessibilityModule）────────────────────
 
 /**
- * 检测辅助功能权限，未授权时显示全屏遮罩引导
- */
-function checkAccessibilityPermission() {
-    window.AccessibilityModule.checkAccessibilityPermission(invoke);
-}
-
-/**
  * 连接成功后检查辅助功能权限
  */
 async function checkPermissionAfterConnect() {
@@ -1981,15 +1959,5 @@ function hidePermissionWarning() {
         elements.startSharingBtn.classList.add('hidden');
     }
 }
-
-/**
- * 打开辅助功能设置页面
- */
-async function openAccessibilitySettings() {
-    await window.AccessibilityModule.openAccessibilitySettings(invoke);
-}
-
-// 暴露全局函数
-window.openAccessibilitySettings = openAccessibilitySettings;
 
 // main.js 加载完成后立即启动应用

@@ -332,33 +332,29 @@ describe('Bug #005：权限遮罩文字品牌名称正确', () => {
   });
 });
 
-// ── Bug #006：启动时必须调用权限检测，否则权限引导永远不出现 ──────────────
+// ── Bug #006：启动时权限引导（新架构：Rust 侧主动推送事件） ──────────────
 
-describe('Bug #006：main.js initApp 必须调用 checkAccessibilityPermission', () => {
-  test('main.js 源码中 initApp 函数必须调用 checkAccessibilityPermission', () => {
+describe('Bug #006：权限引导新架构 - Rust 侧主动推送事件', () => {
+  test('新架构：main.js initApp 不再调用 checkAccessibilityPermission（改为 Rust 推送事件）', () => {
     const fs = require('fs');
     const path = require('path');
     const mainJs = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
 
-    // 提取 initApp 函数体（从 function initApp 到下一个顶层 function）
-    const initAppMatch = mainJs.match(/function initApp\(\)[^{]*\{([\s\S]*?)(?=\n\/\*\*|\nfunction |\n\/\/ ─)/);
-    expect(initAppMatch).not.toBeNull();
-
-    const initAppBody = initAppMatch![1];
-    // initApp 必须调用 checkAccessibilityPermission 或 AccessibilityModule.checkAccessibilityPermission
-    const callsPermissionCheck =
-      initAppBody.includes('checkAccessibilityPermission') ||
-      initAppBody.includes('AccessibilityModule.checkAccessibilityPermission');
-
-    expect(callsPermissionCheck).toBe(true);
+    // 新架构：initApp 不再调用 checkAccessibilityPermission
+    expect(mainJs).not.toContain('checkAccessibilityPermission()');
+    expect(mainJs).not.toContain("invoke('check_accessibility_permission')");
   });
 
-  test('main.js 中 checkAccessibilityPermission 调用必须传入 invoke', () => {
+  test('新架构：accessibility.js 注册 Tauri 事件监听器而非主动 invoke', () => {
     const fs = require('fs');
     const path = require('path');
-    const mainJs = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
+    const accessibilityJs = fs.readFileSync(path.join(__dirname, '../src/accessibility.js'), 'utf-8');
 
-    // 确认调用时传入了 invoke 参数
-    expect(mainJs).toMatch(/checkAccessibilityPermission\s*\(\s*invoke\s*\)/);
+    // 新架构：应监听 Tauri 事件
+    expect(accessibilityJs).toContain('accessibility://permission-denied');
+    expect(accessibilityJs).toContain('accessibility://permission-granted');
+    // 新架构：不再有旧的轮询函数
+    expect(accessibilityJs).not.toContain('function checkAccessibilityPermission');
+    expect(accessibilityJs).not.toContain('function startAccessibilityPolling');
   });
 });

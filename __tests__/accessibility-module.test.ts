@@ -82,68 +82,59 @@ describe('isWindowsPlatform - 平台检测', () => {
     });
 });
 
-// ─── 启动时权限引导 ───────────────────────────────────────────────────────────
+// ─── 启动时权限引导（新架构：事件驱动） ────────────────────────────────────
 
-describe('启动时权限引导 - checkAccessibilityPermission', () => {
-    test('macOS 未授权时：显示全屏遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
+describe('启动时权限引导 - 新架构：事件驱动', () => {
+    let tauriListeners: Record<string, Function[]> = {};
 
+    beforeEach(() => {
+        tauriListeners = {};
+        createAccessibilityDOM();
+        (window as any).__TAURI__ = {
+            invoke: jest.fn(),
+            event: {
+                listen: jest.fn((name: string, cb: Function) => {
+                    if (!tauriListeners[name]) tauriListeners[name] = [];
+                    tauriListeners[name].push(cb);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+        jest.resetModules();
+        require('../src/accessibility.js');
+    });
+
+    test('收到 permission-denied 事件时：显示全屏遮罩', () => {
+        tauriListeners['accessibility://permission-denied']?.forEach(cb => cb({}));
         const overlay = document.getElementById('accessibility-overlay');
         expect(overlay?.classList.contains('hidden')).toBe(false);
-        expect(mockInvoke).toHaveBeenCalledWith('check_accessibility_permission');
     });
 
-    test('macOS 已授权时：隐藏全屏遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-        // 先显示遮罩
+    test('收到 permission-granted 事件时：隐藏全屏遮罩', () => {
         document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
+        tauriListeners['accessibility://permission-granted']?.forEach(cb => cb({}));
         const overlay = document.getElementById('accessibility-overlay');
         expect(overlay?.classList.contains('hidden')).toBe(true);
     });
 
-    test('Windows 平台：跳过检测，直接隐藏遮罩', async () => {
-        Object.defineProperty(navigator, 'userAgent', {
-            value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            configurable: true,
-        });
-        const mockInvoke = jest.fn();
-        // 先显示遮罩
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(true);
-        // Windows 不应调用后端命令
-        expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    test('invoke 为 null 时：不崩溃，静默退出', async () => {
-        await expect(
-            (window as any).AccessibilityModule.checkAccessibilityPermission(null)
-        ).resolves.not.toThrow();
-    });
-
-    test('后端命令异常时：隐藏遮罩（不阻断主流程）', async () => {
-        const mockInvoke = jest.fn().mockRejectedValue(new Error('命令不存在'));
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
-
+    test('Windows 平台：不发送任何权限事件（Rust 侧控制）', () => {
+        // 新架构：Windows 平台由 Rust 侧不发送事件，前端无需处理
+        // 验证：即使没有收到事件，遮罩也保持隐藏
         const overlay = document.getElementById('accessibility-overlay');
         expect(overlay?.classList.contains('hidden')).toBe(true);
     });
 
-    test('返回 Denied（英文）时也应显示遮罩', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-        await (window as any).AccessibilityModule.checkAccessibilityPermission(mockInvoke);
+    test('__TAURI__ 不存在时：不崩溃', () => {
+        delete (window as any).__TAURI__;
+        jest.resetModules();
+        expect(() => require('../src/accessibility.js')).not.toThrow();
+    });
 
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(false);
+    test('遮罩 DOM 不存在时：不崩溃', () => {
+        document.body.innerHTML = '';
+        expect(() => {
+            tauriListeners['accessibility://permission-denied']?.forEach(cb => cb({}));
+        }).not.toThrow();
     });
 });
 
@@ -289,60 +280,22 @@ describe('打开授权设置页 - openAccessibilitySettings', () => {
     });
 });
 
-// ─── 权限轮询 ─────────────────────────────────────────────────────────────────
+// ─── 权限轮询（新架构：由 Rust 后台线程负责，前端无轮询逻辑） ────────────────
 
-describe('权限轮询 - startAccessibilityPolling / stopAccessibilityPolling', () => {
-    beforeEach(() => {
-        // 确保每次测试前轮询已停止（清除模块级变量）
-        (window as any).AccessibilityModule.stopAccessibilityPolling();
-        jest.useFakeTimers();
+describe('权限轮询 - 新架构：由 Rust 后台线程负责', () => {
+    test('AccessibilityModule 不再导出 startAccessibilityPolling', () => {
+        expect((window as any).AccessibilityModule.startAccessibilityPolling).toBeUndefined();
     });
 
-    afterEach(() => {
-        (window as any).AccessibilityModule.stopAccessibilityPolling();
-        jest.useRealTimers();
+    test('AccessibilityModule 不再导出 stopAccessibilityPolling', () => {
+        expect((window as any).AccessibilityModule.stopAccessibilityPolling).toBeUndefined();
     });
 
-    test('重复调用 startAccessibilityPolling 不会创建多个定时器', () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-        const setIntervalSpy = jest.spyOn(global, 'setInterval');
-
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-
-        expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-        setIntervalSpy.mockRestore();
+    test('AccessibilityModule 不再导出 checkAccessibilityPermission', () => {
+        expect((window as any).AccessibilityModule.checkAccessibilityPermission).toBeUndefined();
     });
 
-    test('stopAccessibilityPolling 停止轮询后不再调用 invoke', async () => {
-        const mockInvoke = jest.fn().mockResolvedValue('Denied');
-
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-        (window as any).AccessibilityModule.stopAccessibilityPolling();
-
-        jest.advanceTimersByTime(10000);
-        await Promise.resolve();
-
-        expect(mockInvoke).not.toHaveBeenCalled();
-    });
-
-    test('授权后自动隐藏遮罩并停止轮询', async () => {
-        // 直接返回已授权（轮询触发后立即授权）
-        const mockInvoke = jest.fn().mockResolvedValue('Granted');
-
-        // 先显示遮罩
-        document.getElementById('accessibility-overlay')?.classList.remove('hidden');
-
-        (window as any).AccessibilityModule.startAccessibilityPolling(mockInvoke);
-
-        // 推进 2 秒触发轮询，多次 flush 确保 async 回调完成
-        jest.advanceTimersByTime(2000);
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        const overlay = document.getElementById('accessibility-overlay');
-        expect(overlay?.classList.contains('hidden')).toBe(true);
+    test('AccessibilityModule 导出 initAccessibilityEventListeners', () => {
+        expect(typeof (window as any).AccessibilityModule.initAccessibilityEventListeners).toBe('function');
     });
 });

@@ -131,6 +131,19 @@
 
 ---
 
+## Bug #010：macOS WKWebView 外部脚本隔离导致启动函数不可见（Bug #007/008/009 的真正根因）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | build 版本启动后，辅助功能权限引导遮罩从不出现，按钮点击无响应。问题反复出现 5+ 次，每次修复只解决表面症状，下次构建后复发 |
+| **根因** | macOS WKWebView（Tauri 使用的 WebView 引擎）会在 `<script src="main.js">` 执行完成后，**清除该脚本中新增到 `window` 的属性**，但保留之前脚本中定义的全局函数声明。这导致 `main.js` 中定义的所有启动函数（`kvminiBootstrap`、`initApp`、`waitForTauri` 等）在后续的 `bootstrapApp` 内联脚本中全部不可见（均为 `undefined`），应用永远无法启动。Bug #007/008/009 都是这个根因的表面症状，每次修复都在绕过症状而非解决根因 |
+| **修改方式** | **方案 B（调整脚本顺序）**：1. 将前置内联脚本移到 `<script src="main.js">` 之前，只做一件事：`window.tauriInvokeReady = window.__TAURI__?.core?.invoke \|\| window.__TAURI__?.invoke \|\| null`；2. `main.js` 末尾用 IIFE `startApp()` 直接读取 `window.tauriInvokeReady`，有值则直接调用 `initApp()`，无值则走 `waitForTauri(5000)` 降级路径；3. 删除 `bootstrapApp` 复杂内联脚本；4. 删除 `startup-diagnostics.js`（临时诊断工具，已完成使命）；5. 删除所有 `kvminiBootstrap`、`kvminiBootstrapDone` 等历史遗留暴露 |
+| **修改次数** | 1（本次为彻底架构修复，前 5 次为表面修复） |
+| **出现次数** | 6（含 Bug #007/008/009 的所有复发） |
+| **测试用例** | `__tests__/tauri-startup-arch.test.ts` - 18 个测试，覆盖：tauriInvokeReady 有值直接启动、无值走轮询、超时显示错误、版本号降级、遗留函数已删除 |
+
+---
+
 ## 已知预存在的测试失败（与迁移无关）
 
 以下测试在迁移前就已失败，不属于本次迁移引入的 bug：
