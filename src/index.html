@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.10">
+    <meta name="app-version" content="0.1.12">
     <title>KVM Share - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -429,6 +429,12 @@
     <script src="settings.js"></script>
     <script src="layout.js"></script>
     <script src="accessibility.js"></script>
+    <!-- 前置脚本：在 main.js 加载前捕获 invoke，避免 WKWebView 脚本隔离问题 -->
+    <script>
+        window.tauriInvokeReady = window.__TAURI__?.core?.invoke
+            || window.__TAURI__?.invoke
+            || null;
+    </script>
     <script src="main.js"></script>
 </body>
 

@@ -116,9 +116,39 @@
 
 ---
 
+## Bug #009：权限引导 + 按钮点击无响应（第5次复发，系统性根因修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 1) build 版本启动后，辅助功能权限引导遮罩从不出现；2) 按键悬浮会变色但点击没有任何反应；3) 问题已反复出现 5 次，每次修复只解决表面症状 |
+| **根因 A** | `waitForTauri` 超时后仍调用 `initApp()`，但 `invoke` 仍为 null，权限检测被静默跳过，且无任何用户可见的错误提示 |
+| **根因 B** | 缺乏在 build 版本中可自动运行的诊断手段，每次修复都是盲目的，无法验证 build 版本中 invoke 是否真的就绪 |
+| **根因 C** | 按钮点击无响应：底层 Rust 命令因 `invoke` 未就绪而失败，且没有任何错误提示，用户无法感知 |
+| **修改方式** | 1. 新增启动时自动诊断日志模块（`src/startup-diagnostics.js`），写入 `~/Library/Logs/KVMini/startup.log`；2. `waitForTauri` 超时后显示明确错误提示并终止初始化流程；3. 所有按钮 handler 在 `invoke` 为 null 时显示错误 Toast；4. 新增可在 build 版本中运行的专项测试脚本（`scripts/test-accessibility-e2e.js`） |
+| **修改次数** | 1（本次为第1次系统性根因修复，前4次为表面修复） |
+| **出现次数** | 5 |
+| **测试用例** | `src/tests/startup-diagnostics.test.ts` - 覆盖 waitForTauri 超时、invoke 就绪、按钮点击、诊断日志场景 |
+
+---
+
 ## 已知预存在的测试失败（与迁移无关）
 
 以下测试在迁移前就已失败，不属于本次迁移引入的 bug：
 
 1. `legacy-cleanup.test.ts` - 测试期望 `main.rs` 包含 `kill_legacy_process` 命令（该命令已被移除）
 2. `i18n.test.ts` - 测试期望 `statusDisconnected` 值为 `"断开"`，但实际值为 `"未连接"`（i18n 文本不匹配）
+
+---
+
+## Bug #010：macOS WKWebView 外部脚本隔离导致启动函数不可见（第6次复发，彻底根因修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | build 版本启动后，应用完全无法初始化：辅助功能权限引导从不出现，版本号显示硬编码值，所有按钮点击无响应。问题已反复出现 6 次，每次修复只解决表面症状 |
+| **根因** | macOS WKWebView（Tauri 使用的 WebView 引擎）会在 `<script src="main.js">` 执行完成后，**清除该脚本中新增到 `window` 的属性**，但保留之前脚本中定义的全局函数声明。这导致 `main.js` 中定义的所有启动函数（`kvminiBootstrap`、`initApp`、`waitForTauri` 等）在后续的 `bootstrapApp` 内联脚本中全部不可见（均为 `undefined`），应用永远无法启动。这是 Bug #007/008/009 的真正根因，之前的所有修复都是在错误的假设下进行的 |
+| **问题演化链** | Tauri 2.x 升级 → Bug #007(invoke=null) → 修复(waitForTauri) → Bug #008(第二个监听器冲突) → 修复(删除监听器) → Bug #009(超时后仍调用initApp) → 修复(startup-diagnostics+tauriInvokeReady) → Bug #010(main.js全局变量在bootstrapApp中不可见) → 根因(WKWebView脚本隔离) |
+| **修改方式** | **方案 B（调整脚本顺序）**：1. 将 `bootstrapApp` 内联脚本移到 `<script src="main.js">` **之前**，只做一件事：`window.tauriInvokeReady = window.__TAURI__?.core?.invoke \|\| window.__TAURI__?.invoke \|\| null`；2. `main.js` 末尾直接读取 `window.tauriInvokeReady`：有值则直接调用 `initApp()`，无值则走 `waitForTauri(5000)` 轮询降级路径；3. 删除 `kvminiBootstrap`、`onDOMReady`、`bootstrapApp` 等复杂启动逻辑；4. 删除 `startup-diagnostics.js` 引用；5. 简化 `waitForTauri` 返回 `invoke` 函数而非 `boolean` |
+| **修改次数** | 1（本次为彻底根因修复） |
+| **出现次数** | 6 |
+| **测试用例** | `__tests__/tauri-startup-arch.test.ts` - 覆盖 tauriInvokeReady 有值/无值/超时三种场景，前置脚本逻辑，启动流程集成，版本号降级 |
+| **关键教训** | WKWebView 的脚本隔离特性：外部脚本（`<script src>`）执行完成后，该脚本中新增到 `window` 的属性会被清除。解决方案是让内联脚本在外部脚本之前执行，只做最小化的工作（捕获 invoke），让外部脚本自己完成启动 |

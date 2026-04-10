@@ -16,7 +16,7 @@ let appState = {
     }
 };
 
-// invoke 函数引用（在 DOMContentLoaded 后安全初始化）
+// invoke 函数引用（在启动时安全初始化）
 let invoke = null;
 
 /**
@@ -24,6 +24,10 @@ let invoke = null;
  * 兼容 Tauri 2.x 的挂载方式
  */
 function getTauriInvoke() {
+    // 优先使用前置内联脚本保存的 invoke（最可靠，避免 WKWebView 脚本隔离问题）
+    if (window.tauriInvokeReady) {
+        return window.tauriInvokeReady;
+    }
     // Tauri 2.x: withGlobalTauri=true 时挂载到 window.__TAURI__.core.invoke
     if (window.__TAURI__?.core?.invoke) {
         return window.__TAURI__.core.invoke;
@@ -37,35 +41,34 @@ function getTauriInvoke() {
 }
 
 /**
- * 等待 window.__TAURI__ 就绪
- * Tauri 2.x build 版本中，window.__TAURI__ 是通过注入脚本异步挂载的，
- * DOMContentLoaded 触发时可能尚未就绪，需要轮询等待。
- * @param {number} timeout - 超时毫秒数，默认 3000ms
+ * 等待 Tauri invoke 就绪
+ * 新架构：优先检查 window.tauriInvokeReady（前置内联脚本捕获），
+ * 其次轮询 window.__TAURI__，超时后返回 null（降级模式）。
+ * @param {number} timeout - 超时毫秒数，默认 5000ms
  * @param {number} interval - 轮询间隔毫秒数，默认 50ms
- * @returns {Promise<boolean>} true=就绪，false=超时降级
+ * @returns {Promise<Function|null>} invoke 函数，或 null（超时降级）
  */
-function waitForTauri(timeout = 3000, interval = 50) {
+function waitForTauri(timeout = 5000, interval = 50) {
     return new Promise((resolve) => {
-        // 已经就绪，立即 resolve
-        if (getTauriInvoke()) {
-            resolve(true);
+        // 优先：前置内联脚本已捕获 invoke
+        const earlyInvoke = getTauriInvoke();
+        if (earlyInvoke) {
+            resolve(earlyInvoke);
             return;
         }
 
         const startTime = Date.now();
         const timer = setInterval(() => {
-            if (getTauriInvoke()) {
+            const inv = getTauriInvoke();
+            if (inv) {
                 clearInterval(timer);
-                resolve(true);
+                resolve(inv);
                 return;
             }
             if (Date.now() - startTime >= timeout) {
                 clearInterval(timer);
-                console.warn(
-                    `[KVMini] waitForTauri 超时（${timeout}ms），window.__TAURI__ 状态:`,
-                    window.__TAURI__
-                );
-                resolve(false); // 降级模式启动
+                console.error(`[KVMini] waitForTauri 超时（${timeout}ms），Tauri 环境未就绪`);
+                resolve(null); // 超时降级
             }
         }, interval);
     });
@@ -76,14 +79,9 @@ let elements = {};
 
 // 初始化应用
 function initApp() {
-    console.log('[KVMini] initApp 开始，window.__TAURI__ 就绪状态:', !!window.__TAURI__);
+    console.log('[KVMini] initApp 开始');
     // 安全获取 invoke
     invoke = getTauriInvoke();
-    if (!invoke) {
-        console.warn('[KVMini] Tauri invoke 未就绪，部分功能不可用（非 Tauri 环境）');
-    } else {
-        console.log('[KVMini] invoke 已就绪，invoke 类型:', typeof invoke);
-    }
 
     // 初始化平台抽象层
     window.Platform.init(invoke);
@@ -169,10 +167,24 @@ function initApp() {
     }
 
     // 启动时检测辅助功能权限，未授权则显示引导遮罩（macOS 专属）
-    window.AccessibilityModule.checkAccessibilityPermission(invoke);
+    // 异步执行权限检测，并在完成后写入诊断日志快照
+    (async () => {
+        let permissionStatus = null;
+        let overlayState = null;
 
+        try {
+            await window.AccessibilityModule.checkAccessibilityPermission(invoke);
+            // 检测完成后读取遮罩状态
+            const overlay = document.getElementById('accessibility-overlay');
+            overlayState = overlay?.classList.contains('hidden') ? 'hidden' : 'shown';
+            permissionStatus = overlayState === 'hidden' ? 'Granted' : 'Denied';
+        } catch (e) {
+            permissionStatus = 'ERROR:' + e;
+            overlayState = 'unknown';
+        }
+
+    })();
     // 延迟初始化显示器布局配置（需要 invoke 就绪后才能调用后端）
-    // 注意：此处已在 waitForTauri 完成后执行，invoke 状态已确定
     setTimeout(initDisplayLayout, 500);
 }
 
@@ -210,9 +222,8 @@ function setupEventListeners() {
     elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
     elements.manualConnectBtn.addEventListener('click', handleManualConnect);
 
-    // 手动 IP 输入框回车触发连接
-    elements.manualIpInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleManualConnect();
+    console.log('[KVMini] 按鈕事件监听器绑定状态:', bindStatus);
+    elements.manualIpInput.addEventListener('keydown', (e) => {        if (e.key === 'Enter') handleManualConnect();
     });
 
     // 快捷键录入
@@ -403,7 +414,7 @@ async function loadLocalIp() {
 
 // 处理断开连接
 async function handleDisconnect() {
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
     const { t } = window.i18n;
     try {
         // 断开 TCP 连接（包括握手建立的连接），停止自动重连
@@ -427,10 +438,10 @@ async function handleDisconnect() {
 
 // 处理手动重新连接
 async function handleReconnect() {
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
     try {
         setConnectionStatus('connecting');
-        showReconnectStatus('正在连接...', null);
+        showReconnectStatus('正在连接...');
         updateConnectionButtons(false);
         await invoke('reconnect_to_peer').catch(() => {});
     } catch (error) {
@@ -486,7 +497,7 @@ function showReconnectToast(message) {
 
 // 连接到特定设备
 async function connectToDevice(deviceId) {
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
     const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
@@ -546,6 +557,9 @@ function hideManualConnectStatus() {
  * 处理手动 IP 连接
  */
 async function handleManualConnect() {
+    // 需求 3.1：invoke 为 null 时显示错误提示
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+
     const ip = elements.manualIpInput.value.trim();
     const port = parseInt(elements.manualPortInput.value, 10) || 8889;
     const { t } = window.i18n;
@@ -624,7 +638,7 @@ async function handleManualConnect() {
 // 处理扫描按鈕
 async function handleScan() {
     if (appState.scanning) return;
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
 
     appState.scanning = true;
     setScanningState(true);
@@ -799,7 +813,7 @@ function renderHistoryList(history) {
 }
 // 快速重连（自动发现设备）
 async function reconnectToDevice(deviceId, deviceName) {
-    if (!invoke) { showError('Tauri 环境未就绪'); return; }
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
     const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
@@ -1488,15 +1502,35 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
-// 启动应用：等待 window.__TAURI__ 就绪后再初始化
-// Tauri 2.x build 版本中 window.__TAURI__ 是异步注入的，DOMContentLoaded 时可能尚未就绪
-document.addEventListener('DOMContentLoaded', () => {
-    waitForTauri().then(() => {
-        initApp();
-    });
-});
+// ─── 启动入口 ────────────────────────────────────────────────────────────────
+// 新架构：前置内联脚本（在 main.js 之前执行）已将 invoke 捕获到 window.tauriInvokeReady。
+// main.js 末尾直接读取该值：有值则立即启动，无值则走 waitForTauri 轮询降级路径。
+// 这彻底解决了 macOS WKWebView 外部脚本隔离导致的启动失败问题。
 
-// 暴露全局函数用于 HTML 内联调用
+(function startApp() {
+    if (window.tauriInvokeReady) {
+        // 前置脚本已捕获 invoke，直接启动
+        console.log('[KVMini] tauriInvokeReady 就绪，直接启动');
+        initApp();
+    } else {
+        // 降级：等待 Tauri 就绪（非 Tauri 环境或 invoke 延迟注入）
+        waitForTauri(5000).then((inv) => {
+            if (!inv) {
+                // 超时：显示错误提示
+                const errorToast = document.getElementById('error-toast');
+                const errorMessage = document.getElementById('error-message');
+                if (errorToast && errorMessage) {
+                    errorMessage.textContent = 'Tauri 环境初始化失败，请重启应用';
+                    errorToast.classList.remove('hidden');
+                }
+                return;
+            }
+            initApp();
+        });
+    }
+})();
+
+// 暴露全局函数（供 HTML 内联调用）
 window.connectToDevice = connectToDevice;
 window.reconnectToDevice = reconnectToDevice;
 window.reconnectManualIp = reconnectManualIp;
@@ -1957,3 +1991,5 @@ async function openAccessibilitySettings() {
 
 // 暴露全局函数
 window.openAccessibilitySettings = openAccessibilitySettings;
+
+// main.js 加载完成后立即启动应用

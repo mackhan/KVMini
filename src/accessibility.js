@@ -39,7 +39,11 @@ async function checkAccessibilityPermission(invoke) {
     const overlay = document.getElementById('accessibility-overlay');
     if (!overlay) return;
     if (!invoke) {
+        // 需求 1.2：invoke 为 null 时写入 FATAL 日志（不再静默跳过）
         console.warn('[Accessibility] invoke 未就绪，跳过权限检测（请确认 waitForTauri 已完成）');
+        if (window.StartupDiagnostics) {
+            window.StartupDiagnostics.log('FATAL', 'invoke is null after waitForTauri - checkAccessibilityPermission skipped');
+        }
         return;
     }
 

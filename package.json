@@ -1,6 +1,6 @@
 {
   "name": "kvmini",
-  "version": "0.1.10",
+  "version": "0.1.12",
   "description": "Cross-platform mouse and keyboard sharing software",
   "main": "src/index.html",
   "scripts": {
@@ -12,7 +12,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:ci": "jest --ci --coverage"
+    "test:ci": "jest --ci --coverage",
+    "test:e2e:accessibility": "node scripts/test-accessibility-e2e.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

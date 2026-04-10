@@ -43,37 +43,29 @@ afterEach(() => {
 // ─── 根因 A：main.js 底部第二个 DOMContentLoaded 不再包含 checkAccessibilityPermission ──
 
 describe('根因 A：main.js 底部第二个 DOMContentLoaded 监听器修复', () => {
-    test('main.js 底部第二个 DOMContentLoaded 不应包含 checkAccessibilityPermission 调用', () => {
+    test('新架构：main.js 不再依赖 DOMContentLoaded 监听器启动（改用 startApp + tauriInvokeReady）', () => {
         const fs = require('fs');
         const path = require('path');
         const mainJsPath = path.join(__dirname, '../src/main.js');
         const content = fs.readFileSync(mainJsPath, 'utf-8');
 
-        // 找到底部第二个 DOMContentLoaded 监听器（包含 initDisplayLayout 的那个）
-        // 该监听器不应再包含 checkAccessibilityPermission 或 setTimeout(checkAccessibilityPermission
-        const secondListenerMatch = content.match(
-            /document\.addEventListener\('DOMContentLoaded'[\s\S]*?initDisplayLayout[\s\S]*?\}\);/
-        );
+        // 新架构：main.js 末尾使用 startApp() 直接启动，不再依赖 DOMContentLoaded
+        // DOMContentLoaded 监听器数量应为 0（已全部移除）
+        const listenerMatches = content.match(/document\.addEventListener\('DOMContentLoaded'/g) || [];
+        expect(listenerMatches.length).toBe(0);
 
-        if (secondListenerMatch) {
-            const listenerCode = secondListenerMatch[0];
-            expect(listenerCode).not.toContain('checkAccessibilityPermission');
-        }
-        // 如果没有找到第二个监听器（已被删除），测试也通过
+        // 新架构：应包含 tauriInvokeReady 检查和 startApp 启动逻辑
+        expect(content).toContain('tauriInvokeReady');
+        expect(content).toContain('startApp');
     });
 
-    test('main.js 中 checkAccessibilityPermission 调用只应在 initApp 函数内', () => {
+    test('main.js 中 DOMContentLoaded 监听器不应直接调用 setTimeout(checkAccessibilityPermission)', () => {
         const fs = require('fs');
         const path = require('path');
         const mainJsPath = path.join(__dirname, '../src/main.js');
         const content = fs.readFileSync(mainJsPath, 'utf-8');
 
-        // 统计 checkAccessibilityPermission 的调用次数（排除函数定义和注释）
-        // 只统计实际调用（含括号的）
-        const callMatches = content.match(/checkAccessibilityPermission\s*\(/g) || [];
-        // 允许：1次函数定义 + 1次在 initApp 内调用 + 1次在 openAccessibilitySettings 内的 setTimeout 调用
-        // 不允许：在第二个 DOMContentLoaded 中的额外调用
-        // 关键：setTimeout(checkAccessibilityPermission, 800) 这种形式不应出现在 DOMContentLoaded 底部监听器中
+        // 不应有 setTimeout(checkAccessibilityPermission, 800) 这种形式
         const setTimeoutCallMatch = content.match(/setTimeout\s*\(\s*checkAccessibilityPermission\s*,\s*800\s*\)/g) || [];
         expect(setTimeoutCallMatch.length).toBe(0);
     });

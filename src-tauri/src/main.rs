@@ -86,6 +86,39 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
+/// 写入启动诊断日志到 ~/Library/Logs/KVMini/startup.log（macOS 专属）
+/// 非 macOS 平台直接返回 Ok
+#[tauri::command]
+fn write_startup_log(content: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let log_dir = PathBuf::from(&home).join("Library").join("Logs").join("KVMini");
+
+        // 自动创建目录
+        fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {}", e))?;
+
+        let log_path = log_dir.join("startup.log");
+
+        // 追加写入
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| format!("打开日志文件失败: {}", e))?;
+
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("写入日志失败: {}", e))?;
+
+        log::info!("[Diagnostics] 诊断日志已写入: {:?}", log_path);
+    }
+    Ok(())
+}
+
 // ── 托盘构建 ──────────────────────────────────────────────────────────────
 
 /// 构建系统托盘菜单和图标
@@ -230,6 +263,8 @@ async fn main() {
             check_accessibility_permission,
             request_accessibility_permission,
             open_accessibility_settings,
+            // 诊断日志
+            write_startup_log,
         ])
         // 托管连接管理器状态
         .manage(connection::KvmConnectionManager::new())
