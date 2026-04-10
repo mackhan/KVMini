@@ -414,6 +414,7 @@ extern "C" fn window_did_resign_key(this: &Object, _: Sel, _: id) {
 }
 
 /// Invoked when the dragged image enters destination bounds or frame
+#[allow(deprecated)]
 extern "C" fn dragging_entered(this: &Object, _: Sel, sender: id) -> BOOL {
   trace!("Triggered `draggingEntered:`");
 
@@ -448,6 +449,7 @@ extern "C" fn prepare_for_drag_operation(_: &Object, _: Sel, _: id) -> BOOL {
 }
 
 /// Invoked after the released image has been removed from the screen
+#[allow(deprecated)]
 extern "C" fn perform_drag_operation(this: &Object, _: Sel, sender: id) -> BOOL {
   trace!("Triggered `performDragOperation:`");
 

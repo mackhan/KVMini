@@ -9,9 +9,7 @@ use tauri::Emitter;
 use tokio::sync::Mutex;
 use serde::{Serialize, Deserialize};
 
-use kvm_core::network::{ConnectionManager, ConnectionState, NetworkEvent, HandshakeInfo};
-use kvm_core::protocol::Platform;
-use kvm_core::platform::VirtualDesktop;
+use kvm_core::network::{ConnectionManager, ConnectionState, NetworkEvent};
 
 /// 默认 TCP 端口
 pub const DEFAULT_PORT: u16 = 23456;
@@ -162,38 +160,8 @@ impl KvmConnectionManager {
                             Ok(event) => {
                                 let ip = peer_ip.lock().await.clone();
                                 let ip_opt = if ip.is_empty() { None } else { Some(ip.as_str()) };
-                                let conn_event = match &event {
-                                    NetworkEvent::ConnectionStateChanged(state) => {
-                                        Some(ConnectionEvent::from_state(state, ip_opt))
-                                    }
-                                    NetworkEvent::Error(msg) => {
-                                        Some(ConnectionEvent::error(msg))
-                                    }
-                                    NetworkEvent::PeerHandshake(info) => {
-                                        let platform_str = format!("{:?}", info.platform);
-                                        Some(ConnectionEvent {
-                                            event_type: "peer_info".to_string(),
-                                            connected: true,
-                                            peer_ip: ip_opt.map(|s| s.to_string()),
-                                            message: format!("对端平台: {}", platform_str),
-                                            attempt: None,
-                                            guide: None,
-                                        })
-                                    }
-                                    NetworkEvent::LatencyUpdated(ms) => {
-                                        Some(ConnectionEvent {
-                                            event_type: "latency".to_string(),
-                                            connected: true,
-                                            peer_ip: ip_opt.map(|s| s.to_string()),
-                                            message: format!("延迟: {}ms", ms),
-                                            attempt: None,
-                                            guide: None,
-                                        })
-                                    }
-                                    _ => None,
-                                };
-                                if let Some(ev) = conn_event {
-                                let _ = app.emit("connection-status", ev);
+                                if let Some(ev) = network_event_to_connection_event(&event, ip_opt) {
+                                    let _ = app.emit("connection-status", ev);
                                 }
                             }
                             Err(_) => break,
@@ -218,19 +186,46 @@ impl Default for KvmConnectionManager {
     }
 }
 
-// ── Tauri 命令 ──────────────────────────────────────────────────────────────
+// ── 纯函数：NetworkEvent → ConnectionEvent ────────────────────────────────
 
-/// 获取本机平台信息（用于握手）
-fn local_handshake_info() -> HandshakeInfo {
-    #[cfg(target_os = "windows")]
-    let platform = Platform::Windows;
-    #[cfg(target_os = "macos")]
-    let platform = Platform::MacOS;
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let platform = Platform::Unknown;
-
-    HandshakeInfo::new(platform, VirtualDesktop::from_monitors(vec![]))
+/// 将 NetworkEvent 转换为 ConnectionEvent（纯函数，便于测试）
+pub fn network_event_to_connection_event(
+    event: &NetworkEvent,
+    ip_opt: Option<&str>,
+) -> Option<ConnectionEvent> {
+    match event {
+        NetworkEvent::ConnectionStateChanged(state) => {
+            Some(ConnectionEvent::from_state(state, ip_opt))
+        }
+        NetworkEvent::Error(msg) => {
+            Some(ConnectionEvent::error(msg))
+        }
+        NetworkEvent::PeerHandshake(info) => {
+            let platform_str = format!("{:?}", info.platform);
+            Some(ConnectionEvent {
+                event_type: "peer_info".to_string(),
+                connected: true,
+                peer_ip: ip_opt.map(|s| s.to_string()),
+                message: format!("对端平台: {}", platform_str),
+                attempt: None,
+                guide: None,
+            })
+        }
+        NetworkEvent::LatencyUpdated(ms) => {
+            Some(ConnectionEvent {
+                event_type: "latency".to_string(),
+                connected: true,
+                peer_ip: ip_opt.map(|s| s.to_string()),
+                message: format!("延迟: {}ms", ms),
+                attempt: None,
+                guide: None,
+            })
+        }
+        _ => None,
+    }
 }
+
+// ── Tauri 命令 ──────────────────────────────────────────────────────────────
 
 /// Tauri 命令：启动监听模式（等待对端连接）
 #[tauri::command]
@@ -262,7 +257,7 @@ pub async fn connect_to_peer(
 
     mgr.set_peer_ip(ip.clone()).await;
 
-    let local_info = local_handshake_info();
+    let local_info = crate::platform::local_handshake_info();
     let _ = app_handle.emit("connection-status", ConnectionEvent::from_state(
         &ConnectionState::Connecting, Some(&ip)
     ));

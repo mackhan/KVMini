@@ -61,3 +61,15 @@ pub fn platform_name() -> &'static str {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     { "Unknown" }
 }
+
+/// 获取本机平台握手信息（用于连接时的握手协议）
+pub fn local_handshake_info() -> kvm_core::network::HandshakeInfo {
+    #[cfg(target_os = "windows")]
+    let platform = kvm_core::protocol::Platform::Windows;
+    #[cfg(target_os = "macos")]
+    let platform = kvm_core::protocol::Platform::MacOS;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let platform = kvm_core::protocol::Platform::Unknown;
+
+    kvm_core::network::HandshakeInfo::new(platform, kvm_core::platform::VirtualDesktop::from_monitors(vec![]))
+}
