@@ -16,11 +16,12 @@
 
 | 字段 | 内容 |
 |------|------|
-| **现象** | 应用在 macOS 26 beta 上启动后立即崩溃，无法显示主界面 |
-| **根因** | `objc2-0.6.4` 的 `MainThreadMarker::new()` 使用 `pthread_main_np() == 1` 检测主线程。macOS 26 beta 在 `applicationDidFinishLaunching` 回调中，`pthread_main_np()` 返回 **`-1`**（线程初始化未完成），而代码只检查 `== 1`，导致返回 `None`，`tao/app_state.rs:288` 的 `.unwrap()` 触发 panic。崩溃链路：`did_finish_launching` → `AppState::launched` → `MainThreadMarker::new().unwrap()` → panic |
-| **修改方式** | 1. 将 `objc2-0.6.4` 复制到 `patches/objc2-0.6.4/`；2. 修改 `patches/objc2-0.6.4/src/main_thread_marker.rs` 第 49 行：`pthread_main_np() == 1` → `pthread_main_np() != 0`（符合 Apple 头文件语义：非零即主线程）；3. 在根 `Cargo.toml` 添加 `[patch.crates-io] objc2 = { path = "patches/objc2-0.6.4" }` |
-| **修改次数** | 2 |
-| **出现次数** | 2 |
+| **现象** | 应用在 macOS 26 beta 上启动后立即崩溃，无法显示主界面。日志只有大量 `[objc2-patch] is_main_thread: pthread_main_np() = 1`，然后 abort |
+| **根因** | 第1/2次：`objc2-0.6.4` 的 `MainThreadMarker::new()` 使用 `pthread_main_np() == 1` 检测主线程。macOS 26 beta 在 `applicationDidFinishLaunching` 回调中，`pthread_main_np()` 返回 **`-1`**（线程初始化未完成），导致 `.unwrap()` panic。第3次：修复时引入了 `msg_send![NSThread, isMainThread]` 作为 fallback，但 `msg_send!` 宏内部会调用 `MainThreadMarker::new()` 进行线程安全检查，导致**无限递归 → 栈溢出 → abort** |
+| **修改方式** | 1. 将 `objc2-0.6.4` 复制到 `patches/objc2-0.6.4/`；2. 修改 `patches/objc2-0.6.4/src/main_thread_marker.rs`：`pthread_main_np() == 1` 走快路径，否则用 **`objc_msgSend` 直接调用** `[NSThread isMainThread]`（绕过 `msg_send!` 的主线程检查，避免无限递归）；3. 在根 `Cargo.toml` 添加 `[patch.crates-io] objc2 = { path = "patches/objc2-0.6.4" }` |
+| **修改次数** | 3 |
+| **出现次数** | 3 |
+| **关键教训** | 在 `is_main_thread()` 函数内部，**绝对不能使用 `msg_send!` 宏**，因为 `msg_send!` 内部会调用 `MainThreadMarker::new()` 导致无限递归。必须用 `objc_msgSend` 直接调用 |
 | **测试用例** | `src-tauri/tests/main_thread_detection_test.rs` |
 
 ---

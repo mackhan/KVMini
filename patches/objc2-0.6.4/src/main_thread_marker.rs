@@ -39,36 +39,36 @@ fn is_main_thread() -> bool {
         // thread. This is a macOS 26 regression where thread initialization state
         // is not yet complete at that point.
         //
-        // Solution: Use [NSThread isMainThread] as the authoritative check.
+        // Solution: Use [NSThread isMainThread] via raw objc_msgSend as the authoritative check.
         // pthread_main_np() is kept as a fast path for the common case (returns 1),
         // but we fall back to NSThread when it returns 0 or -1.
+        //
+        // IMPORTANT: We MUST NOT use crate::msg_send! here, because msg_send! internally
+        // calls MainThreadMarker::new() for thread safety checks, which would cause
+        // infinite recursion. Instead, we call objc_msgSend directly.
         let pthread_result = unsafe { pthread_main_np() };
-        // DEBUG: print the value to stderr
-        #[cfg(feature = "std")]
-        {
-            use std::io::Write;
-            let _ = std::io::stderr().write_fmt(format_args!(
-                "[objc2-patch] is_main_thread: pthread_main_np() = {}\n",
-                pthread_result
-            ));
-        }
         if pthread_result == 1 {
             // Fast path: definitely on main thread
             true
         } else {
-            // Fallback: use NSThread isMainThread which is reliable on macOS 26
+            // Fallback: use [NSThread isMainThread] via raw objc_msgSend
             // This handles both pthread_main_np() == 0 (macOS 26 regression)
             // and pthread_main_np() == -1 (thread init not yet complete)
-            let ns_result: bool = unsafe { crate::msg_send![crate::class!(NSThread), isMainThread] };
-            #[cfg(feature = "std")]
-            {
-                use std::io::Write;
-                let _ = std::io::stderr().write_fmt(format_args!(
-                    "[objc2-patch] is_main_thread: NSThread isMainThread = {}\n",
-                    ns_result
-                ));
+            //
+            // We use objc_msgSend directly to avoid the msg_send! macro's
+            // MainThreadMarker check which would cause infinite recursion.
+            extern "C" {
+                fn objc_msgSend(receiver: *mut core::ffi::c_void, sel: *const core::ffi::c_void, ...) -> *mut core::ffi::c_void;
+                fn sel_registerName(name: *const core::ffi::c_char) -> *const core::ffi::c_void;
+                fn objc_getClass(name: *const core::ffi::c_char) -> *mut core::ffi::c_void;
             }
-            ns_result
+            unsafe {
+                let cls = objc_getClass(b"NSThread\0".as_ptr() as *const core::ffi::c_char);
+                let sel = sel_registerName(b"isMainThread\0".as_ptr() as *const core::ffi::c_char);
+                // objc_msgSend returns BOOL (i8 on Apple): 0 = NO, non-zero = YES
+                let result = objc_msgSend(cls, sel) as i8;
+                result != 0
+            }
         }
     }
 
