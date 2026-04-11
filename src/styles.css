@@ -1341,6 +1341,19 @@ header p {
     background: #eff6ff;
 }
 
+/* 拖拽无效位置：红色边框 */
+.monitor-group.drag-invalid {
+    outline: 2px solid #ef4444;
+    border-radius: 6px;
+    animation: drag-invalid-shake 0.3s ease;
+}
+
+@keyframes drag-invalid-shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+}
+
 /* 设备详情分隔符 */
 .device-sep {
     margin: 0 4px;
@@ -1675,14 +1688,612 @@ header {
     color: var(--text-secondary);
 }
 
-/* 版本号样式 */
-.app-version {
+
+/* ─── 设置页分页样式 ──────────────────────────────────────────────────────── */
+
+/* 分页版模态框：更宽更高 */
+.modal-content-tabs {
+    max-width: 640px;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 分页导航栏 */
+.settings-tabs-nav {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid var(--panel-border, #e5e7eb);
+    padding: 0 16px;
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.settings-tabs-nav::-webkit-scrollbar {
+    display: none;
+}
+
+.settings-tab-btn {
+    padding: 10px 18px;
+    border: none;
+    background: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted, #6b7280);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    position: relative;
+}
+
+.settings-tab-btn:hover {
+    color: var(--text-primary, #111827);
+}
+
+.settings-tab-btn.active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+}
+
+/* 未保存标记（小红点） */
+.settings-tab-btn.tab-dirty::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    background: #ef4444;
+    border-radius: 50%;
+}
+
+/* 小屏幕下拉菜单（默认隐藏，< 520px 时显示） */
+.settings-tabs-select-wrap {
+    display: none;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--panel-border, #e5e7eb);
+    flex-shrink: 0;
+}
+
+.settings-tabs-select {
+    width: 100%;
+}
+
+/* 分页内容区域 */
+.settings-tabs-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* 单个分页内容 */
+.settings-tab-content {
+    display: none;
+    padding: 16px 24px;
+}
+
+.settings-tab-content.active {
+    display: block;
+}
+
+/* 显示器布局分页：更大的编辑区域 */
+.settings-section-display {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.display-layout-container-large {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.display-layout-container-large .display-layout-preview {
+    min-height: 200px;
+    max-height: none;
+    height: 260px;
+}
+
+/* 分页版 footer */
+.modal-footer-tabs {
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 24px 16px;
+}
+
+.modal-footer-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    width: 100%;
+}
+
+/* 网络分页：网卡说明 */
+.network-iface-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted, #6b7280);
+    padding: 8px 10px;
+    background: var(--scan-area-bg, #f0f9ff);
+    border: 1px solid var(--scan-area-border, #bae6fd);
+    border-radius: 6px;
+    margin: 6px 0 10px;
+    line-height: 1.5;
+}
+
+.network-iface-hint-icon {
+    flex-shrink: 0;
+    font-size: 14px;
+}
+
+/* 网卡列表 */
+.network-iface-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.network-iface-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--item-bg, #f9fafb);
+    border: 1px solid var(--panel-border, #e5e7eb);
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.network-iface-item.iface-active {
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.network-iface-item.iface-disconnected {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    opacity: 0.7;
+}
+
+.network-iface-name {
+    font-weight: 600;
+    color: var(--text-primary, #111827);
+    min-width: 60px;
+}
+
+.network-iface-ip {
+    font-family: monospace;
+    color: var(--text-secondary, #374151);
+    flex: 1;
+}
+
+.network-iface-status {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.network-iface-status.status-up {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.network-iface-status.status-down {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+/* 网卡断开警告 */
+.network-iface-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #9a3412;
+    margin-bottom: 8px;
+}
+
+/* 安全分页：证书错误行 */
+.cert-error-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #dc2626;
+    margin-top: 8px;
+}
+
+.cert-error-icon {
+    flex-shrink: 0;
+}
+
+.cert-error-msg {
+    flex: 1;
+}
+
+.btn-danger {
+    background: #ef4444;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #dc2626;
+}
+
+/* ─── TLS 不一致警告横幅 ─────────────────────────────────────────────────── */
+.tls-mismatch-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #fffbeb;
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #92400e;
+    margin: 8px 16px;
+    box-shadow: 0 2px 6px rgba(245, 158, 11, 0.15);
+    position: relative;
+    z-index: 100;
+}
+
+.tls-mismatch-banner.hidden {
+    display: none;
+}
+
+.tls-mismatch-icon {
+    flex-shrink: 0;
+    font-size: 16px;
+}
+
+.tls-mismatch-msg {
+    flex: 1;
+    line-height: 1.4;
+}
+
+.tls-warning-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #f59e0b;
+    font-weight: 600;
+    padding: 2px 6px;
+    background: #fffbeb;
+    border: 1px solid #f59e0b;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+
+/* ─── 连接详情面板 ──────────────────────────────────────────────────────────── */
+.connection-detail-panel {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    margin: 8px 16px;
+    font-size: 12px;
+    overflow: hidden;
+}
+
+.connection-detail-panel.hidden {
+    display: none;
+}
+
+.detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: #f1f5f9;
+    border-bottom: 1px solid #e2e8f0;
+    user-select: none;
+}
+
+.detail-header:hover {
+    background: #e8eef5;
+}
+
+.detail-title {
+    font-weight: 600;
+    color: #475569;
+    font-size: 12px;
+}
+
+.detail-toggle-icon {
+    color: #94a3b8;
+    font-size: 10px;
+}
+
+.detail-summary {
+    padding: 8px 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 16px;
+}
+
+.detail-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.detail-label {
+    color: #94a3b8;
+    font-size: 11px;
+    min-width: 28px;
+    flex-shrink: 0;
+}
+
+.detail-value {
+    color: #334155;
+    font-family: monospace;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detail-expanded {
+    padding: 8px 12px;
+    border-top: 1px solid #e2e8f0;
+    background: #fff;
+}
+
+.detail-expanded.hidden {
+    display: none;
+}
+
+.detail-fingerprint {
+    font-size: 10px;
+    word-break: break-all;
+    white-space: normal;
+}
+
+/* 延迟颜色 */
+.latency-normal   { color: #10b981; }
+.latency-medium   { color: #f59e0b; }   /* 旧别名，保留兼容 */
+.latency-warning  { color: #f59e0b; }   /* >100ms 黄色 */
+.latency-high     { color: #ef4444; font-weight: 600; }  /* 旧别名，保留兼容 */
+.latency-critical { color: #ef4444; font-weight: 600; }  /* >300ms 红色 */
+
+/* TLS 状态 */
+.tls-on      { color: #10b981; }
+.tls-off     { color: #6b7280; }
+.tls-warning { color: #f59e0b; }
+
+/* ─── 网卡说明 ──────────────────────────────────────────────────────────────── */
+.nic-description {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #1e40af;
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+
+.nic-description-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.nic-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.nic-list-item,
+.nic-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.nic-list-item:hover,
+.nic-item:hover {
+    background: #f1f5f9;
+}
+
+.nic-list-item .nic-icon,
+.nic-item .nic-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.nic-list-item .nic-name,
+.nic-item .nic-name {
+    flex: 1;
+    color: #374151;
+    font-weight: 500;
+}
+
+.nic-list-item .nic-ip,
+.nic-item .nic-ip {
+    color: #6b7280;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+/* 小屏幕响应式：< 520px 折叠导航为下拉菜单 */
+@media (max-width: 520px) {
+    .settings-tabs-nav {
+        display: none;
+    }
+    .settings-tabs-select-wrap {
+        display: block;
+    }
+    .modal-content-tabs {
+        max-height: 95vh;
+    }
+}
+
+/* 深色主题适配 */
+[data-theme="dark"] .settings-tab-btn {
+    color: var(--text-muted);
+}
+
+[data-theme="dark"] .settings-tab-btn:hover {
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .network-iface-item.iface-active {
+    border-color: #166534;
+    background: #052e16;
+}
+
+[data-theme="dark"] .network-iface-item.iface-disconnected {
+    border-color: #7f1d1d;
+    background: #1c0a0a;
+}
+
+[data-theme="dark"] .cert-error-row {
+    background: #1c0a0a;
+    border-color: #7f1d1d;
+}
+
     font-size: 11px;
     color: var(--version-color);
     text-align: center;
     margin-top: 2px;
     letter-spacing: 0.3px;
 }
+
+/* ── 关于 Tab 样式 ── */
+.about-trial-status {
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary, #f5f5f7);
+    font-size: 13px;
+    color: var(--text-primary, #1d1d1f);
+    margin-bottom: 4px;
+}
+.about-trial-status.active { color: #34c759; font-weight: 500; }
+.about-trial-status.expired { color: #ff3b30; font-weight: 500; }
+.about-trial-status.purchased { color: #007aff; font-weight: 500; }
+
+[data-theme="dark"] .about-trial-status {
+    background: rgba(255,255,255,0.06);
+}
+
+.about-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+.about-section-header h4 {
+    margin: 0;
+}
+.about-rate-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+}
+
+.about-actions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.about-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, rgba(0,0,0,0.1));
+    background: var(--bg-secondary, #f5f5f7);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary, #1d1d1f);
+    transition: background 0.15s, transform 0.1s;
+    text-align: left;
+}
+.about-action-btn:hover {
+    background: var(--bg-hover, #e5e5ea);
+    transform: translateY(-1px);
+}
+.about-action-btn:active { transform: translateY(0); }
+.about-action-icon { font-size: 16px; flex-shrink: 0; }
+
+[data-theme="dark"] .about-action-btn {
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(255,255,255,0.1);
+    color: #f5f5f7;
+}
+[data-theme="dark"] .about-action-btn:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.about-version-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.about-version-text {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary, #1d1d1f);
+}
+.about-copyright {
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* ── 隐私政策 / 更新日志 模态框 ── */
+.about-modal-body {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary, #1d1d1f);
+}
+.changelog-entry { margin-bottom: 16px; }
+.changelog-version {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary, #1d1d1f);
+    margin-bottom: 4px;
+}
+.changelog-date {
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+    margin-bottom: 6px;
+}
+.changelog-changes { padding-left: 16px; margin: 0; }
+.changelog-changes li { margin-bottom: 2px; }
 
 .settings-version {
     text-align: center;

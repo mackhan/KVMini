@@ -43,7 +43,9 @@ const MESSAGES = {
     scanningHint: '正在扫描局域网设备...',
     noDevices: '点击"扫描设备"发现局域网内的设备',
     noDevicesAfterScan: '未发现设备，请确保目标设备在同一局域网内',
-    noDevicesFound: '未发现其他设备',
+    noDevicesFound: '未发现局域网设备，可尝试手动连接',
+    scanFailed: '扫描失败，请重试',
+    scanFoundDevices: '发现 {n} 台设备',
     btnConnect: '连接',
 
     // 手动连接
@@ -226,6 +228,26 @@ const MESSAGES = {
     btnTrustAndConnect: '信任并连接',
     btnRejectConnection: '拒绝连接',
     tlsDisabledWarning: '⚠️ TLS 加密已关闭，键鼠数据将以明文传输，存在安全风险',
+
+    // 关于 Tab
+    tabAbout: '关于',
+    settingsLicense: '许可状态',
+    settingsAbout: '关于',
+    settingsVersion: '版本信息',
+    trialChecking: '检测中...',
+    trialActive: '试用中（剩余 {days} 天）',
+    trialExpired: '试用已过期',
+    trialPurchased: '✓ 已购买完整版',
+    purchaseBtn: '购买完整版',
+    restoreBtn: '恢复购买',
+    feedbackTitle: '反馈与建议',
+    shareTitle: '推荐给朋友',
+    privacyTitle: '隐私政策',
+    changelogTitle: '更新日志',
+    rateApp: '给个赞吧',
+    shareCopied: '分享链接已复制到剪贴板',
+    changelogModalTitle: '更新日志',
+    privacyModalTitle: '隐私政策',
   },
 
   en: {
@@ -266,7 +288,9 @@ const MESSAGES = {
     scanningHint: 'Scanning LAN devices...',
     noDevices: 'Click "Scan Devices" to find devices on LAN',
     noDevicesAfterScan: 'No devices found. Make sure the target device is on the same LAN.',
-    noDevicesFound: 'No other devices found',
+    noDevicesFound: 'No LAN devices found. Try manual connect.',
+    scanFailed: 'Scan failed, please try again',
+    scanFoundDevices: 'Found {n} device(s)',
     btnConnect: 'Connect',
 
     // Manual connect
@@ -449,8 +473,27 @@ const MESSAGES = {
     btnTrustAndConnect: 'Trust & Connect',
     btnRejectConnection: 'Reject',
     tlsDisabledWarning: '⚠️ TLS encryption is disabled. Keyboard/mouse data will be transmitted in plaintext.',
-  },
-};
+
+    // About Tab
+    tabAbout: 'About',
+    settingsLicense: 'License Status',
+    settingsAbout: 'About',
+    settingsVersion: 'Version Info',
+    trialChecking: 'Checking...',
+    trialActive: 'Trial ({days} days left)',
+    trialExpired: 'Trial Expired',
+    trialPurchased: '✓ Full Version Purchased',
+    purchaseBtn: 'Buy Full Version',
+    restoreBtn: 'Restore Purchase',
+    feedbackTitle: 'Feedback',
+    shareTitle: 'Recommend to Friends',
+    privacyTitle: 'Privacy Policy',
+    changelogTitle: 'Changelog',
+    rateApp: 'Rate Us',
+    shareCopied: 'Share link copied to clipboard',
+    changelogModalTitle: 'Changelog',
+    privacyModalTitle: 'Privacy Policy',
+  },};
 
 /** 当前语言，默认中文 */
 let _locale = 'zh';

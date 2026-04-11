@@ -262,107 +262,107 @@ fn write_startup_log(content: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── 授权管理 ──────────────────────────────────────────────────────────────
+// ── tauri-commerce SDK 命令 ──────────────────────────────────────────────────
 
-/// 授权检查结果
-#[derive(serde::Serialize)]
-struct LicenseCheckResult {
-    licensed: bool,
-    status: String,
-    message: Option<String>,
-}
-
-/// 激活结果
-#[derive(serde::Serialize)]
-struct LicenseActivateResult {
-    success: bool,
-    message: Option<String>,
-}
-
-/// 检查授权状态
-/// 当前实现：从本地配置文件读取 license key 并验证
-/// 待 tauri-commerce SDK (https://github.com/mackhan/tauri-commerce) 可用后替换实现
+/// 获取试用/购买状态
 #[tauri::command]
-fn check_license_status(app: tauri::AppHandle) -> LicenseCheckResult {
-    let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let license_path = data_dir.join("license.key");
+fn get_trial_status() -> tauri_commerce::trial::TrialStatus {
+    tauri_commerce::trial::get_trial_status()
+}
 
-    if license_path.exists() {
-        match std::fs::read_to_string(&license_path) {
-            Ok(key) if !key.trim().is_empty() => {
-                log::info!("[License] 找到本地授权文件");
-                LicenseCheckResult {
-                    licensed: true,
-                    status: "licensed".to_string(),
-                    message: None,
-                }
-            }
-            _ => {
-                log::info!("[License] 授权文件为空");
-                LicenseCheckResult {
-                    licensed: false,
-                    status: "unlicensed".to_string(),
-                    message: None,
-                }
+/// 获取当前语言
+#[tauri::command]
+fn get_locale() -> String {
+    tauri_commerce::i18n::get_locale()
+}
+
+/// 设置语言
+#[tauri::command]
+fn set_locale(locale: String) -> Result<(), String> {
+    tauri_commerce::i18n::set_locale(&locale);
+    log::info!("[i18n] 语言已切换为: {}", locale);
+    Ok(())
+}
+
+/// 获取更新日志
+#[tauri::command]
+fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
+    tauri_commerce::changelog::get_changelog()
+}
+
+/// 打开反馈邮件
+#[tauri::command]
+fn send_feedback() -> Result<(), String> {
+    let locale = tauri_commerce::i18n::get_locale();
+    tauri_commerce::feedback::open_feedback_email(&locale)
+}
+
+/// 触发评分引导
+#[tauri::command]
+fn request_review() -> Result<(), String> {
+    // 获取 App Store ID（上架后替换为真实 ID）
+    let app_id = option_env!("KVMINI_APP_STORE_ID").unwrap_or("");
+    if app_id.is_empty() {
+        log::info!("[Review] App Store ID 未配置，跳过评分引导");
+        return Ok(());
+    }
+    tauri_commerce::review::open_app_store_rating(app_id)
+}
+
+/// 获取隐私政策（中文）
+#[tauri::command]
+fn get_privacy_policy_zh() -> String {
+    tauri_commerce::privacy::get_privacy_policy_zh()
+}
+
+/// 获取隐私政策（英文）
+#[tauri::command]
+fn get_privacy_policy_en() -> String {
+    tauri_commerce::privacy::get_privacy_policy_en()
+}
+
+/// 发起内购（App Store 版）
+#[tauri::command]
+fn purchase(product_id: String) -> Result<(), String> {
+    #[cfg(feature = "iap")]
+    {
+        use tauri_commerce::iap::PurchaseResult;
+        match tauri_commerce::iap::purchase(&product_id) {
+            PurchaseResult::Success | PurchaseResult::Pending => Ok(()),
+            PurchaseResult::Cancelled => Err("用户取消了购买".to_string()),
+            PurchaseResult::Failed(msg) => Err(msg),
+            PurchaseResult::DevMode(msg) => {
+                log::info!("[IAP] 开发模式: {}", msg);
+                Ok(())
             }
         }
-    } else {
-        log::info!("[License] 未找到授权文件");
-        LicenseCheckResult {
-            licensed: false,
-            status: "unlicensed".to_string(),
-            message: None,
-        }
+    }
+    #[cfg(not(feature = "iap"))]
+    {
+        let _ = product_id;
+        Err("当前版本不支持内购，请通过 App Store 购买".to_string())
     }
 }
 
-/// 激活 License Key
-/// 当前实现：将 key 写入本地文件（简单验证格式）
-/// 待 tauri-commerce SDK 可用后替换为在线验证
+/// 恢复购买（App Store 版）
 #[tauri::command]
-fn activate_license(app: tauri::AppHandle, key: String) -> LicenseActivateResult {
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        return LicenseActivateResult {
-            success: false,
-            message: Some("授权码不能为空".to_string()),
-        };
-    }
-
-    // 简单格式验证：XXXX-XXXX-XXXX-XXXX
-    let parts: Vec<&str> = key.split('-').collect();
-    if parts.len() != 4 || parts.iter().any(|p| p.len() != 4) {
-        return LicenseActivateResult {
-            success: false,
-            message: Some("授权码格式无效，请使用 XXXX-XXXX-XXXX-XXXX 格式".to_string()),
-        };
-    }
-
-    let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        log::error!("[License] 创建数据目录失败: {}", e);
-        return LicenseActivateResult {
-            success: false,
-            message: Some(format!("激活失败: {}", e)),
-        };
-    }
-
-    let license_path = data_dir.join("license.key");
-    match std::fs::write(&license_path, &key) {
-        Ok(_) => {
-            log::info!("[License] 授权码已保存");
-            LicenseActivateResult {
-                success: true,
-                message: None,
+fn restore_purchase() -> Result<(), String> {
+    #[cfg(feature = "iap")]
+    {
+        use tauri_commerce::iap::RestoreResult;
+        match tauri_commerce::iap::restore() {
+            RestoreResult::Restored => Ok(()),
+            RestoreResult::NoPurchaseFound => Err("未找到购买记录".to_string()),
+            RestoreResult::Failed(msg) => Err(msg),
+            RestoreResult::DevMode(msg) => {
+                log::info!("[IAP] 开发模式恢复: {}", msg);
+                Ok(())
             }
         }
-        Err(e) => {
-            log::error!("[License] 保存授权码失败: {}", e);
-            LicenseActivateResult {
-                success: false,
-                message: Some(format!("激活失败: {}", e)),
-            }
-        }
+    }
+    #[cfg(not(feature = "iap"))]
+    {
+        Err("当前版本不支持内购恢复".to_string())
     }
 }
 
@@ -592,6 +592,25 @@ async fn main() {
     // 初始化日志
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // 初始化 tauri-commerce SDK
+    let commerce_config = tauri_commerce::CommerceConfig::builder()
+        .app_name("KVMini")
+        .app_version(env!("CARGO_PKG_VERSION"))
+        .bundle_id("com.kvmini.app")
+        .product_id("com.kvmini.app.pro")
+        .feedback_email("support@kvmini.app")
+        .trial_days(7)
+        .review_trigger_count(10)
+        .build()
+        .expect("Commerce SDK 配置构建失败");
+    if let Err(e) = tauri_commerce::init(commerce_config) {
+        log::error!("[Commerce SDK] 初始化失败: {}", e);
+    } else {
+        log::info!("[Commerce SDK] SDK 初始化成功");
+    }
+    // 初始化 i18n 模块
+    tauri_commerce::i18n::init_i18n();
+
     // 调试：捕获 panic 消息
     #[cfg(debug_assertions)]
     {
@@ -643,9 +662,17 @@ async fn main() {
             open_accessibility_settings,
             // 诊断日志
             write_startup_log,
-            // 授权管理
-            check_license_status,
-            activate_license,
+            // tauri-commerce SDK
+            get_trial_status,
+            get_locale,
+            set_locale,
+            get_changelog,
+            send_feedback,
+            request_review,
+            get_privacy_policy_zh,
+            get_privacy_policy_en,
+            purchase,
+            restore_purchase,
             // 全局快捷键
             register_global_hotkey,
             unregister_global_hotkey,

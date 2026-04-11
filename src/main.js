@@ -159,6 +159,18 @@ function initApp() {
         reconnectStatusText: document.getElementById('reconnect-status-text'),
         reconnectToast: document.getElementById('reconnect-toast'),
         reconnectToastMessage: document.getElementById('reconnect-toast-message'),
+        // 关于 Tab
+        aboutTrialStatus: document.getElementById('about-trial-status'),
+        aboutTrialStatusText: document.getElementById('about-trial-status-text'),
+        aboutPurchaseActions: document.getElementById('about-purchase-actions'),
+        aboutPurchaseBtn: document.getElementById('about-purchase-btn'),
+        aboutRestoreBtn: document.getElementById('about-restore-btn'),
+        aboutFeedbackBtn: document.getElementById('about-feedback-btn'),
+        aboutShareBtn: document.getElementById('about-share-btn'),
+        aboutPrivacyBtn: document.getElementById('about-privacy-btn'),
+        aboutChangelogBtn: document.getElementById('about-changelog-btn'),
+        aboutRateBtn: document.getElementById('about-rate-btn'),
+        aboutVersionText: document.getElementById('about-version-text'),
     };
 
     setupEventListeners();
@@ -903,6 +915,10 @@ function openSettings() {
     if (window.SettingsTabsModule) {
         window.SettingsTabsModule.initSettingsTabs();
     }
+    // 打开设置时自动刷新显示器列表
+    refreshMonitors();
+    // 初始化关于 Tab
+    initAboutTab();
 }
 
 // 关闭设置
@@ -1141,13 +1157,24 @@ async function saveSettings() {
     };
     localStorage.setItem('kvm_settings', JSON.stringify(appState.settings));
 
-    // 立即应用语言和主题（保存后界面立即生效）
+    // 立即应用主题（保存后界面立即生效）
+    if (window.themeManager) {
+        window.themeManager.setTheme(appState.settings.theme || 'auto');
+    }
+
+    // 通过 tauri-commerce SDK 切换语言（Rust 后端持久化 + 前端同步）
+    if (invoke) {
+        try {
+            await invoke('set_locale', { locale: appState.settings.language || 'zh' });
+            console.log(`[i18n] 语言已切换为: ${appState.settings.language}`);
+        } catch (e) {
+            console.warn('[i18n] SDK set_locale 调用失败，降级到本地切换:', e);
+        }
+    }
+    // 同步前端 i18n 状态并重新渲染
     if (window.i18n) {
         window.i18n.setLocale(appState.settings.language || 'zh');
         applyI18n();
-    }
-    if (window.themeManager) {
-        window.themeManager.setTheme(appState.settings.theme || 'auto');
     }
 
     // 如果 Tauri 可用，同步到后端
@@ -1217,11 +1244,28 @@ function loadSettings() {
 
 /**
  * 初始化外观：从已保存设置中读取语言和主题并立即应用
+ * 语言优先从 tauri-commerce SDK get_locale 读取（Rust 后端持久化），
+ * 降级到 appState.settings.language（localStorage）
  * 在 loadSettings() 之后调用
  */
-function initAppearance() {
-    const lang = appState.settings.language || 'zh';
+async function initAppearance() {
+    let lang = appState.settings.language || 'zh';
     const theme = appState.settings.theme || 'auto';
+
+    // 通过 SDK get_locale 读取已保存语言（Rust 后端持久化）
+    if (invoke) {
+        try {
+            const sdkLocale = await invoke('get_locale');
+            if (sdkLocale && (sdkLocale === 'zh' || sdkLocale === 'en')) {
+                lang = sdkLocale;
+                // 同步到 appState
+                appState.settings.language = lang;
+                console.log(`[i18n] SDK get_locale 返回: ${lang}`);
+            }
+        } catch (e) {
+            console.warn('[i18n] SDK get_locale 调用失败，使用本地设置:', e);
+        }
+    }
 
     // 应用语言
     window.i18n.setLocale(lang);
@@ -2252,6 +2296,219 @@ function hidePermissionWarning() {
         elements.startSharingBtn.classList.add('hidden');
     }
 }
+
+// ─── 关于 Tab ────────────────────────────────────────────────────────────────
+
+/** 关于 Tab 是否已初始化（避免重复绑定事件） */
+let _aboutTabInited = false;
+
+/**
+ * 初始化关于 Tab（每次打开设置时调用，但事件只绑定一次）
+ */
+async function initAboutTab() {
+    // 更新版本号
+    const meta = document.querySelector('meta[name="app-version"]');
+    if (meta && elements.aboutVersionText) {
+        elements.aboutVersionText.textContent = `KVMini v${meta.getAttribute('content')}`;
+    }
+
+    // 刷新许可状态
+    await refreshAboutTrialStatus();
+
+    // 事件只绑定一次
+    if (_aboutTabInited) return;
+    _aboutTabInited = true;
+
+    // 反馈按钮
+    elements.aboutFeedbackBtn?.addEventListener('click', async () => {
+        try {
+            await invoke('send_feedback');
+            console.log('[About] 反馈邮件已打开');
+        } catch (e) {
+            console.warn('[About] 反馈失败:', e);
+            showError('反馈功能暂时不可用');
+        }
+    });
+
+    // 分享按钮
+    elements.aboutShareBtn?.addEventListener('click', async () => {
+        const shareText = 'KVMini - 跨平台键鼠共享工具，让多台电脑共享一套键鼠！https://kvmini.app';
+        try {
+            await navigator.clipboard.writeText(shareText);
+            showSuccess(window.i18n.t('shareCopied'));
+        } catch (e) {
+            console.warn('[About] 分享复制失败:', e);
+        }
+    });
+
+    // 隐私政策按钮
+    elements.aboutPrivacyBtn?.addEventListener('click', () => {
+        showPrivacyModal();
+    });
+
+    // 更新日志按钮
+    elements.aboutChangelogBtn?.addEventListener('click', () => {
+        showChangelogModal();
+    });
+
+    // 评分按钮
+    elements.aboutRateBtn?.addEventListener('click', async () => {
+        try {
+            // 使用 SDK request_review，传入 app_id（App Store 版）
+            await invoke('request_review', { appId: '' });
+            console.log('[About] 评分引导已触发');
+        } catch (e) {
+            console.warn('[About] 评分失败:', e);
+        }
+    });
+
+    // 购买按钮（App Store 版）
+    elements.aboutPurchaseBtn?.addEventListener('click', async () => {
+        try {
+            await invoke('purchase', { productId: 'com.kvmini.app.pro' });
+        } catch (e) {
+            console.warn('[About] 购买失败:', e);
+            showError('购买功能暂时不可用');
+        }
+    });
+
+    // 恢复购买按钮（App Store 版）
+    elements.aboutRestoreBtn?.addEventListener('click', async () => {
+        try {
+            await invoke('restore_purchase');
+            await refreshAboutTrialStatus();
+        } catch (e) {
+            console.warn('[About] 恢复购买失败:', e);
+            showError('恢复购买功能暂时不可用');
+        }
+    });
+}
+
+/**
+ * 刷新关于 Tab 的许可状态显示
+ */
+async function refreshAboutTrialStatus() {
+    if (!elements.aboutTrialStatus || !elements.aboutTrialStatusText) return;
+
+    try {
+        if (invoke) {
+            const trialStatus = await invoke('get_trial_status');
+            const el = elements.aboutTrialStatus;
+            const text = elements.aboutTrialStatusText;
+            const actions = elements.aboutPurchaseActions;
+
+            el.className = 'about-trial-status';
+
+            if (trialStatus === 'Purchased' || trialStatus?.Purchased !== undefined) {
+                el.classList.add('purchased');
+                text.textContent = window.i18n.t('trialPurchased');
+                if (actions) actions.style.display = 'none';
+            } else if (trialStatus === 'Active' || trialStatus?.Active !== undefined) {
+                const daysLeft = typeof trialStatus?.Active === 'number' ? trialStatus.Active : '';
+                el.classList.add('active');
+                text.textContent = window.i18n.t('trialActive').replace('{days}', String(daysLeft));
+                if (actions) actions.style.display = 'block';
+            } else {
+                el.classList.add('expired');
+                text.textContent = window.i18n.t('trialExpired');
+                if (actions) actions.style.display = 'block';
+            }
+        }
+    } catch (e) {
+        console.warn('[About] 获取许可状态失败:', e);
+        if (elements.aboutTrialStatusText) {
+            elements.aboutTrialStatusText.textContent = window.i18n.t('trialChecking');
+        }
+    }
+}
+
+/**
+ * 显示隐私政策模态框
+ */
+async function showPrivacyModal() {
+    let content = '';
+    try {
+        // 通过 SDK 获取隐私政策（根据当前语言）
+        const locale = window.i18n.getLocale();
+        if (invoke) {
+            if (locale === 'en') {
+                content = await invoke('get_privacy_policy_en');
+            } else {
+                content = await invoke('get_privacy_policy_zh');
+            }
+        }
+    } catch (e) {
+        console.warn('[About] 获取隐私政策失败:', e);
+        content = '隐私政策内容加载失败，请稍后重试。';
+    }
+    showAboutModal(window.i18n.t('privacyModalTitle'), `<div class="about-modal-body">${content.replace(/\n/g, '<br>')}</div>`);
+}
+
+/**
+ * 显示更新日志模态框
+ */
+async function showChangelogModal() {
+    let html = '';
+    try {
+        if (invoke) {
+            const entries = await invoke('get_changelog');
+            if (Array.isArray(entries) && entries.length > 0) {
+                html = entries.map(entry => `
+                    <div class="changelog-entry">
+                        <div class="changelog-version">v${entry.version}</div>
+                        <div class="changelog-date">${entry.date || ''}</div>
+                        <ul class="changelog-changes">
+                            ${(entry.changes || []).map(c => `<li>${c}</li>`).join('')}
+                        </ul>
+                    </div>
+                `).join('');
+            } else {
+                html = '<p>暂无更新日志</p>';
+            }
+        }
+    } catch (e) {
+        console.warn('[About] 获取更新日志失败:', e);
+        html = '<p>更新日志加载失败，请稍后重试。</p>';
+    }
+    showAboutModal(window.i18n.t('changelogModalTitle'), `<div class="about-modal-body">${html}</div>`);
+}
+
+/**
+ * 通用关于模态框（复用现有 modal 样式）
+ */
+function showAboutModal(title, bodyHtml) {
+    // 复用现有 settings-discard-dialog 的 modal 结构，动态创建
+    let modal = document.getElementById('about-content-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'about-content-modal';
+        modal.className = 'modal';
+        modal.innerHTML = `
+            <div class="modal-overlay" onclick="closeAboutModal()"></div>
+            <div class="modal-content" style="max-width:520px;">
+                <div class="modal-header">
+                    <h2 id="about-modal-title"></h2>
+                    <button class="modal-close" onclick="closeAboutModal()">✕</button>
+                </div>
+                <div id="about-modal-body"></div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="closeAboutModal()">关闭</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    document.getElementById('about-modal-title').textContent = title;
+    document.getElementById('about-modal-body').innerHTML = bodyHtml;
+    modal.classList.remove('hidden');
+}
+
+function closeAboutModal() {
+    const modal = document.getElementById('about-content-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+window.closeAboutModal = closeAboutModal;
 
 // main.js 加载完成后立即启动应用
 // 初始化授权模块（异步，不阻塞主界面）

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.18">
+    <meta name="app-version" content="0.1.20">
     <title>KVM Share - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -284,6 +284,7 @@
                 <button class="settings-tab-btn" data-tab="display" data-i18n="tabDisplay">显示器布局</button>
                 <button class="settings-tab-btn" data-tab="network" data-i18n="tabNetwork">网络</button>
                 <button class="settings-tab-btn" data-tab="security" data-i18n="tabSecurity">安全</button>
+                <button class="settings-tab-btn" data-tab="about" data-i18n="tabAbout">关于</button>
             </nav>
             <!-- 小屏幕折叠导航（< 1200px 时显示） -->
             <div class="settings-tabs-select-wrap" id="settings-tabs-select-wrap">
@@ -292,6 +293,7 @@
                     <option value="display" data-i18n="tabDisplay">显示器布局</option>
                     <option value="network" data-i18n="tabNetwork">网络</option>
                     <option value="security" data-i18n="tabSecurity">安全</option>
+                    <option value="about" data-i18n="tabAbout">关于</option>
                 </select>
             </div>
 
@@ -495,6 +497,58 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- ── 关于分页 ── -->
+                <div class="settings-tab-content" id="tab-about">
+
+                    <!-- 许可状态卡片 -->
+                    <div class="settings-section">
+                        <h4 data-i18n="settingsLicense">许可状态</h4>
+                        <div id="about-trial-status" class="about-trial-status">
+                            <span id="about-trial-status-text" data-i18n="trialChecking">检测中...</span>
+                        </div>
+                        <div id="about-purchase-actions" style="display:none;margin-top:8px;">
+                            <button class="btn btn-primary" id="about-purchase-btn" data-i18n="purchaseBtn">购买完整版</button>
+                            <button class="btn btn-outline" id="about-restore-btn" style="margin-left:8px;" data-i18n="restoreBtn">恢复购买</button>
+                        </div>
+                    </div>
+
+                    <!-- 关于卡片（反馈/分享/隐私/更新日志 2x2 布局） -->
+                    <div class="settings-section">
+                        <div class="about-section-header">
+                            <h4 data-i18n="settingsAbout">关于</h4>
+                            <button class="btn btn-outline about-rate-btn" id="about-rate-btn">👍 <span data-i18n="rateApp">给个赞吧</span></button>
+                        </div>
+                        <div class="about-actions-grid">
+                            <button class="about-action-btn" id="about-feedback-btn">
+                                <span class="about-action-icon">📮</span>
+                                <span data-i18n="feedbackTitle">反馈与建议</span>
+                            </button>
+                            <button class="about-action-btn" id="about-share-btn">
+                                <span class="about-action-icon">❤️</span>
+                                <span data-i18n="shareTitle">推荐给朋友</span>
+                            </button>
+                            <button class="about-action-btn" id="about-privacy-btn">
+                                <span class="about-action-icon">🔒</span>
+                                <span data-i18n="privacyTitle">隐私政策</span>
+                            </button>
+                            <button class="about-action-btn" id="about-changelog-btn">
+                                <span class="about-action-icon">📝</span>
+                                <span data-i18n="changelogTitle">更新日志</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 版本信息卡片 -->
+                    <div class="settings-section">
+                        <h4 data-i18n="settingsVersion">版本信息</h4>
+                        <div class="about-version-info">
+                            <span class="about-version-text" id="about-version-text">KVMini</span>
+                            <span class="about-copyright">© 2026 KVMini. All rights reserved.</span>
+                        </div>
+                    </div>
+
+                </div><!-- /#tab-about -->
 
             </div><!-- /.settings-tabs-body -->
 
