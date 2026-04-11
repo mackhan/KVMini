@@ -145,6 +145,19 @@
 
 ---
 
+## Bug #012：扫描设备一瞬间结束（discover_devices 命令未注册）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 点击"扫描设备"按钮后，扫描动画一瞬间消失，没有发现任何设备，也没有等待过程 |
+| **根因** | `main.rs` 从未注册 `discover_devices` Tauri command。`kvm-core::network::discover_devices` 函数已完整实现（UDP 广播，等待 5 秒），但 `main.rs` 的 `invoke_handler` 中没有暴露这个命令。前端 `invoke('discover_devices')` 立即报错，`catch` 块执行，`setScanningState(false)` 被调用，扫描一瞬间结束 |
+| **修改方式** | 在 `main.rs` 中添加 `async fn discover_devices()` Tauri command，调用 `kvm_core::network::discover_devices(DEFAULT_UDP_PORT)`，并注册到 `invoke_handler` |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/discover-devices.test.ts` - 13 个测试，覆盖：命令存在、返回格式、空结果、扫描状态 UI、结果渲染 |
+
+---
+
 ## 已知预存在的测试失败（与迁移无关）
 
 以下测试在迁移前就已失败，不属于本次迁移引入的 bug：
@@ -166,3 +179,17 @@
 | **出现次数** | 6 |
 | **测试用例** | `__tests__/tauri-startup-arch.test.ts` - 覆盖 tauriInvokeReady 有值/无值/超时三种场景，前置脚本逻辑，启动流程集成，版本号降级 |
 | **关键教训** | WKWebView 的脚本隔离特性：外部脚本（`<script src>`）执行完成后，该脚本中新增到 `window` 的属性会被清除。解决方案是让内联脚本在外部脚本之前执行，只做最小化的工作（捕获 invoke），让外部脚本自己完成启动 |
+
+---
+
+## Bug #011：main.js 因重复变量定义导致 SyntaxError 无法执行
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | build 版本启动后，`main.js` 完全无法执行：版本号显示 HTML 硬编码值，`initApp` 为 `undefined`，所有功能失效 |
+| **根因** | `main.js` 第 1582 行重复定义了 `LAYOUT_TRIGGER_EDGE`、`LAYOUT_PREVIEW_CLASS`、`LAYOUT_DIVIDER_ARROW` 三个常量，而这三个常量已经在 `layout.js` 第 14 行定义。当 `layout.js` 先加载后，`main.js` 加载时 JS 引擎在**解析阶段**（非执行阶段）就报 `SyntaxError: Can't create duplicate variable: 'LAYOUT_TRIGGER_EDGE'`，导致整个 `main.js` 无法执行 |
+| **为什么之前没发现** | 这三个常量是在将布局相关代码从 `main.js` 提取到 `layout.js` 时，忘记删除 `main.js` 里的旧定义。在 `eval` 执行时有独立作用域，`const` 不会与全局冲突，所以 eval 模式下不报错 |
+| **修改方式** | 删除 `main.js` 里的三个重复常量定义（`LAYOUT_TRIGGER_EDGE`、`LAYOUT_PREVIEW_CLASS`、`LAYOUT_DIVIDER_ARROW`），保留 `layout.js` 里的定义 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **关键教训** | 将代码从一个文件提取到另一个文件时，必须同时删除原文件中的旧定义。重复的全局 `const` 定义会在脚本**解析阶段**（非执行阶段）报 `SyntaxError`，导致整个脚本无法执行，且错误信息不会出现在 `window.onerror` 里（因为脚本根本没有执行） |

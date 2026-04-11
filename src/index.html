@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.14">
+    <meta name="app-version" content="0.1.15">
     <title>KVM Share - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -24,6 +24,19 @@
             } catch (e) { }
         })();
     </script>
+    <!-- 版本号初始化：从 meta 标签读取，不依赖 JS 模块加载 -->
+    <script>
+        (function () {
+            var meta = document.querySelector('meta[name="app-version"]');
+            var ver = meta ? ('v' + meta.getAttribute('content')) : 'v?';
+            document.addEventListener('DOMContentLoaded', function () {
+                var el1 = document.getElementById('app-version');
+                var el2 = document.getElementById('settings-version');
+                if (el1) el1.textContent = ver;
+                if (el2) el2.textContent = ver;
+            });
+        })();
+    </script>
 </head>
 
 <body>
@@ -38,7 +51,7 @@
         <header>
             <h1 data-i18n="appTitle">KVM Share</h1>
             <p data-i18n="appSubtitle">跨平台鼠标键盘共享软件</p>
-            <p class="app-version" id="app-version">v0.2.0</p>
+            <p class="app-version" id="app-version">v0.1.14</p>
         </header>
 
         <!-- macOS 辅助功能权限引导（全屏遮罩，未授权时强制显示，不可关闭） -->
@@ -392,7 +405,7 @@
                     <button class="btn btn-primary" data-i18n="btnSaveSettings" onclick="saveSettings()">保存设置</button>
                     <button class="btn btn-outline" data-i18n="btnCancel" onclick="closeSettings()">取消</button>
                 </div>
-                <div class="settings-version" id="settings-version">v0.2.0</div>
+                <div class="settings-version" id="settings-version">v0.1.14</div>
             </div>
         </div>
     </div>

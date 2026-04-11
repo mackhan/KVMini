@@ -36,6 +36,14 @@ fn get_local_ip() -> Vec<String> {
         .collect()
 }
 
+/// 扫描局域网内的 KVMini 设备（UDP 广播，等待 5 秒）
+#[tauri::command]
+async fn discover_devices() -> Result<Vec<kvm_core::network::DiscoveredDevice>, String> {
+    kvm_core::network::discover_devices(kvm_core::network::DEFAULT_UDP_PORT)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 获取当前平台名称
 #[tauri::command]
 fn get_platform() -> String {
@@ -275,6 +283,7 @@ async fn main() {
             get_app_version,
             get_local_ip,
             get_platform,
+            discover_devices,
             // 连接管理
             connection::start_listening,
             connection::connect_to_peer,
