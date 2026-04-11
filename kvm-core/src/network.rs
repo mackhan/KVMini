@@ -107,6 +107,11 @@ pub struct HandshakeInfo {
     pub platform: Platform,
     /// 屏幕布局信息
     pub screen_info: VirtualDesktop,
+    /// 是否启用 TLS 加密（用于双端 TLS 状态比较）
+    /// 注意：旧版本客户端不携带此字段，反序列化时默认为 false（未开启）。
+    /// 如果本机开启了 TLS 但对端是旧版本，会触发 tls_mismatch 提示，这是预期行为。
+    #[serde(default)]
+    pub tls_enabled: bool,
 }
 
 impl HandshakeInfo {
@@ -115,6 +120,17 @@ impl HandshakeInfo {
             version: PROTOCOL_VERSION,
             platform,
             screen_info,
+            tls_enabled: false,
+        }
+    }
+
+    /// 创建携带 TLS 状态的握手信息
+    pub fn new_with_tls(platform: Platform, screen_info: VirtualDesktop, tls_enabled: bool) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            platform,
+            screen_info,
+            tls_enabled,
         }
     }
 
@@ -396,7 +412,7 @@ impl ConnectionManager {
                 }
                 let desktop = HandshakeInfo::parse_screen_info(&screen_info)
                     .unwrap_or_else(|| VirtualDesktop::from_monitors(vec![]));
-                HandshakeInfo { version, platform, screen_info: desktop }
+                HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }
             }
             other => {
                 return Err(KvmError::HandshakeFailed {
@@ -549,7 +565,7 @@ async fn handle_stream(
 
             let desktop = HandshakeInfo::parse_screen_info(&screen_info)
                 .unwrap_or_else(|| VirtualDesktop::from_monitors(vec![]));
-            HandshakeInfo { version, platform, screen_info: desktop }
+            HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }
         }
         _ => {
             let _ = event_tx.send(NetworkEvent::Error("握手失败".to_string()));

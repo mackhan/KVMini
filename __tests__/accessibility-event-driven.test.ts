@@ -178,6 +178,68 @@ describe('需求 3：前端被动响应权限事件', () => {
     });
 });
 
+// ─── 需求 3.新增：前端加载完毕后主动请求权限状态（解决事件时序问题）──────────
+
+describe('需求 3.新增：前端加载完毕后主动请求权限状态', () => {
+    test('3.NEW-1 accessibility.js 加载后应主动调用 invoke("check_accessibility_permission") 获取初始状态', async () => {
+        const mockInvoke = jest.fn().mockResolvedValue('Denied');
+        (window as any).__TAURI__.invoke = mockInvoke;
+
+        require('../src/accessibility.js');
+        // 等待异步初始化完成
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(mockInvoke).toHaveBeenCalledWith('check_accessibility_permission');
+    });
+
+    test('3.NEW-2 初始权限状态为 Denied 时：应显示遮罩', async () => {
+        const mockInvoke = jest.fn().mockResolvedValue('Denied');
+        (window as any).__TAURI__.invoke = mockInvoke;
+
+        require('../src/accessibility.js');
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const overlay = document.getElementById('accessibility-overlay');
+        expect(overlay?.classList.contains('hidden')).toBe(false);
+    });
+
+    test('3.NEW-3 初始权限状态为 Granted 时：不显示遮罩', async () => {
+        const mockInvoke = jest.fn().mockResolvedValue('Granted');
+        (window as any).__TAURI__.invoke = mockInvoke;
+
+        require('../src/accessibility.js');
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const overlay = document.getElementById('accessibility-overlay');
+        expect(overlay?.classList.contains('hidden')).toBe(true);
+    });
+
+    test('3.NEW-4 invoke 不可用时：不抛出异常，遮罩保持隐藏（安全降级）', async () => {
+        // 不设置 invoke
+        (window as any).__TAURI__ = {
+            event: {
+                listen: jest.fn((eventName: string, callback: (event: any) => void) => {
+                    if (!tauriEventListeners[eventName]) {
+                        tauriEventListeners[eventName] = [];
+                    }
+                    tauriEventListeners[eventName].push(callback);
+                    return Promise.resolve(() => { });
+                }),
+            },
+        };
+
+        expect(() => {
+            require('../src/accessibility.js');
+        }).not.toThrow();
+
+        const overlay = document.getElementById('accessibility-overlay');
+        expect(overlay?.classList.contains('hidden')).toBe(true);
+    });
+});
+
 // ─── 需求 4：前往授权按钮功能 ─────────────────────────────────────────────────
 
 describe('需求 4：前往授权按钮功能', () => {

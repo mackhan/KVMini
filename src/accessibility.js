@@ -64,6 +64,28 @@ function initAccessibilityEventListeners() {
         });
     }
 
+    // 主动请求初始权限状态
+    // 解决时序问题：Rust setup 阶段发送事件时前端 JS 可能还未加载完毕，
+    // 事件会被丢弃。因此前端加载完毕后主动查询一次当前权限状态。
+    if (invoke) {
+        const result = invoke('check_accessibility_permission');
+        if (result && typeof result.then === 'function') {
+            result.then((status) => {
+                const overlay = document.getElementById('accessibility-overlay');
+                if (!overlay) return;
+                if (status !== 'Granted') {
+                    console.log('[Accessibility] 初始权限状态: Denied，显示引导遮罩');
+                    overlay.classList.remove('hidden');
+                } else {
+                    console.log('[Accessibility] 初始权限状态: Granted，无需显示遮罩');
+                    overlay.classList.add('hidden');
+                }
+            }).catch((e) => {
+                console.warn('[Accessibility] 查询初始权限状态失败:', e);
+            });
+        }
+    }
+
     console.log('[Accessibility] 权限事件监听器已注册');
 }
 

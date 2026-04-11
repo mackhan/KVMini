@@ -57,7 +57,120 @@ function calcBoundingBox(monitors) {
     return { minX, minY, totalW: maxX - minX, totalH: maxY - minY };
 }
 
-// ─── UI 渲染 ─────────────────────────────────────────────────────────────────
+// ─── 纯函数：拖拽布局计算 ────────────────────────────────────────────────────
+
+/**
+ * 根据拖拽后本机和远端的中心坐标，计算布局方向（纯函数）
+ * 优先判断距离更大的轴方向
+ * @param {number} localCx - 本机中心 X
+ * @param {number} localCy - 本机中心 Y
+ * @param {number} remoteCx - 远端中心 X
+ * @param {number} remoteCy - 远端中心 Y
+ * @returns {string} 布局方向枚举值
+ */
+function calcLayoutFromDrop(localCx, localCy, remoteCx, remoteCy) {
+    const dx = localCx - remoteCx;
+    const dy = localCy - remoteCy;
+    // 优先判断绝对值更大的轴
+    if (Math.abs(dx) >= Math.abs(dy)) {
+        return dx < 0 ? 'LocalLeftOfRemote' : 'LocalRightOfRemote';
+    } else {
+        return dy < 0 ? 'LocalAboveRemote' : 'LocalBelowRemote';
+    }
+}
+
+/**
+ * 检测两个矩形是否重叠（纯函数）
+ * @param {{ x: number, y: number, w: number, h: number }} r1
+ * @param {{ x: number, y: number, w: number, h: number }} r2
+ * @returns {boolean}
+ */
+function isOverlapping(r1, r2) {
+    return r1.x < r2.x + r2.w &&
+           r1.x + r1.w > r2.x &&
+           r1.y < r2.y + r2.h &&
+           r1.y + r1.h > r2.y;
+}
+
+// ─── UI：拖拽交互 ─────────────────────────────────────────────────────────────
+
+/**
+ * 初始化显示器布局拖拽交互
+ * 支持 HTML5 Drag & Drop API
+ * @param {Function} onLayoutChange - 布局变化回调 (newLayout: string) => void
+ */
+function initLayoutDrag(onLayoutChange) {
+    const localGroup = document.getElementById('local-monitor-group');
+    const remoteGroup = document.getElementById('remote-monitor-group');
+    const preview = document.getElementById('display-layout-preview');
+    if (!localGroup || !remoteGroup || !preview) return;
+
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let lastValidLayout = null;
+
+    // 拖拽开始
+    localGroup.addEventListener('dragstart', (e) => {
+        const rect = localGroup.getBoundingClientRect();
+        dragStartX = rect.left + rect.width / 2;
+        dragStartY = rect.top + rect.height / 2;
+        localGroup.style.opacity = '0.6';
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+        }
+    });
+
+    // 拖拽结束
+    localGroup.addEventListener('dragend', () => {
+        localGroup.style.opacity = '1';
+        localGroup.classList.remove('drag-invalid');
+    });
+
+    // 拖拽经过预览区域
+    preview.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    });
+
+    // 放置到预览区域
+    preview.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const previewRect = preview.getBoundingClientRect();
+        const dropX = e.clientX - previewRect.left;
+        const dropY = e.clientY - previewRect.top;
+
+        // 计算远端中心
+        const remoteRect = remoteGroup.getBoundingClientRect();
+        const remoteCx = remoteRect.left + remoteRect.width / 2 - previewRect.left;
+        const remoteCy = remoteRect.top + remoteRect.height / 2 - previewRect.top;
+
+        // 检测是否完全重叠（无效位置）
+        const localW = parseInt(localGroup.style.width) || 80;
+        const localH = parseInt(localGroup.style.height) || 60;
+        const remoteW = parseInt(remoteGroup.style.width) || 80;
+        const remoteH = parseInt(remoteGroup.style.height) || 60;
+
+        const localRect = { x: dropX - localW / 2, y: dropY - localH / 2, w: localW, h: localH };
+        const remoteRectBox = { x: remoteCx - remoteW / 2, y: remoteCy - remoteH / 2, w: remoteW, h: remoteH };
+
+        if (isOverlapping(localRect, remoteRectBox)) {
+            // 无效位置：显示红色边框，恢复上一个有效位置
+            localGroup.classList.add('drag-invalid');
+            setTimeout(() => localGroup.classList.remove('drag-invalid'), 800);
+            return;
+        }
+
+        // 计算新布局方向
+        const newLayout = calcLayoutFromDrop(dropX, dropY, remoteCx, remoteCy);
+        lastValidLayout = newLayout;
+
+        if (onLayoutChange) {
+            onLayoutChange(newLayout);
+        }
+    });
+}
+
+
 
 /**
  * 渲染一组显示器方块到指定容器
@@ -209,8 +322,12 @@ window.LayoutModule = {
     LAYOUT_DIVIDER_ARROW,
     // 纯函数
     calcBoundingBox,
+    calcLayoutFromDrop,
+    isOverlapping,
     // UI 渲染
     renderMonitorGroup,
     renderMonitorLayout,
     updateLayoutPreview,
+    // 拖拽交互
+    initLayoutDrag,
 };

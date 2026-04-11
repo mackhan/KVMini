@@ -37,6 +37,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub autostart: bool,
 
+    /// 是否启用 TLS 加密传输
+    #[serde(default = "default_true")]
+    pub enable_tls: bool,
+
     /// 是否启用自动重连
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
@@ -67,6 +71,7 @@ impl Default for AppConfig {
             edge_threshold: default_edge_threshold(),
             clipboard_sync: true,
             autostart: false,
+            enable_tls: true,
             auto_reconnect: true,
             reconnect_max_attempts: default_reconnect_max(),
             reconnect_interval_secs: default_reconnect_interval(),

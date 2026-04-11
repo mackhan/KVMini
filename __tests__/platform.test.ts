@@ -74,7 +74,7 @@ describe('Platform 抽象层 - 正常调用', () => {
         expect(result).toEqual({ hotkey: 'Ctrl+Alt+K' });
     });
 
-    test('invoke 可用时，save_settings 传递正确参数', async () => {
+    test('invoke 可用时，save_settings 传递正确参数（键名为 config）', async () => {
         const createSafeInvoke = (invokeFunc: any) => {
             return async (cmd: string, args: any = {}, fallback: any = null) => {
                 if (!invokeFunc) return fallback;
@@ -83,11 +83,12 @@ describe('Platform 抽象层 - 正常调用', () => {
         };
         const safeInvoke = createSafeInvoke(mockInvoke);
 
-        const settings = { hotkey: 'Ctrl+Alt+K', preferConnectionType: 'network', autoReconnect: true, autoStart: false, startMinimized: false };
+        // Bug #016 修复：Rust 后端期望键名为 config，不是 settings
+        const config = { hotkey: 'Ctrl+Alt+K', preferConnectionType: 'network', autoReconnect: true, autoStart: false, startMinimized: false };
         mockInvoke.mockResolvedValue(undefined);
-        await safeInvoke('save_settings', { settings }, undefined);
+        await safeInvoke('save_settings', { config }, undefined);
 
-        expect(mockInvoke).toHaveBeenCalledWith('save_settings', { settings });
+        expect(mockInvoke).toHaveBeenCalledWith('save_settings', { config });
     });
 
     test('invoke 可用时，show_tray_notification 传递 title 和 body', async () => {

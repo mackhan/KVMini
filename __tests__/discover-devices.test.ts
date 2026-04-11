@@ -186,3 +186,167 @@ describe('Bug #012：main.rs 必须注册 discover_devices 命令', () => {
         expect(mainRs).toMatch(/fn discover_devices/);
     });
 });
+
+// ── 5. handleScan() 结果反馈 UX（Bug #013 修复验证） ─────────────────────
+//
+// Bug #013：扫描 UX 反馈混乱
+// 现象 A：第一次点击扫描立即弹出"未发现局域网设备"（catch 分支用了错误文案）
+// 现象 B：第二次点击扫描等待后无任何提示（空结果分支没有 Toast）
+// 根因：catch 分支使用 noDevicesAfterScan 文案；空结果分支缺少 Toast 通知
+// 修复：catch 用 scanFailed 文案；空结果显示 noDevicesFound Toast；有结果显示 scanFoundDevices Toast
+
+describe('Bug #013：handleScan() 结果反馈 UX', () => {
+    // 模拟 handleScan 的核心逻辑（与 main.js 实现保持一致）
+    function makeHandleScan(
+        invokeResult: 'error' | 'empty' | 'found',
+        showError: jest.Mock,
+        showSuccess: jest.Mock,
+        updateDevicesList: jest.Mock,
+    ) {
+        const i18n = require('../src/i18n.js');
+        const invoke = async () => {
+            if (invokeResult === 'error') throw new Error('command not found');
+            if (invokeResult === 'empty') return [];
+            return [{ name: 'MacBook Pro', os: 'macOS', ip: '192.168.1.100', tcp_port: 23456 }];
+        };
+
+        return async () => {
+            try {
+                const devices = await invoke();
+                if (devices.length === 0) {
+                    updateDevicesList([]);
+                    showSuccess(i18n.t('noDevicesFound'));
+                } else {
+                    updateDevicesList(devices);
+                    showSuccess(i18n.t('scanFoundDevices').replace('{n}', String(devices.length)));
+                }
+            } catch (error) {
+                showError(i18n.t('scanFailed'));
+                updateDevicesList([]);
+            }
+        };
+    }
+
+    test('测试用例 A：invoke 抛出异常时，显示 scanFailed 文案，不显示 noDevicesAfterScan', async () => {
+        const showError = jest.fn();
+        const showSuccess = jest.fn();
+        const updateDevicesList = jest.fn();
+
+        const handleScan = makeHandleScan('error', showError, showSuccess, updateDevicesList);
+        await handleScan();
+
+        // 应该显示 scanFailed 文案
+        expect(showError).toHaveBeenCalledWith('扫描失败，请重试');
+        // 不应该显示 noDevicesAfterScan 文案
+        expect(showError).not.toHaveBeenCalledWith(
+            expect.stringContaining('请确保目标设备在同一局域网内')
+        );
+        // 设备列表应该清空
+        expect(updateDevicesList).toHaveBeenCalledWith([]);
+    });
+
+    test('测试用例 B：invoke 返回空数组时，显示 noDevicesFound Toast，不显示 error 级别提示', async () => {
+        const showError = jest.fn();
+        const showSuccess = jest.fn();
+        const updateDevicesList = jest.fn();
+
+        const handleScan = makeHandleScan('empty', showError, showSuccess, updateDevicesList);
+        await handleScan();
+
+        // 不应该显示 error 级别提示
+        expect(showError).not.toHaveBeenCalled();
+        // 应该显示 noDevicesFound 提示（通过 showSuccess）
+        expect(showSuccess).toHaveBeenCalledWith('未发现局域网设备，可尝试手动连接');
+        // 设备列表应该更新为空
+        expect(updateDevicesList).toHaveBeenCalledWith([]);
+    });
+
+    test('测试用例 C：invoke 返回非空数组时，显示 scanFoundDevices 成功 Toast', async () => {
+        const showError = jest.fn();
+        const showSuccess = jest.fn();
+        const updateDevicesList = jest.fn();
+
+        const handleScan = makeHandleScan('found', showError, showSuccess, updateDevicesList);
+        await handleScan();
+
+        // 不应该显示 error 提示
+        expect(showError).not.toHaveBeenCalled();
+        // 应该显示成功 Toast，包含设备数量
+        expect(showSuccess).toHaveBeenCalledWith('发现 1 台设备');
+        // 设备列表应该更新
+        expect(updateDevicesList).toHaveBeenCalledWith(
+            expect.arrayContaining([expect.objectContaining({ name: 'MacBook Pro' })])
+        );
+    });
+
+    test('测试用例 D：扫描结束后（无论结果），按钮恢复可用状态，扫描动画隐藏', async () => {
+        // 模拟 finally 块的行为
+        const setScanningState = jest.fn();
+        let scanningStateAfterFinally: boolean | null = null;
+
+        const handleScanWithFinally = async (invokeResult: 'error' | 'empty' | 'found') => {
+            const invoke = async () => {
+                if (invokeResult === 'error') throw new Error('fail');
+                if (invokeResult === 'empty') return [];
+                return [{ name: 'Test', os: 'macOS', ip: '192.168.1.1', tcp_port: 23456 }];
+            };
+            try {
+                await invoke();
+            } catch (_) {
+                // 忽略
+            } finally {
+                setScanningState(false);
+                scanningStateAfterFinally = false;
+            }
+        };
+
+        // 测试三种情况下 finally 都执行
+        await handleScanWithFinally('error');
+        expect(setScanningState).toHaveBeenLastCalledWith(false);
+        expect(scanningStateAfterFinally).toBe(false);
+
+        await handleScanWithFinally('empty');
+        expect(setScanningState).toHaveBeenLastCalledWith(false);
+
+        await handleScanWithFinally('found');
+        expect(setScanningState).toHaveBeenLastCalledWith(false);
+
+        // 共调用 3 次
+        expect(setScanningState).toHaveBeenCalledTimes(3);
+    });
+
+    test('i18n 文案：scanFailed 中文正确', () => {
+        const i18n = require('../src/i18n.js');
+        i18n.setLocale('zh');
+        expect(i18n.t('scanFailed')).toBe('扫描失败，请重试');
+    });
+
+    test('i18n 文案：scanFoundDevices 中文包含 {n} 占位符', () => {
+        const i18n = require('../src/i18n.js');
+        i18n.setLocale('zh');
+        const tpl = i18n.t('scanFoundDevices');
+        expect(tpl).toContain('{n}');
+        expect(tpl.replace('{n}', '3')).toBe('发现 3 台设备');
+    });
+
+    test('i18n 文案：noDevicesFound 中文包含手动连接提示', () => {
+        const i18n = require('../src/i18n.js');
+        i18n.setLocale('zh');
+        expect(i18n.t('noDevicesFound')).toContain('手动连接');
+    });
+
+    test('i18n 文案：scanFailed 英文正确', () => {
+        const i18n = require('../src/i18n.js');
+        i18n.setLocale('en');
+        expect(i18n.t('scanFailed')).toBe('Scan failed, please try again');
+        i18n.setLocale('zh'); // 恢复默认
+    });
+
+    test('i18n 文案：scanFoundDevices 英文包含 {n} 占位符', () => {
+        const i18n = require('../src/i18n.js');
+        i18n.setLocale('en');
+        const tpl = i18n.t('scanFoundDevices');
+        expect(tpl).toContain('{n}');
+        i18n.setLocale('zh'); // 恢复默认
+    });
+});

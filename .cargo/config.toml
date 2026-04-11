@@ -1,0 +1,3 @@
+[net]
+# 使用系统 git CLI 拉取私有仓库（tauri-commerce），支持系统 git 的凭证管理
+git-fetch-with-cli = true

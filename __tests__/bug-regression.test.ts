@@ -358,3 +358,28 @@ describe('Bug #006：权限引导新架构 - Rust 侧主动推送事件', () => 
     expect(accessibilityJs).not.toContain('function startAccessibilityPolling');
   });
 });
+
+// ── Bug #011：main.js 重复定义全局常量导致 SyntaxError ──────────────
+
+describe('Bug #011：JS 文件间无重复全局常量定义', () => {
+  test('main.js 不包含 layout.js 已定义的 LAYOUT_ 常量', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const mainJs = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf-8');
+
+    // 这三个常量已在 layout.js 中定义，main.js 不应重复定义
+    expect(mainJs).not.toMatch(/^const LAYOUT_TRIGGER_EDGE\s*=/m);
+    expect(mainJs).not.toMatch(/^const LAYOUT_PREVIEW_CLASS\s*=/m);
+    expect(mainJs).not.toMatch(/^const LAYOUT_DIVIDER_ARROW\s*=/m);
+  });
+
+  test('layout.js 包含 LAYOUT_ 常量的正确定义', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const layoutJs = fs.readFileSync(path.join(__dirname, '../src/layout.js'), 'utf-8');
+
+    expect(layoutJs).toMatch(/const LAYOUT_TRIGGER_EDGE\s*=/);
+    expect(layoutJs).toMatch(/const LAYOUT_PREVIEW_CLASS\s*=/);
+    expect(layoutJs).toMatch(/const LAYOUT_DIVIDER_ARROW\s*=/);
+  });
+});

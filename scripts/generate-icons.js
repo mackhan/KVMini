@@ -1,60 +1,52 @@
 #!/usr/bin/env node
 /**
- * generate-icons.js
- * 从 SVG 源文件生成所有尺寸的 PNG 图标
- * 用法：node scripts/generate-icons.js
+ * generate-icons.js - 从 SVG 生成所有尺寸的图标文件
+ * 使用 sharp 库将 icon.svg 转换为各种尺寸的 PNG
  */
 
 const sharp = require('sharp');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 
-const SVG_PATH = path.join(__dirname, '../src-tauri/icons/icon.svg');
 const ICONS_DIR = path.join(__dirname, '../src-tauri/icons');
+const SVG_PATH = path.join(ICONS_DIR, 'icon.svg');
 
 // 需要生成的尺寸
 const SIZES = [16, 32, 64, 128, 256, 512, 1024];
 
-// Tauri 需要的特定文件名
-const TAURI_ICONS = [
-    { size: 32,  name: '32x32.png' },
-    { size: 128, name: '128x128.png' },
-    { size: 256, name: '128x128@2x.png' },
-    { size: 256, name: '256x256.png' },
-    { size: 512, name: '512x512.png' },
-    { size: 1024, name: 'icon.png' },
-];
+// 文件名映射（Tauri 需要的标准文件名）
+const FILE_NAMES = {
+    16:   ['icon_16x16.png', '32x32.png'],
+    32:   ['icon_32x32.png'],
+    64:   ['icon_64x64.png'],
+    128:  ['icon_128x128.png', '128x128.png'],
+    256:  ['icon_256x256.png', '256x256.png', '128x128@2x.png'],
+    512:  ['icon_512x512.png', '512x512.png'],
+    1024: ['icon_1024x1024.png', 'icon.png'],
+};
 
 async function generateIcons() {
-    console.log('📦 开始生成图标...');
+    console.log('[图标生成] 开始从 SVG 生成所有尺寸图标...');
 
     const svgBuffer = fs.readFileSync(SVG_PATH);
 
-    // 生成标准尺寸 PNG
     for (const size of SIZES) {
-        const outputPath = path.join(ICONS_DIR, `icon_${size}x${size}.png`);
-        await sharp(svgBuffer)
-            .resize(size, size)
-            .png()
-            .toFile(outputPath);
-        console.log(`  ✅ ${size}x${size}.png`);
+        const fileNames = FILE_NAMES[size] || [`icon_${size}x${size}.png`];
+        for (const fileName of fileNames) {
+            const outputPath = path.join(ICONS_DIR, fileName);
+            await sharp(svgBuffer)
+                .resize(size, size)
+                .png()
+                .toFile(outputPath);
+            console.log(`  ✅ 生成 ${fileName} (${size}x${size})`);
+        }
     }
 
-    // 生成 Tauri 需要的特定文件名
-    for (const { size, name } of TAURI_ICONS) {
-        const outputPath = path.join(ICONS_DIR, name);
-        await sharp(svgBuffer)
-            .resize(size, size)
-            .png()
-            .toFile(outputPath);
-        console.log(`  ✅ ${name} (${size}x${size})`);
-    }
-
-    console.log('\n🎉 图标生成完成！');
-    console.log(`📁 输出目录: ${ICONS_DIR}`);
+    console.log('[图标生成] 所有 PNG 图标生成完成！');
+    console.log('[图标生成] 注意：icon.icns 和 icon.ico 需要手动生成或使用 tauri icon 命令');
 }
 
 generateIcons().catch(err => {
-    console.error('❌ 图标生成失败:', err);
+    console.error('[图标生成] 失败:', err);
     process.exit(1);
 });

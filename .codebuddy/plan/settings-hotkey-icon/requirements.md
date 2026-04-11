@@ -1,54 +1,125 @@
-# 需求文档：设置功能完善 + 快捷键修复 + 应用图标设计
+# 需求文档：设置功能完善 + 快捷键修复 + 应用图标设计 + tauri-commerce SDK 接入
 
 ## 引言
 
-本次迭代来源于用户在实际使用中发现的 4 类问题，涵盖 **2 个 Bug 修复**、**1 个功能完善** 和 **1 个设计任务**：
+本次迭代来源于用户在实际使用中发现的 4 类问题，涵盖 **2 个 Bug 修复**、**1 个功能完善** 和 **1 个设计任务**，以及 **1 个 SDK 接入任务**：
 
-1. **[Bug] 语言/主题等设置未生效** - 设置页中语言切换、主题切换等功能保存后没有实际效果，疑似 SDK 未正确接入或前端未响应设置变更
-2. **[Bug] 设置页取消按钮无效** - 修改设置后点击"取消"没有弹出"是否放弃修改"确认提示，直接关闭或无响应，导致用户无法安全放弃修改
-3. **[Bug] 快捷键设置失败弹窗** - 设置快捷键时会弹出错误窗口，快捷键功能无法正常使用
-4. **[功能] 设置页全量测试用例** - 设置页所有功能（语言、主题、快捷键、网络、TLS、保存/取消等）缺乏完整测试覆盖
-5. **[设计] 应用图标设计** - 当前图标为空白或大蓝底，需要设计一个符合 KVMini 产品定位的专业图标
+1. **[SDK 接入] tauri-commerce SDK 首次完整接入** - 项目从未接入 tauri-commerce SDK，需要完整接入，支持 App Store（IAP）和直接下载（trial）双模式构建
+2. **[Bug] 语言/主题等设置未生效** - 设置页中语言切换、主题切换等功能保存后没有实际效果，需通过 tauri-commerce SDK 的 i18n 模块实现
+3. **[Bug] 设置页取消按钮无效** - 修改设置后点击"取消"没有弹出"是否放弃修改"确认提示
+4. **[Bug] 快捷键设置失败弹窗** - 设置快捷键时会弹出错误窗口，快捷键功能无法正常使用
+5. **[功能] 设置页全量测试用例** - 设置页所有功能缺乏完整测试覆盖
+6. **[设计] 应用图标设计** - 当前图标为空白或大蓝底，需要设计专业图标
 
 ---
 
 ## 需求
 
-### 需求 1：[Bug] 通过 tauri-commerce SDK 实现语言/主题设置生效
+### 需求 1：[SDK 接入] tauri-commerce SDK 完整接入（双模式构建）
+
+**用户故事：** 作为开发者，我希望 KVMini 完整接入 tauri-commerce SDK，支持 App Store（IAP 内购）和直接下载（试用期管理）两种发布模式，并通过构建时 feature flags 切换，以便在开发阶段直接下载测试，上架时切换为 App Store 模式。
+
+#### 背景（已确认现状）
+
+**当前状态**：
+- KVMini 的 `src-tauri/Cargo.toml` 中**完全没有** tauri-commerce 依赖
+- `src/license.js` 中只有注释占位符，写着"待 SDK 可用后替换"
+- 项目有自己的 `i18n.js` 和 `theme.js`，但这些应该被 SDK 的 i18n 模块替代
+
+**SDK 信息**：
+- 私有 Git 仓库：`https://github.com/mackhan/tauri-commerce`
+- 最新版本：`v0.1.2`（2026-04-12）
+- 接入方式：使用 **Git 引用**（与 OnenoteCopy 保持一致，SDK 只在 tauri-commerce 仓库中修改，KVMini 只是消费方）
+- 参考项目：`~/Documents/Git/OnenoteCopy`（已有完整接入示例，引用方式相同）
+
+**重要约束**：
+- KVMini **不能修改** tauri-commerce SDK 源码，SDK 的修改只在 tauri-commerce 仓库中进行
+- KVMini 通过 Git tag 引用固定版本，升级时只需更新 tag 版本号
+
+**双模式构建方案**：
+
+| 模式 | 适用场景 | Feature Flags | 说明 |
+|------|---------|--------------|------|
+| App Store 版 | MAS 上架 | `trial`, `iap`, `i18n`, `permissions`, `feedback`, `review`, `autostart` | 启用 IAP，禁用 updater |
+| 直接下载版 | 开发阶段 / 官网下载 | `trial`, `i18n`, `permissions`, `feedback`, `review`, `autostart`, `changelog` | 无 IAP，可用 updater |
+
+**Cargo.toml 配置方案**（Git 引用，与 OnenoteCopy 一致）：
+```toml
+# 直接下载版（默认/开发阶段）
+[dependencies]
+tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", tag = "v0.1.2", default-features = false, features = ["trial", "i18n", "permissions", "feedback", "review", "autostart", "changelog"] }
+
+# App Store 版（构建时切换 features）：
+# tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", tag = "v0.1.2", default-features = false, features = ["trial", "iap", "i18n", "permissions", "feedback", "review", "autostart"] }
+```
+
+**SDK 提供的 Tauri 命令**（需注册到 invoke_handler）：
+- `get_trial_status` - 获取试用/购买状态
+- `purchase` / `restore_purchase` - IAP 内购（仅 App Store 版）
+- `get_locale` / `set_locale` - 语言切换
+- `check_accessibility_permission` / `request_accessibility_permission` - 辅助功能权限
+- `send_feedback` - 用户反馈
+- `request_review` - 评分引导
+- `get_changelog` - 更新日志
+- `get_app_version` - 应用版本
+
+**main.rs 初始化示例**（参考 OnenoteCopy）：
+```rust
+let commerce_config = tauri_commerce::CommerceConfig::builder()
+    .app_name("KVMini")
+    .app_version(env!("CARGO_PKG_VERSION"))
+    .bundle_id("com.kvmini.app")
+    .product_id("com.kvmini.app.pro")  // App Store 版内购产品 ID
+    .feedback_email("support@kvmini.app")
+    .trial_days(7)
+    .review_trigger_count(10)
+    .build()
+    .expect("Commerce SDK 配置构建失败");
+tauri_commerce::init(commerce_config).expect("SDK 初始化失败");
+tauri_commerce::iap::init_iap();  // 仅 App Store 版需要
+```
+
+#### 验收标准
+
+1. WHEN 项目构建时 THEN 系统 SHALL 成功编译 tauri-commerce 依赖，无编译错误
+2. WHEN 应用启动时 THEN 系统 SHALL 成功初始化 tauri-commerce SDK，日志显示"SDK 初始化成功"
+3. WHEN 前端调用 `get_trial_status` THEN 系统 SHALL 返回正确的试用状态（Active/Expired/Purchased）
+4. WHEN 前端调用 `get_locale` / `set_locale` THEN 系统 SHALL 正确读取和切换语言
+5. WHEN 前端调用 `check_accessibility_permission` THEN 系统 SHALL 返回当前辅助功能权限状态
+6. WHEN 使用直接下载版 feature flags 构建 THEN 系统 SHALL 不包含 IAP 相关代码，构建成功
+7. WHEN 使用 App Store 版 feature flags 构建 THEN 系统 SHALL 包含 IAP 模块，构建成功
+8. IF SDK 初始化失败 THEN 系统 SHALL 记录错误日志，应用仍能正常启动（降级处理）
+9. WHEN 在 Windows 上构建 THEN 系统 SHALL 自动禁用 iap feature，只使用 trial 模式
+10. WHEN SDK 接入完成 THEN 系统 SHALL 将 `src/license.js` 中的占位符替换为真实的 SDK 调用
+
+---
+
+### 需求 2：[Bug] 通过 tauri-commerce SDK 实现语言/主题设置生效
 
 **用户故事：** 作为用户，我希望在设置页修改语言、主题等选项并保存后，界面能立即反映这些变更，而不是保存后毫无变化。
 
 #### 背景（已确认根因）
 
-**根本原因**：项目已引入 `tauri-commerce` SDK，该 SDK 提供了语言国际化（i18n）和主题切换能力，但**前端代码未正确调用 SDK 的 API**，导致设置保存后界面没有任何变化。
-
-**错误调用链**：
-```
-用户保存语言/主题设置
-  → invoke('save_settings', { config: { language, theme } })
-  → Rust 后端保存配置文件 ✅
-  → ❌ 前端未调用 tauri-commerce SDK 的 applyLanguage() / applyTheme()
-  → 界面无变化
-```
+**根本原因**：项目有自己的 `i18n.js` 和 `theme.js`，但 tauri-commerce SDK 提供了更完整的 i18n 支持（Rust 后端 + 前端联动）。接入 SDK 后，语言切换应通过 SDK 的 `set_locale` 命令实现，主题切换继续使用前端 `theme.js`（SDK 不管理主题）。
 
 **修复方向**：
-1. 在前端保存设置成功后，调用 `tauri-commerce` SDK 提供的语言切换 API（如 `i18n.setLocale(lang)`）
-2. 调用 SDK 提供的主题切换 API（如 `theme.apply(themeName)`）
-3. 应用启动时读取已保存的语言/主题配置，通过 SDK 初始化
+1. 保存设置后，调用 `invoke('set_locale', { locale })` 切换语言
+2. 调用 `window.themeManager.setTheme(theme)` 切换主题
+3. 应用启动时通过 SDK 的 `get_locale` 初始化语言
 
 #### 验收标准
 
-1. WHEN 用户在设置页将语言切换为"English"并保存 THEN 系统 SHALL 通过 tauri-commerce SDK 立即将界面所有文字切换为英文
-2. WHEN 用户在设置页将语言切换为"中文"并保存 THEN 系统 SHALL 通过 tauri-commerce SDK 立即将界面所有文字切换为中文
-3. WHEN 用户在设置页将主题切换为"深色"并保存 THEN 系统 SHALL 通过 tauri-commerce SDK 立即应用深色主题
-4. WHEN 用户在设置页将主题切换为"浅色"并保存 THEN 系统 SHALL 通过 tauri-commerce SDK 立即应用浅色主题
+1. WHEN 用户在设置页将语言切换为"English"并保存 THEN 系统 SHALL 通过 SDK `set_locale` 立即将界面切换为英文
+2. WHEN 用户在设置页将语言切换为"中文"并保存 THEN 系统 SHALL 通过 SDK `set_locale` 立即将界面切换为中文
+3. WHEN 用户在设置页将主题切换为"深色"并保存 THEN 系统 SHALL 立即应用深色主题
+4. WHEN 用户在设置页将主题切换为"浅色"并保存 THEN 系统 SHALL 立即应用浅色主题
 5. WHEN 用户在设置页将主题切换为"跟随系统"并保存 THEN 系统 SHALL 根据系统当前主题自动切换
-6. WHEN 应用启动时 THEN 系统 SHALL 读取已保存的语言和主题配置，通过 tauri-commerce SDK 初始化
-7. IF tauri-commerce SDK 调用失败 THEN 系统 SHALL 记录错误日志并保持当前状态不变
+6. WHEN 应用启动时 THEN 系统 SHALL 通过 SDK `get_locale` 读取已保存语言并初始化
+7. IF SDK 调用失败 THEN 系统 SHALL 记录错误日志并保持当前状态不变
 
 ---
 
-### 需求 2：[Bug] 设置页取消按钮需弹出确认提示
+### 需求 3：[Bug] 设置页取消按钮需弹出确认提示
 
 **用户故事：** 作为用户，我希望在修改了设置但未保存时点击"取消"，系统能弹出确认提示，让我选择是否放弃修改，而不是直接关闭或无响应。
 
@@ -74,24 +145,15 @@
 
 ---
 
-### 需求 3：[Bug] 实现缺失的全局快捷键注册命令
+### 需求 4：[Bug] 实现缺失的全局快捷键注册命令
 
 **用户故事：** 作为用户，我希望能正常设置全局快捷键，而不是每次保存设置都弹出"快捷键注册失败"的错误窗口。
 
 #### 背景（已确认根因）
 
-**根本原因**：前端调用 `invoke('register_global_hotkey', { hotkey })` 时，Rust 后端**根本没有这个 Tauri 命令**，导致 Tauri 返回 "command not found" 错误，前端 catch 后弹出错误窗口。
+**根本原因**：前端调用 `invoke('register_global_hotkey', { hotkey })` 时，Rust 后端**根本没有这个 Tauri 命令**，导致 Tauri 返回 "command not found" 错误。
 
-**错误调用链**：
-```
-前端保存设置
-  → invoke('register_global_hotkey', { hotkey })
-  → ❌ Rust 后端无此命令（docs/platform-feature-matrix.md 已记录为"两端均缺失"）
-  → Tauri 返回错误
-  → showError(`快捷键注册失败: ${e}`) → 弹出错误窗口
-```
-
-**已有基础**：Rust 后端已实现 `MacHotkeyManager`（`src-tauri/src/platform/macos/hotkey.rs`）和 `WinHotkeyManager`（`src-tauri/src/platform/windows/hotkey.rs`），但未暴露为 Tauri 命令。
+**已有基础**：Rust 后端已实现 `MacHotkeyManager` 和 `WinHotkeyManager`，但未暴露为 Tauri 命令。
 
 **修复方向**：
 1. 在 Rust 后端添加 `register_global_hotkey` Tauri 命令，调用已有的 `HotkeyManager`
@@ -105,19 +167,19 @@
 3. WHEN 快捷键成功注册后 THEN 系统 SHALL 在全局范围内响应该快捷键，触发控制权切换操作
 4. WHEN 用户清空快捷键并保存 THEN 系统 SHALL 注销之前注册的全局快捷键
 5. WHEN 应用启动时 THEN 系统 SHALL 自动读取已保存的快捷键并重新注册
-6. IF 快捷键注册失败（如辅助功能权限不足）THEN 系统 SHALL 返回具体错误信息，前端显示友好提示而非通用错误弹窗
+6. IF 快捷键注册失败（如辅助功能权限不足）THEN 系统 SHALL 返回具体错误信息，前端显示友好提示
 7. WHEN 快捷键注册命令在 macOS 上运行 THEN 系统 SHALL 使用 `MacHotkeyManager` 实现
 8. WHEN 快捷键注册命令在 Windows 上运行 THEN 系统 SHALL 使用 `WinHotkeyManager` 实现
 
 ---
 
-### 需求 4：[功能] 设置页全量测试用例
+### 需求 5：[功能] 设置页全量测试用例
 
 **用户故事：** 作为开发者，我希望设置页的所有功能都有完整的测试用例覆盖，以便在修改代码时能快速发现回归问题。
 
 #### 需要覆盖的测试范围
 
-- 语言切换（中文/英文）
+- 语言切换（中文/英文，通过 SDK set_locale）
 - 主题切换（浅色/深色/跟随系统）
 - 快捷键设置（捕获、保存、注销、冲突检测）
 - 网络设置（端口、监听 IP、网卡选择）
@@ -126,34 +188,17 @@
 - 取消设置（有修改/无修改场景）
 - 设置页打开/关闭
 - 设置项默认值验证
+- tauri-commerce SDK 命令 mock 测试
 
 #### 验收标准
 
 1. WHEN 运行测试套件 THEN 系统 SHALL 通过 `settings-page.test.ts` 中所有测试用例
-2. WHEN 语言切换测试运行 THEN 系统 SHALL 验证切换后 DOM 文字内容正确变更
+2. WHEN 语言切换测试运行 THEN 系统 SHALL 验证 `invoke('set_locale')` 被正确调用
 3. WHEN 主题切换测试运行 THEN 系统 SHALL 验证切换后 `body` 的 CSS 类名正确变更
 4. WHEN 快捷键测试运行 THEN 系统 SHALL 验证快捷键捕获、格式化、保存、注销流程
 5. WHEN 取消确认测试运行 THEN 系统 SHALL 验证有修改时弹出确认对话框，无修改时直接关闭
 6. WHEN 保存设置测试运行 THEN 系统 SHALL 验证 `invoke('save_settings', { config: ... })` 被正确调用
 7. WHEN 所有测试通过 THEN 测试覆盖率 SHALL 达到设置相关代码的 80% 以上
-
----
-
-### 需求 5：[功能] 升级 tauri-commerce SDK 到最新版本
-
-**用户故事：** 作为开发者，我希望项目使用最新版本的 tauri-commerce SDK，以便获得最新的功能修复和 API 改进，确保语言/主题等功能能正确接入。
-
-#### 背景
-
-在修复需求1（语言/主题设置生效）之前，需要先确认并升级 tauri-commerce SDK 到最新版本，避免基于旧版 API 开发后又需要重构。
-
-#### 验收标准
-
-1. WHEN 检查 tauri-commerce SDK 版本 THEN 系统 SHALL 确认当前使用的版本号
-2. WHEN 发现有新版本可用 THEN 系统 SHALL 将 SDK 升级到最新稳定版本
-3. WHEN SDK 升级完成 THEN 系统 SHALL 确认所有现有测试仍然通过
-4. WHEN SDK 升级完成 THEN 系统 SHALL 更新 `package.json` 中的版本号记录
-5. IF 新版本有破坏性变更（Breaking Changes）THEN 系统 SHALL 记录变更内容并相应更新调用代码
 
 ---
 

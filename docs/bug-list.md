@@ -158,7 +158,32 @@
 
 ---
 
-## 已知预存在的测试失败（与迁移无关）
+## Bug #017：旧版降级拖拽逻辑方向判断反了
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 在不支持 HTML5 Drag & Drop API 的环境下，拖拽显示器图标后，布局方向与实际拖拽方向相反（拖到左边变成右边，拖到上面变成下面） |
+| **根因** | `main.js` 旧版降级拖拽逻辑（约第1871行）中，`dx < 0` 时返回 `LocalRightOfRemote`（应为 `LocalLeftOfRemote`），`dy < 0` 时返回 `LocalBelowRemote`（应为 `LocalAboveRemote`），水平和垂直方向均判断反了 |
+| **修改方式** | 将 `dx < 0 ? 'LocalRightOfRemote' : 'LocalLeftOfRemote'` 改为 `dx < 0 ? 'LocalLeftOfRemote' : 'LocalRightOfRemote'`；将 `dy < 0 ? 'LocalBelowRemote' : 'LocalAboveRemote'` 改为 `dy < 0 ? 'LocalAboveRemote' : 'LocalBelowRemote'` |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/layout-drag.test.ts` - 旧版降级逻辑方向语义验证（4个测试用例） |
+| **关键教训** | 旧版降级逻辑与新版 `calcLayoutFromDrop` 纯函数的语义必须保持一致。`dx < 0` 表示本机在远端左侧，应返回 `LocalLeftOfRemote` |
+
+---
+
+## Bug #018：辅助功能权限检测失效（一直显示有权限）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 应用启动后，辅助功能权限引导遮罩从不出现，即使没有授权也显示"有权限"状态 |
+| **根因** | Rust `setup` 阶段在 WebView 加载完毕之前就发送了 `accessibility://permission-denied` 事件，此时前端 `accessibility.js` 还未注册事件监听器，事件被丢弃。前端永远收不到 `permission-denied` 事件，遮罩永远不显示 |
+| **修改方式** | 在 `accessibility.js` 的 `initAccessibilityEventListeners()` 函数末尾，添加主动查询初始权限状态的逻辑：调用 `invoke('check_accessibility_permission')`，根据返回值决定是否显示遮罩。这样即使 Rust 的事件被丢弃，前端也能在加载完毕后主动获取正确的权限状态 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/accessibility-event-driven.test.ts` - 需求 3.新增 describe 块（4个测试用例） |
+| **关键教训** | 事件驱动架构中，如果事件发送方（Rust）比接收方（前端 JS）先启动，事件会丢失。解决方案：接收方加载完毕后主动查询一次当前状态，不完全依赖事件推送 |
+
 
 以下测试在迁移前就已失败，不属于本次迁移引入的 bug：
 
@@ -193,3 +218,74 @@
 | **修改次数** | 1 |
 | **出现次数** | 1 |
 | **关键教训** | 将代码从一个文件提取到另一个文件时，必须同时删除原文件中的旧定义。重复的全局 `const` 定义会在脚本**解析阶段**（非执行阶段）报 `SyntaxError`，导致整个脚本无法执行，且错误信息不会出现在 `window.onerror` 里（因为脚本根本没有执行） |
+
+---
+
+## Bug #013：扫描设备 UX 反馈混乱（两个独立问题）
+
+| 字段 | 内容 |
+|------|------|
+| **现象 A** | 第一次点击"扫描设备"，立即弹出"未发现设备，请确保目标设备在同一局域网内"提示框，没有任何扫描等待过程 |
+| **现象 B** | 第二次点击"扫描设备"，等待约 5 秒后，扫描动画消失，但没有任何提示，用户不知道扫描是否完成 |
+| **根因 A** | `handleScan()` 的 `catch` 分支使用了 `noDevicesAfterScan` 文案（"未发现设备，请确保目标设备在同一局域网内"）。该分支本应处理"命令调用失败"的技术错误，却显示了"没找到设备"的误导性文案。第一次调用时若 invoke 抛出异常，用户看到的是错误的提示 |
+| **根因 B** | `handleScan()` 在 `devices.length === 0` 时只调用了 `updateDevicesList([])`，没有任何 Toast 通知。用户扫描完成后完全没有反馈，不知道扫描已结束 |
+| **修改方式** | 1. `catch` 分支改用 `scanFailed`（"扫描失败，请重试"）文案，并 `console.error` 输出具体错误；2. 空结果分支在 `updateDevicesList([])` 后调用 `showSuccess(t('noDevicesFound'))`；3. 有结果分支调用 `showSuccess(t('scanFoundDevices').replace('{n}', n))`；4. 在 `src/i18n.js` 中英文配置中新增 `scanFailed`、`scanFoundDevices`、`noDevicesFound`（更新）三个 key |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/discover-devices.test.ts` - Bug #013 describe 块，包含测试用例 A/B/C/D 及 i18n 文案验证 |
+| **关键教训** | `catch` 分支的文案必须准确描述"技术错误"而非"业务结果"。扫描完成（无论有无结果）都必须给用户明确的反馈，静默结束是糟糕的 UX |
+
+---
+
+## Bug #015：本机 TLS 证书指纹加载失败
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 设置页"安全"分页中，本机 TLS 证书指纹显示"加载失败"，无法正常显示指纹值 |
+| **根因** | 前端调用 `invoke('get_local_tls_fingerprint')`，但 Rust 后端从未实现该命令。后端只有 `get_local_ip` 等基础命令，没有任何 TLS 证书生成/加载/指纹计算逻辑 |
+| **修改方式** | 1. 在 `src-tauri/Cargo.toml` 添加 `rcgen`、`sha2`、`hex` 依赖；2. 在 `main.rs` 实现 `get_local_tls_fingerprint`（加载或自动生成自签名证书，返回 SHA-256 指纹）和 `regenerate_tls_cert`（删除旧证书并重新生成）；3. 证书存储路径：`{data_local_dir}/KVMini/certs/`；4. 前端 `loadLocalTlsFingerprint` 函数增加错误行显示和重新生成按钮逻辑 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/cert-fingerprint.test.ts` - 7 个测试用例，覆盖加载成功/失败、指纹截断、重新生成等场景 |
+| **关键教训** | 前端调用的 invoke 命令必须在后端有对应实现，否则会静默失败。新增 invoke 命令时，需同步更新 `invoke_handler!` 注册列表 |
+
+---
+
+## Bug #019：TLS 加密不一致时无任何提示
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 一端开启 TLS 加密，另一端未开启时，连接可能失败或行为异常，但界面没有任何提示，用户无法感知原因 |
+| **根因** | 1. `AppConfig` 中没有 `enable_tls` 字段，TLS 开关只是前端 UI 配置，底层网络层不携带 TLS 状态；2. 握手帧 `HandshakeInfo` 不携带 `tls_enabled` 字段，双端无法在握手时交换 TLS 状态；3. 连接成功后没有比较双端 TLS 状态的逻辑，也没有 `tls_mismatch` 事件；4. 前端没有 `tls-mismatch-banner` UI 组件 |
+| **修改方式** | 1. `AppConfig` 添加 `enable_tls: bool` 字段（默认 `true`）；2. `HandshakeInfo` 添加 `tls_enabled: bool` 字段，`new_with_tls()` 构造函数携带 TLS 状态；3. `local_handshake_info()` 从配置读取 TLS 状态并携带到握手信息；4. `connect_to_peer` 握手成功后比较双端 TLS 状态，不一致时发送 `connection-status` 事件（`event_type: "tls_mismatch"`）；5. `ConnectionEvent` 添加 `tls_mismatch`、`local_tls`、`remote_tls` 字段；6. 前端 `index.html` 添加 `tls-mismatch-banner` 横幅 UI；7. `main.js` 处理 `tls_mismatch` 事件，显示横幅和警告图标；8. 添加 `tlsDisableAndRetry()` 函数，一键关闭本机 TLS 并重连；9. `styles.css` 添加横幅样式 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/tls-mismatch.test.ts` - 8 个测试用例，覆盖：本机开对端未开、本机未开对端开、一致时不显示、关闭重试按钮、警告图标、关闭按钮、enable_tls 字段、握手携带 tls_mismatch |
+| **关键教训** | 网络协议的配置状态（如 TLS）必须在握手时双端交换，不能只在本地 UI 层面维护。不一致时必须给用户明确的提示和操作引导，而不是静默失败 |
+
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 点击"保存设置"按钮后报错：`invalid args 'config' for command 'save_settings': command save_settings missing required key config` |
+| **根因** | `main.js` 第 1056 行直接调用 `invoke('save_settings', { settings: appState.settings })`，传入的键名是 `settings`；而 Rust 后端 `save_settings(config: AppConfig)` 期望的键名是 `config`。`platform.js` 中的 `saveSettings(config)` 函数已正确使用 `{ config }` 键名，但 `main.js` 绕过了 `platform.js` 直接调用 `invoke`，使用了错误的键名 |
+| **修改方式** | 将 `main.js` 中 `invoke('save_settings', { settings: appState.settings })` 改为 `invoke('save_settings', { config: appState.settings })`；同步修复 `platform.test.ts` 中错误验证 `{ settings }` 键名的测试用例 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/save-settings.test.ts` - 6 个测试用例，覆盖键名正确性、全局一致性、调用成功/失败场景 |
+| **关键教训** | 前端应通过 `platform.js` 抽象层调用后端命令，避免直接 `invoke` 绕过抽象层导致参数不一致。直接 `invoke` 时必须与 Rust 函数签名的参数名完全一致 |
+
+---
+
+## Bug #020：连接详情面板延迟颜色类名不一致 + 网卡图标不显示
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | `connection-detail-panel` 中延迟显示颜色不生效；`nic-list` 中网卡类型图标不显示 |
+| **根因** | 1. `updateDetailLatency` 使用 `latency-high`/`latency-medium` 类名，但 CSS 中没有对应样式；2. `_renderNetworkIfaceList` 只渲染到 `#network-iface-list`，没有渲染到 `#nic-list`（带类型图标的新容器）；3. CSS 中只有 `nic-list-item` 类，没有 `nic-item` 类 |
+| **修改方式** | 1. 统一 `updateDetailLatency` 类名为 `latency-warning`（>100ms）和 `latency-critical`（>300ms）；2. CSS 添加 `latency-warning`/`latency-critical` 样式；3. `_renderNetworkIfaceList` 同时渲染到 `#nic-list`，带 Wi-Fi/有线/VPN 类型图标；4. CSS 添加 `nic-item` 作为 `nic-list-item` 的别名 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/connection-detail-panel.test.ts` - 21 个测试用例，覆盖：DOM 存在性、连接成功/断开、TLS 状态、延迟颜色、展开/折叠、网卡说明 UI |
+| **关键教训** | CSS 类名必须在 JS 和 CSS 中保持一致。新增 DOM 容器时，需同步更新 JS 渲染逻辑 |
+
+

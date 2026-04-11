@@ -33,6 +33,15 @@ pub struct ConnectionEvent {
     pub message: String,
     pub attempt: Option<u32>,
     pub guide: Option<Vec<String>>,
+    /// TLS 配置是否不一致（一端开一端未开）
+    #[serde(default)]
+    pub tls_mismatch: bool,
+    /// 本机 TLS 状态
+    #[serde(default)]
+    pub local_tls: bool,
+    /// 对端 TLS 状态
+    #[serde(default)]
+    pub remote_tls: bool,
 }
 
 impl ConnectionEvent {
@@ -45,6 +54,9 @@ impl ConnectionEvent {
                 message: "未连接".to_string(),
                 attempt: None,
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             },
             ConnectionState::Connecting => Self {
                 event_type: "connecting".to_string(),
@@ -53,6 +65,9 @@ impl ConnectionEvent {
                 message: format!("正在连接到 {}...", peer_ip.unwrap_or("")),
                 attempt: None,
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             },
             ConnectionState::Connected => Self {
                 event_type: "connected".to_string(),
@@ -61,6 +76,9 @@ impl ConnectionEvent {
                 message: format!("已连接到 {}", peer_ip.unwrap_or("")),
                 attempt: None,
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             },
             ConnectionState::Reconnecting { attempt } => Self {
                 event_type: "reconnecting".to_string(),
@@ -69,7 +87,33 @@ impl ConnectionEvent {
                 message: format!("正在重连（第 {} 次）→ {}", attempt, peer_ip.unwrap_or("")),
                 attempt: Some(*attempt),
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             },
+        }
+    }
+
+    /// 构造 TLS 不一致事件
+    pub fn tls_mismatch(peer_ip: Option<&str>, local_tls: bool, remote_tls: bool) -> Self {
+        let msg = if local_tls && !remote_tls {
+            "本机已开启 TLS 加密，但对端未开启，连接可能失败。请关闭本机 TLS 或通知对端开启。".to_string()
+        } else {
+            "对端已开启 TLS 加密，但本机未开启，连接可能失败。请开启本机 TLS 或通知对端关闭。".to_string()
+        };
+        Self {
+            event_type: "tls_mismatch".to_string(),
+            connected: true,
+            peer_ip: peer_ip.map(|s| s.to_string()),
+            message: msg,
+            attempt: None,
+            guide: Some(vec![
+                "关闭本机 TLS 后重试".to_string(),
+                "或通知对端调整 TLS 设置".to_string(),
+            ]),
+            tls_mismatch: true,
+            local_tls,
+            remote_tls,
         }
     }
 
@@ -81,6 +125,9 @@ impl ConnectionEvent {
             message: format!("监听端口 {}，等待对端连接...", port),
             attempt: None,
             guide: None,
+            tls_mismatch: false,
+            local_tls: false,
+            remote_tls: false,
         }
     }
 
@@ -96,6 +143,9 @@ impl ConnectionEvent {
                 "检查防火墙是否放行端口".to_string(),
                 "确认 IP 地址是否正确".to_string(),
             ]),
+            tls_mismatch: false,
+            local_tls: false,
+            remote_tls: false,
         }
     }
 }
@@ -209,6 +259,9 @@ pub fn network_event_to_connection_event(
                 message: format!("对端平台: {}", platform_str),
                 attempt: None,
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             })
         }
         NetworkEvent::LatencyUpdated(ms) => {
@@ -219,6 +272,9 @@ pub fn network_event_to_connection_event(
                 message: format!("延迟: {}ms", ms),
                 attempt: None,
                 guide: None,
+                tls_mismatch: false,
+                local_tls: false,
+                remote_tls: false,
             })
         }
         _ => None,
@@ -262,14 +318,29 @@ pub async fn connect_to_peer(
         &ConnectionState::Connecting, Some(&ip)
     ));
 
+    // 读取本机 TLS 配置
+    let local_tls = crate::config::load_config().enable_tls;
+
     let inner = Arc::clone(&mgr.inner);
     let ip_clone = ip.clone();
     let app_clone = app_handle.clone();
 
     tauri::async_runtime::spawn(async move {
         match inner.connect_to(&ip_clone, DEFAULT_PORT, local_info).await {
-            Ok(_peer_info) => {
+            Ok(peer_info) => {
                 log::info!("[连接] 已连接到 {}", ip_clone);
+                // 检测 TLS 状态：从对端握手信息中读取 tls_enabled
+                let remote_tls = peer_info.tls_enabled;
+                if local_tls != remote_tls {
+                    log::warn!(
+                        "[TLS] 不一致：本机 tls={}, 对端 tls={}",
+                        local_tls, remote_tls
+                    );
+                    let _ = app_clone.emit(
+                        "connection-status",
+                        ConnectionEvent::tls_mismatch(Some(&ip_clone), local_tls, remote_tls),
+                    );
+                }
             }
             Err(e) => {
                 log::error!("[连接] 连接失败: {}", e);
@@ -295,6 +366,9 @@ pub async fn disconnect_peer(
         message: "已手动断开连接".to_string(),
         attempt: None,
         guide: None,
+        tls_mismatch: false,
+        local_tls: false,
+        remote_tls: false,
     });
     Ok(())
 }

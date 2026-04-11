@@ -18,6 +18,6 @@ fi
 osascript <<EOF
 tell application "Terminal"
     activate
-    do script "cd '$PROJECT_DIR' && npm run build && echo '构建完成，正在安装...' && cp -R 'target/release/bundle/macos/KVMini.app' /Applications/ && echo '安装完成！正在启动...' && open '/Applications/KVMini.app'"
+    do script "cd '$PROJECT_DIR' && npm run build && echo '构建完成，正在安装...' && cp -R 'src-tauri/target/release/bundle/macos/KVMini.app' /Applications/ && echo '安装完成！正在启动...' && open '/Applications/KVMini.app'"
 end tell
 EOF

@@ -178,10 +178,11 @@ describe('需求 2.4/2.5：新架构 - Rust 推送事件，前端被动响应', 
         expect(overlay.classList.contains('hidden')).toBe(true);
     });
 
-    test('新架构：前端不再主动调用 check_accessibility_permission', () => {
+    test('新架构：前端加载完毕后应主动调用 check_accessibility_permission 获取初始状态（解决时序问题）', () => {
         const mockInvoke = (window as any).__TAURI__.invoke;
-        // 加载模块后，不应有 check_accessibility_permission 的调用
-        expect(mockInvoke).not.toHaveBeenCalledWith('check_accessibility_permission');
+        // Bug #018 修复：前端加载完毕后主动查询一次权限状态，
+        // 解决 Rust setup 阶段事件发送时前端 JS 还未加载完毕导致事件丢失的问题
+        expect(mockInvoke).toHaveBeenCalledWith('check_accessibility_permission');
     });
 });
 

@@ -230,7 +230,6 @@ function setupEventListeners() {
     elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
     elements.manualConnectBtn.addEventListener('click', handleManualConnect);
 
-    console.log('[KVMini] 按鈕事件监听器绑定状态:', bindStatus);
     elements.manualIpInput.addEventListener('keydown', (e) => {        if (e.key === 'Enter') handleManualConnect();
     });
 
@@ -2354,8 +2353,8 @@ async function initAboutTab() {
     // 评分按钮
     elements.aboutRateBtn?.addEventListener('click', async () => {
         try {
-            // 使用 SDK request_review，传入 app_id（App Store 版）
-            await invoke('request_review', { appId: '' });
+            // 使用 SDK request_review（App Store ID 由 Rust 侧通过 KVMINI_APP_STORE_ID 环境变量读取）
+            await invoke('request_review');
             console.log('[About] 评分引导已触发');
         } catch (e) {
             console.warn('[About] 评分失败:', e);

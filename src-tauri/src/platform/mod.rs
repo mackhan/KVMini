@@ -63,6 +63,7 @@ pub fn platform_name() -> &'static str {
 }
 
 /// 获取本机平台握手信息（用于连接时的握手协议）
+/// 自动从配置文件读取 TLS 状态，携带到握手信息中供对端比较
 pub fn local_handshake_info() -> kvm_core::network::HandshakeInfo {
     #[cfg(target_os = "windows")]
     let platform = kvm_core::protocol::Platform::Windows;
@@ -71,5 +72,12 @@ pub fn local_handshake_info() -> kvm_core::network::HandshakeInfo {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let platform = kvm_core::protocol::Platform::Unknown;
 
-    kvm_core::network::HandshakeInfo::new(platform, kvm_core::platform::VirtualDesktop::from_monitors(vec![]))
+    // 从配置中读取 TLS 状态，默认开启
+    let tls_enabled = crate::config::load_config().enable_tls;
+
+    kvm_core::network::HandshakeInfo::new_with_tls(
+        platform,
+        kvm_core::platform::VirtualDesktop::from_monitors(vec![]),
+        tls_enabled,
+    )
 }
