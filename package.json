@@ -1,6 +1,6 @@
 {
   "name": "kvmini",
-  "version": "0.1.15",
+  "version": "0.1.18",
   "description": "Cross-platform mouse and keyboard sharing software",
   "main": "src/index.html",
   "scripts": {
@@ -21,6 +21,7 @@
     "@types/jest": "^29.5.8",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^30.3.0",
+    "sharp": "^0.34.5",
     "ts-jest": "^29.1.2"
   },
   "author": "KVMini Team",

@@ -80,8 +80,19 @@ let elements = {};
 // 初始化应用
 function initApp() {
     console.log('[KVMini] initApp 开始');
+    try {
+        const logs = JSON.parse(localStorage.getItem('kvmini_diag') || '[]');
+        logs.push(new Date().toISOString() + ' initApp 被调用');
+        localStorage.setItem('kvmini_diag', JSON.stringify(logs));
+    } catch (e) {}
     // 安全获取 invoke
     invoke = getTauriInvoke();
+    // 诊断：记录 invoke 状态
+    const invStatus = invoke ? 'YES' : 'NO';
+    console.log('[KVMini] initApp: invoke=' + invStatus);
+    if (invoke) {
+        invoke('write_startup_log', { content: '[JS] initApp 被调用，invoke=' + invStatus }).catch(() => {});
+    }
 
     // 初始化平台抽象层
     window.Platform.init(invoke);
@@ -214,6 +225,17 @@ function setupEventListeners() {
     // 快捷键录入
     elements.hotkeyInput.addEventListener('keydown', handleHotkeyCapture);
 
+    // ESC 键关闭设置页（有未保存修改时弹出确认对话框）
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const modal = elements.settingsModal;
+            if (modal && !modal.classList.contains('hidden')) {
+                e.preventDefault();
+                closeSettings();
+            }
+        }
+    });
+
     // 语言选择器：实时切换（不保存）
     if (elements.languageSelect) {
         elements.languageSelect.addEventListener('change', () => {
@@ -315,6 +337,8 @@ function setupEventListeners() {
                 }
                 showSuccess(message || `已连接到 ${peerIp}`);
                 updateConnectionButtons(true);
+                // 显示连接详情面板
+                updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
 
             } else if (eventType === 'reconnect_success') {
                 // 重连成功
@@ -327,6 +351,8 @@ function setupEventListeners() {
                 }
                 showSuccess(message || '重连成功');
                 updateConnectionButtons(true);
+                // 显示连接详情面板
+                updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
 
             } else if (eventType === 'disconnected') {
                 // 连接断开
@@ -339,6 +365,8 @@ function setupEventListeners() {
                 }
                 showReconnectToast(message || '连接已断开');
                 updateConnectionButtons(false);
+                // 隐藏连接详情面板
+                updateConnectionDetailPanel({ connected: false });
 
             } else if (eventType === 'reconnecting') {
                 // 重连中
@@ -346,6 +374,23 @@ function setupEventListeners() {
                 setConnectionStatus('connecting');
                 showReconnectStatus(message, attempt);
                 updateConnectionButtons(false);
+
+            } else if (eventType === 'tls_mismatch') {
+                // TLS 配置不一致：一端开了一端没开
+                const banner = document.getElementById('tls-mismatch-banner');
+                const msgEl = document.getElementById('tls-mismatch-msg');
+                if (banner && msgEl) {
+                    msgEl.textContent = message || 'TLS 配置不一致，请检查双端设置';
+                    banner.classList.remove('hidden');
+                }
+                // 连接状态区域显示警告图标
+                const indicator = document.getElementById('tls-status-indicator');
+                if (indicator) {
+                    indicator.classList.remove('hidden');
+                    indicator.textContent = '⚠️ TLS';
+                    indicator.className = 'tls-warning-indicator';
+                }
+                log.warn('[TLS] 不一致：', message);
 
             } else if (eventType === 'error') {
                 // 连接错误（不影响重连循环）
@@ -633,11 +678,14 @@ async function handleScan() {
         if (devices.length === 0) {
             // 扫描成功但未发现其他设备
             updateDevicesList([]);
+            showSuccess(window.i18n.t('noDevicesFound'));
         } else {
             updateDevicesList(devices);
+            showSuccess(window.i18n.t('scanFoundDevices').replace('{n}', String(devices.length)));
         }
     } catch (error) {
-        showError(window.i18n.t('noDevicesAfterScan'));
+        console.error('[Scan] discover_devices 调用失败:', error);
+        showError(window.i18n.t('scanFailed'));
         updateDevicesList([]);
     } finally {
         appState.scanning = false;
@@ -849,12 +897,49 @@ async function handleClearHistory() {
 function openSettings() {
     loadSettingsToUI();
     loadListenConfig();
+    loadLocalTlsFingerprint();
     elements.settingsModal.classList.remove('hidden');
+    // 初始化分页模块（首次打开时）
+    if (window.SettingsTabsModule) {
+        window.SettingsTabsModule.initSettingsTabs();
+    }
 }
 
 // 关闭设置
 function closeSettings() {
+    // 有未保存修改时弹出自定义确认对话框
+    if (window.SettingsTabsModule && window.SettingsTabsModule.hasDirty()) {
+        const dialog = document.getElementById('settings-discard-dialog');
+        if (dialog) {
+            dialog.classList.remove('hidden');
+            return; // 不直接关闭，等待用户确认
+        }
+    }
+    _doCloseSettings();
+}
+
+// 实际关闭设置页（内部函数）
+function _doCloseSettings() {
+    if (window.SettingsTabsModule) {
+        window.SettingsTabsModule.clearAllDirty();
+    }
     elements.settingsModal.classList.add('hidden');
+}
+
+// 取消确认对话框：用户选择"放弃修改"
+function onSettingsDiscardConfirm() {
+    const dialog = document.getElementById('settings-discard-dialog');
+    if (dialog) dialog.classList.add('hidden');
+    // 恢复原始设置到 UI
+    loadSettingsToUI();
+    _doCloseSettings();
+}
+
+// 取消确认对话框：用户选择"继续编辑"
+function onSettingsDiscardCancel() {
+    const dialog = document.getElementById('settings-discard-dialog');
+    if (dialog) dialog.classList.add('hidden');
+    // 保持设置页打开，不做任何修改
 }
 
 // ─── TLS 指纹相关 ────────────────────────────────────────────────────────────
@@ -865,6 +950,8 @@ async function loadLocalTlsFingerprint() {
     const { t } = window.i18n;
     const fingerprintRow = document.getElementById('tls-fingerprint-row');
     const fingerprintHint = document.getElementById('tls-fingerprint-hint');
+    const certErrorRow = document.getElementById('cert-error-row');
+    const certErrorMsg = document.getElementById('cert-error-msg');
     const copyBtn = fingerprintRow ? fingerprintRow.querySelector('.btn-small') : null;
 
     // 检查 TLS 是否开启
@@ -877,6 +964,7 @@ async function loadLocalTlsFingerprint() {
         elements.localTlsFingerprint.title = '';
         if (copyBtn) copyBtn.disabled = true;
         if (fingerprintHint) fingerprintHint.style.color = '#9ca3af';
+        if (certErrorRow) certErrorRow.classList.add('hidden');
         return;
     }
 
@@ -889,8 +977,34 @@ async function loadLocalTlsFingerprint() {
         // 只显示前 47 个字符，完整指纹放 title
         elements.localTlsFingerprint.textContent = fp ? fp.substring(0, 47) + '...' : '-';
         elements.localTlsFingerprint.title = fp || '';
+        // 加载成功：隐藏错误行
+        if (certErrorRow) certErrorRow.classList.add('hidden');
     } catch (e) {
         elements.localTlsFingerprint.textContent = t('tlsFingerprintLoadFailed');
+        // 加载失败：显示错误行和重新生成按钮
+        if (certErrorRow) {
+            if (certErrorMsg) certErrorMsg.textContent = e instanceof Error ? e.message : String(e);
+            certErrorRow.classList.remove('hidden');
+        }
+        log.warn('[TLS] 证书指纹加载失败:', e);
+    }
+}
+
+/** 重新生成 TLS 证书 */
+async function regenerateCert() {
+    if (!invoke) return;
+    const { t } = window.i18n;
+    const certErrorRow = document.getElementById('cert-error-row');
+    try {
+        const fp = await invoke('regenerate_tls_cert');
+        if (elements.localTlsFingerprint) {
+            elements.localTlsFingerprint.textContent = fp ? fp.substring(0, 47) + '...' : '-';
+            elements.localTlsFingerprint.title = fp || '';
+        }
+        if (certErrorRow) certErrorRow.classList.add('hidden');
+        showToast(t('certRegenSuccess') || '证书已重新生成');
+    } catch (e) {
+        showToast(t('certRegenFailed') || '证书重新生成失败');
     }
 }
 
@@ -905,6 +1019,36 @@ async function copyTlsFingerprint() {
         }
     } catch (e) {
         showError(window.i18n.t('tlsFingerprintLoadFailed'));
+    }
+}
+
+/**
+ * TLS 不一致时：关闭本机 TLS 并重试连接
+ * 由 tls-mismatch-banner 中的"关闭本机 TLS 重试"按钮调用
+ */
+async function tlsDisableAndRetry() {
+    if (!invoke) return;
+    try {
+        // 1. 关闭本机 TLS 开关
+        if (elements.enableTls) elements.enableTls.checked = false;
+
+        // 2. 保存设置（enable_tls = false）
+        const newConfig = { ...appState.settings, enable_tls: false };
+        await invoke('save_settings', { config: newConfig });
+        appState.settings = newConfig;
+
+        // 3. 隐藏 banner 和警告图标
+        const banner = document.getElementById('tls-mismatch-banner');
+        if (banner) banner.classList.add('hidden');
+        const indicator = document.getElementById('tls-status-indicator');
+        if (indicator) indicator.classList.add('hidden');
+
+        // 4. 触发重连
+        log.info('[TLS] 已关闭本机 TLS，正在重新连接...');
+        await invoke('connect_to_peer', { ip: appState.settings.peer_ip });
+    } catch (e) {
+        log.error('[TLS] 关闭 TLS 重试失败:', e);
+        showError('关闭 TLS 重试失败：' + (e instanceof Error ? e.message : String(e)));
     }
 }
 
@@ -997,10 +1141,19 @@ async function saveSettings() {
     };
     localStorage.setItem('kvm_settings', JSON.stringify(appState.settings));
 
+    // 立即应用语言和主题（保存后界面立即生效）
+    if (window.i18n) {
+        window.i18n.setLocale(appState.settings.language || 'zh');
+        applyI18n();
+    }
+    if (window.themeManager) {
+        window.themeManager.setTheme(appState.settings.theme || 'auto');
+    }
+
     // 如果 Tauri 可用，同步到后端
     if (invoke) {
         try {
-            await invoke('save_settings', { settings: appState.settings });
+            await invoke('save_settings', { config: appState.settings });
         } catch (e) {
             // 显示后端错误（如开机自启动注册失败）
             showError(`设置保存失败: ${e}`);
@@ -1040,6 +1193,10 @@ async function saveSettings() {
     }
 
     // 保存设置
+    // 清除未保存标记
+    if (window.SettingsTabsModule) {
+        window.SettingsTabsModule.clearAllDirty();
+    }
     closeSettings();
     showSuccess(window.i18n.t('msgSettingsSaved'));
 }
@@ -1212,14 +1369,28 @@ async function loadListenConfig() {
     if (!elements.listenIpSelect) return;
 
     // 加载网卡列表
+    let interfaces = [];
     try {
-        const interfaces = await window.Platform.getNetworkInterfaces();
+        // 优先使用新的 get_network_interfaces 命令（返回名称+IP+状态）
+        if (invoke) {
+            try {
+                interfaces = await invoke('get_network_interfaces');
+            } catch {
+                // 降级：使用旧的 getNetworkInterfaces
+                const ips = await window.Platform.getNetworkInterfaces();
+                interfaces = ips.map(ip => ({ name: ip, ip, is_up: true }));
+            }
+        }
+
         // 保留默认的"所有网卡"选项，追加具体网卡
         const defaultOption = '<option value="0.0.0.0">所有网卡（0.0.0.0，推荐）</option>';
         const ifaceOptions = interfaces.map(iface =>
             `<option value="${escapeHtml(iface.ip)}">${escapeHtml(iface.name)} (${escapeHtml(iface.ip)})</option>`
         ).join('');
         elements.listenIpSelect.innerHTML = defaultOption + ifaceOptions;
+
+        // 渲染网卡详情列表（需求 2.1）
+        _renderNetworkIfaceList(interfaces);
     } catch (e) {
         console.warn('获取网卡列表失败:', e);
     }
@@ -1231,6 +1402,12 @@ async function loadListenConfig() {
             elements.listenIpSelect.value = config.ip;
             elements.listenPortInput.value = config.port;
             updateListenAddressDisplay(config.ip, config.port);
+
+            // 检查选定网卡是否仍然活跃（需求 2.4）
+            if (config.ip !== '0.0.0.0') {
+                const isActive = interfaces.some(iface => iface.ip === config.ip && iface.is_up);
+                _showNetworkIfaceWarning(!isActive, config.ip);
+            }
         }
     } catch (e) {
         console.warn('获取监听配置失败:', e);
@@ -1239,6 +1416,62 @@ async function loadListenConfig() {
     // 监听变化，实时更新显示
     elements.listenIpSelect.addEventListener('change', updateListenAddressFromInputs);
     elements.listenPortInput.addEventListener('input', updateListenAddressFromInputs);
+}
+
+/**
+ * 渲染网卡详情列表到 #nic-list（含类型图标）
+ * @param {Array} interfaces - 网卡列表 [{name, ip, is_up}]
+ */
+function _renderNetworkIfaceList(interfaces) {
+    const list = document.getElementById('nic-list');
+    if (!list) return;
+
+    if (!interfaces || interfaces.length === 0) {
+        list.innerHTML = '<div class="monitor-list-empty">未检测到活跃网卡</div>';
+        return;
+    }
+
+    list.innerHTML = interfaces.map(iface => {
+        // 根据网卡名称推断类型
+        const name = iface.name.toLowerCase();
+        let icon = '🌐';
+        let type = 'other';
+        if (name.includes('wlan') || name.includes('wifi') || name.includes('wi-fi') ||
+            (name.startsWith('en') && !name.includes('eth'))) {
+            icon = '📶'; type = 'wifi';
+        } else if (name.includes('eth') || name.includes('en0') || name.includes('en1')) {
+            icon = '🔌'; type = 'ethernet';
+        } else if (name.includes('vpn') || name.includes('tun') || name.includes('tap') || name.includes('utun')) {
+            icon = '🔒'; type = 'vpn';
+        }
+        const statusClass = iface.is_up ? 'iface-active' : 'iface-disconnected';
+        return `<div class="nic-item nic-type-${type} ${statusClass}"
+                     data-iface="${escapeHtml(iface.name)}" data-ip="${escapeHtml(iface.ip)}"
+                     title="${escapeHtml(iface.name)} | ${escapeHtml(iface.ip)}">
+            <span class="nic-icon">${icon}</span>
+            <span class="nic-name">${escapeHtml(iface.name)}</span>
+            <span class="nic-ip">${escapeHtml(iface.ip)}</span>
+            <span class="nic-status ${iface.is_up ? 'status-up' : 'status-down'}">${iface.is_up ? '活跃' : '断开'}</span>
+        </div>`;
+    }).join('');
+}
+
+/**
+ * 显示/隐藏网卡断开警告（需求 2.4）
+ * @param {boolean} show
+ * @param {string} ifaceName
+ */
+function _showNetworkIfaceWarning(show, ifaceName) {
+    const warning = document.getElementById('network-iface-warning');
+    const warningText = document.getElementById('network-iface-warning-text');
+    if (!warning) return;
+
+    if (show) {
+        if (warningText) warningText.textContent = `选定网卡 ${ifaceName} 已断开，请切换到其他网卡`;
+        warning.classList.remove('hidden');
+    } else {
+        warning.classList.add('hidden');
+    }
 }
 
 function updateListenAddressFromInputs() {
@@ -1344,6 +1577,8 @@ function startLatencyCheck() {
                     elements.latency.style.color = '#10b981';
                     elements.latency.title = '';
                 }
+                // 同步更新连接详情面板的延迟显示
+                updateDetailLatency(latency);
                 // 连接正常，重置重连计数
                 reconnectAttempts = 0;
             } else {
@@ -1357,6 +1592,77 @@ function startLatencyCheck() {
             }
         }
     }, 2000);
+}
+
+// ─── 连接详情面板 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 更新连接详情面板
+ * @param {object} data - 连接信息
+ */
+function updateConnectionDetailPanel(data) {
+    const panel = document.getElementById('connection-detail-panel');
+    if (!panel) return;
+
+    if (!data || !data.connected) {
+        panel.classList.add('hidden');
+        return;
+    }
+
+    panel.classList.remove('hidden');
+
+    // 本机 IP
+    const localIpEl = document.getElementById('detail-local-ip');
+    if (localIpEl) {
+        const localIp = appState.settings?.local_ip || data.local_ip || '-';
+        const port = appState.settings?.port || 8765;
+        localIpEl.textContent = localIp !== '-' ? `${localIp}:${port}` : '-';
+    }
+
+    // 对端 IP
+    const peerIpEl = document.getElementById('detail-peer-ip');
+    if (peerIpEl) {
+        peerIpEl.textContent = data.peer_ip || appState.settings?.peer_ip || '-';
+    }
+
+    // TLS 状态
+    const tlsEl = document.getElementById('detail-tls-status');
+    if (tlsEl) {
+        const tlsEnabled = appState.settings?.enable_tls !== false;
+        tlsEl.textContent = tlsEnabled ? '🔒 TLS 加密' : '⚠️ 未加密';
+        tlsEl.className = `detail-value ${tlsEnabled ? 'tls-on' : 'tls-off tls-warning'}`;
+    }
+
+    // 证书指纹（展开区域）
+    if (data.cert_fingerprint) {
+        const fpEl = document.getElementById('detail-cert-fingerprint');
+        if (fpEl) fpEl.textContent = data.cert_fingerprint;
+    }
+
+    log.info('[Detail] 连接详情面板已更新');
+}
+
+/**
+ * 更新详情面板的延迟显示
+ * @param {number} ms - 延迟毫秒数
+ */
+function updateDetailLatency(ms) {
+    const el = document.getElementById('detail-latency');
+    if (!el) return;
+    el.textContent = `${ms}ms`;
+    // latency-critical(>300ms 红色) / latency-warning(>100ms 黄色) / latency-normal(正常绿色)
+    el.className = `detail-value ${ms > 300 ? 'latency-critical' : ms > 100 ? 'latency-warning' : 'latency-normal'}`;
+}
+
+/**
+ * 切换连接详情面板的展开/折叠状态
+ */
+function toggleConnectionDetail() {
+    const expanded = document.getElementById('detail-expanded');
+    const icon = document.getElementById('detail-toggle-icon');
+    if (!expanded) return;
+    const isHidden = expanded.classList.toggle('hidden');
+    if (icon) icon.textContent = isHidden ? '▼' : '▲';
 }
 
 /**
@@ -1493,14 +1799,30 @@ function escapeHtml(str) {
 // 这彻底解决了 macOS WKWebView 外部脚本隔离导致的启动失败问题。
 
 (function startApp() {
+    // 诊断日志：写到文件（通过 Tauri 命令）和 console
+    const diagLog = (msg) => {
+        console.log('[KVMini] ' + msg);
+        // 尝试用 write_startup_log 写文件（需要 invoke 就绪）
+        const inv = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke;
+        if (inv) {
+            inv('write_startup_log', { content: '[JS] ' + msg }).catch(() => {});
+        }
+    };
+
+    const tauriReady = !!(window.tauriInvokeReady);
+    const tauriExists = !!(window.__TAURI__);
+    diagLog('startApp 执行，tauriInvokeReady=' + (tauriReady ? 'YES' : 'NO') + ', __TAURI__=' + (tauriExists ? 'YES' : 'NO'));
+
     if (window.tauriInvokeReady) {
         // 前置脚本已捕获 invoke，直接启动
-        console.log('[KVMini] tauriInvokeReady 就绪，直接启动');
+        diagLog('tauriInvokeReady 就绪，直接启动');
         initApp();
     } else {
         // 降级：等待 Tauri 就绪（非 Tauri 环境或 invoke 延迟注入）
+        diagLog('tauriInvokeReady 未就绪，进入 waitForTauri 轮询');
         waitForTauri(5000).then((inv) => {
             if (!inv) {
+                diagLog('waitForTauri 超时，initApp 未执行！');
                 // 超时：显示错误提示
                 const errorToast = document.getElementById('error-toast');
                 const errorMessage = document.getElementById('error-message');
@@ -1510,11 +1832,11 @@ function escapeHtml(str) {
                 }
                 return;
             }
+            diagLog('waitForTauri 成功，invoke 就绪，调用 initApp');
             initApp();
         });
     }
 })();
-
 // 暴露全局函数（供 HTML 内联调用）
 window.connectToDevice = connectToDevice;
 window.reconnectToDevice = reconnectToDevice;
@@ -1525,36 +1847,6 @@ window.clearHotkey = clearHotkey;
 window.hideError = hideError;
 
 // ─── 显示器布局配置 ───────────────────────────────────────────────────────
-
-/**
- * 布局方向到触发边缘的映射
- */
-const LAYOUT_TRIGGER_EDGE = {
-    'LocalLeftOfRemote':  '右边缘',
-    'LocalRightOfRemote': '左边缘',
-    'LocalAboveRemote':   '下边缘',
-    'LocalBelowRemote':   '上边缘',
-};
-
-/**
- * 布局方向到预览 CSS 类的映射
- */
-const LAYOUT_PREVIEW_CLASS = {
-    'LocalLeftOfRemote':  'layout-left',
-    'LocalRightOfRemote': 'layout-right',
-    'LocalAboveRemote':   'layout-above',
-    'LocalBelowRemote':   'layout-below',
-};
-
-/**
- * 布局方向到分隔线箭头的映射
- */
-const LAYOUT_DIVIDER_ARROW = {
-    'LocalLeftOfRemote':  '→',
-    'LocalRightOfRemote': '←',
-    'LocalAboveRemote':   '↓',
-    'LocalBelowRemote':   '↑',
-};
 
 /**
  * 核心函数：渲染多显示器布局预览
@@ -1729,48 +2021,49 @@ async function initDisplayLayout() {
         updateLayoutPreview(select.value, preview, hintEdge);
     });
 
-    // 拖拽支持（本机显示器组）
-    if (localGroup) {
-        localGroup.addEventListener('dragstart', (e) => {
-            e.dataTransfer.setData('text/plain', 'local-monitor-group');
-            preview.classList.add('drag-over');
-        });
-
-        localGroup.addEventListener('dragend', () => {
-            preview.classList.remove('drag-over');
-        });
-    }
-
-    // 预览区域接受拖拽
-    if (preview) {
-        preview.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
-
-        preview.addEventListener('drop', (e) => {
-            e.preventDefault();
-            preview.classList.remove('drag-over');
-
-            // 根据拖拽落点位置决定布局方向
-            const rect = preview.getBoundingClientRect();
-            const relX = e.clientX - rect.left;
-            const relY = e.clientY - rect.top;
-            const centerX = rect.width / 2;
-            const centerY = rect.height / 2;
-
-            let newLayout;
-            const dx = relX - centerX;
-            const dy = relY - centerY;
-
-            if (Math.abs(dx) > Math.abs(dy)) {
-                newLayout = dx < 0 ? 'LocalRightOfRemote' : 'LocalLeftOfRemote';
-            } else {
-                newLayout = dy < 0 ? 'LocalBelowRemote' : 'LocalAboveRemote';
-            }
-
+    // 使用 LayoutModule 的拖拽交互（支持重叠检测和自动保存）
+    if (window.LayoutModule && window.LayoutModule.initLayoutDrag) {
+        window.LayoutModule.initLayoutDrag((newLayout) => {
             select.value = newLayout;
             updateLayoutPreview(newLayout, preview, hintEdge);
+            // 拖拽结束自动保存布局配置
+            saveLayoutConfig();
         });
+    } else {
+        // 降级：旧版拖拽逻辑
+        if (localGroup) {
+            localGroup.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', 'local-monitor-group');
+                preview.classList.add('drag-over');
+            });
+            localGroup.addEventListener('dragend', () => {
+                preview.classList.remove('drag-over');
+            });
+        }
+        if (preview) {
+            preview.addEventListener('dragover', (e) => { e.preventDefault(); });
+            preview.addEventListener('drop', (e) => {
+                e.preventDefault();
+                preview.classList.remove('drag-over');
+                const rect = preview.getBoundingClientRect();
+                const relX = e.clientX - rect.left;
+                const relY = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                const dx = relX - centerX;
+                const dy = relY - centerY;
+                let newLayout;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    // dx < 0 → 鼠标在中心左侧 → 本机在远端左侧 → LocalLeftOfRemote
+                    newLayout = dx < 0 ? 'LocalLeftOfRemote' : 'LocalRightOfRemote';
+                } else {
+                    // dy < 0 → 鼠标在中心上方 → 本机在远端上方 → LocalAboveRemote
+                    newLayout = dy < 0 ? 'LocalAboveRemote' : 'LocalBelowRemote';
+                }
+                select.value = newLayout;
+                updateLayoutPreview(newLayout, preview, hintEdge);
+            });
+        }
     }
 
     // 监听后端 monitors-changed 事件（显示器配置变化时自动刷新）
@@ -1961,3 +2254,9 @@ function hidePermissionWarning() {
 }
 
 // main.js 加载完成后立即启动应用
+// 初始化授权模块（异步，不阻塞主界面）
+if (window.LicenseModule) {
+    window.LicenseModule.initLicense().catch(e => {
+        console.warn('[License] 授权模块初始化失败:', e);
+    });
+}

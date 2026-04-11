@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 深灰圆角矩形背景 #2C2C2E（macOS 原生深灰） -->
+  <rect width="1024" height="1024" rx="220" fill="#2C2C2E"/>
+
+  <!-- ── 左侧显示器 ── -->
+  <!-- 屏幕外框 -->
+  <rect x="80" y="200" width="320" height="220" rx="22" fill="none" stroke="white" stroke-width="28"/>
+  <!-- 屏幕内容（简化为浅色矩形） -->
+  <rect x="108" y="228" width="264" height="164" rx="8" fill="white" opacity="0.15"/>
+  <!-- 底座颈部 -->
+  <rect x="218" y="420" width="44" height="60" rx="8" fill="white"/>
+  <!-- 底座底部 -->
+  <rect x="168" y="476" width="144" height="24" rx="12" fill="white"/>
+
+  <!-- ── 右侧显示器 ── -->
+  <!-- 屏幕外框 -->
+  <rect x="624" y="200" width="320" height="220" rx="22" fill="none" stroke="white" stroke-width="28"/>
+  <!-- 屏幕内容（简化为浅色矩形） -->
+  <rect x="652" y="228" width="264" height="164" rx="8" fill="white" opacity="0.15"/>
+  <!-- 底座颈部 -->
+  <rect x="762" y="420" width="44" height="60" rx="8" fill="white"/>
+  <!-- 底座底部 -->
+  <rect x="712" y="476" width="144" height="24" rx="12" fill="white"/>
+
+  <!-- ── 中间双向箭头 ── -->
+  <!-- 连接线 -->
+  <line x1="420" y1="310" x2="604" y2="310" stroke="white" stroke-width="24" stroke-linecap="round"/>
+  <!-- 右箭头 -->
+  <polygon points="604,270 660,310 604,350" fill="white"/>
+  <!-- 左箭头 -->
+  <polygon points="420,270 364,310 420,350" fill="white"/>
+
+  <!-- ── 底部鼠标图标（居中） ── -->
+  <!-- 鼠标外框（圆角矩形） -->
+  <rect x="432" y="580" width="160" height="220" rx="80" fill="none" stroke="white" stroke-width="24"/>
+  <!-- 鼠标中线（左右分隔） -->
+  <line x1="512" y1="580" x2="512" y2="680" stroke="white" stroke-width="16" stroke-linecap="round"/>
+  <!-- 滚轮 -->
+  <rect x="496" y="620" width="32" height="52" rx="16" fill="white"/>
+</svg>
