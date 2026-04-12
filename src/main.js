@@ -1293,6 +1293,9 @@ function applyI18n() {
         el.placeholder = t(key);
     });
 
+    // 更新页面标题
+    document.title = t('pageTitle');
+
     // 更新动态状态文本（已渲染到 DOM 的）
     if (elements.connectionStatus) {
         const cls = elements.connectionStatus.className;
@@ -1335,6 +1338,17 @@ function applyI18n() {
         const enOption = elements.languageSelect.querySelector('option[value="en"]');
         if (zhOption) zhOption.textContent = t('optionZh');
         if (enOption) enOption.textContent = t('optionEn');
+    }
+
+    // 重新渲染显示器布局预览（更新方块内的标签文字）
+    if (window.LayoutModule && window._localMonitors) {
+        const layout = _getCurrentLayout();
+        const preview = document.getElementById('display-layout-preview');
+        const hintEdge = document.getElementById('trigger-edge-text');
+        window.LayoutModule.renderMonitorLayout(window._localMonitors, window._remoteMonitors || null, layout);
+        if (hintEdge) {
+            window.LayoutModule.updateLayoutPreview(layout, preview, hintEdge);
+        }
     }
 
     // 更新辅助功能遮罩文本
@@ -2032,81 +2046,49 @@ function renderMonitorGroup(groupEl, monitors, bbox, scale, isLocal) {
 }
 
 /**
+ * 获取当前布局方向（从全局状态读取）
+ * @returns {string}
+ */
+function _getCurrentLayout() {
+    return window._currentLayout || 'LocalLeftOfRemote';
+}
+
+/**
  * 初始化显示器布局配置 UI
+ * 使用 mousedown/mousemove/mouseup 拖拽交互（无下拉菜单）
  */
 async function initDisplayLayout() {
-    const select = document.getElementById('display-layout-select');
     const preview = document.getElementById('display-layout-preview');
     const hintEdge = document.getElementById('trigger-edge-text');
-    const localGroup = document.getElementById('local-monitor-group');
 
-    if (!select || !preview) return;
+    if (!preview) return;
 
     // 加载真实显示器信息（同时触发布局渲染）
     await refreshMonitors();
 
     // 加载已保存的布局配置
+    let currentLayout = 'LocalLeftOfRemote';
     try {
         if (invoke) {
             const config = await invoke('get_layout_config');
             if (config && config.layout) {
-                select.value = config.layout;
-                updateLayoutPreview(config.layout, preview, hintEdge);
+                currentLayout = config.layout;
             }
         }
     } catch (e) {
         // 加载失败使用默认值
-        updateLayoutPreview('LocalLeftOfRemote', preview, hintEdge);
     }
+    window._currentLayout = currentLayout;
+    updateLayoutPreview(currentLayout, preview, hintEdge);
 
-    // 监听下拉框变化
-    select.addEventListener('change', () => {
-        updateLayoutPreview(select.value, preview, hintEdge);
-    });
-
-    // 使用 LayoutModule 的拖拽交互（支持重叠检测和自动保存）
+    // 使用 LayoutModule 的拖拽交互（mousedown/mousemove/mouseup）
     if (window.LayoutModule && window.LayoutModule.initLayoutDrag) {
         window.LayoutModule.initLayoutDrag((newLayout) => {
-            select.value = newLayout;
+            window._currentLayout = newLayout;
             updateLayoutPreview(newLayout, preview, hintEdge);
             // 拖拽结束自动保存布局配置
             saveLayoutConfig();
         });
-    } else {
-        // 降级：旧版拖拽逻辑
-        if (localGroup) {
-            localGroup.addEventListener('dragstart', (e) => {
-                e.dataTransfer.setData('text/plain', 'local-monitor-group');
-                preview.classList.add('drag-over');
-            });
-            localGroup.addEventListener('dragend', () => {
-                preview.classList.remove('drag-over');
-            });
-        }
-        if (preview) {
-            preview.addEventListener('dragover', (e) => { e.preventDefault(); });
-            preview.addEventListener('drop', (e) => {
-                e.preventDefault();
-                preview.classList.remove('drag-over');
-                const rect = preview.getBoundingClientRect();
-                const relX = e.clientX - rect.left;
-                const relY = e.clientY - rect.top;
-                const centerX = rect.width / 2;
-                const centerY = rect.height / 2;
-                const dx = relX - centerX;
-                const dy = relY - centerY;
-                let newLayout;
-                if (Math.abs(dx) > Math.abs(dy)) {
-                    // dx < 0 → 鼠标在中心左侧 → 本机在远端左侧 → LocalLeftOfRemote
-                    newLayout = dx < 0 ? 'LocalLeftOfRemote' : 'LocalRightOfRemote';
-                } else {
-                    // dy < 0 → 鼠标在中心上方 → 本机在远端上方 → LocalAboveRemote
-                    newLayout = dy < 0 ? 'LocalAboveRemote' : 'LocalBelowRemote';
-                }
-                select.value = newLayout;
-                updateLayoutPreview(newLayout, preview, hintEdge);
-            });
-        }
     }
 
     // 监听后端 monitors-changed 事件（显示器配置变化时自动刷新）
@@ -2244,8 +2226,9 @@ function updateLayoutPreview(layout, preview, hintEdge) {
  * 保存布局配置（在 saveSettings 中调用）
  */
 async function saveLayoutConfig() {
-    const select = document.getElementById('display-layout-select');
-    if (!select || !invoke) return;
+    if (!invoke) return;
+
+    const layout = window._currentLayout || 'LocalLeftOfRemote';
 
     // 使用主显示器的真实分辨率
     const localMonitors = window._localMonitors;
@@ -2254,7 +2237,7 @@ async function saveLayoutConfig() {
     const screenH = primary ? primary.height : window.screen.height;
 
     const config = {
-        layout: select.value,
+        layout: layout,
         local_screen_width: screenW,
         local_screen_height: screenH,
     };

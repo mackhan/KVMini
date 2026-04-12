@@ -10,7 +10,7 @@
 
 // ─── 分页配置 ─────────────────────────────────────────────────────────────────
 
-const SETTINGS_TABS = ['general', 'display', 'network', 'security'];
+const SETTINGS_TABS = ['general', 'display', 'network', 'security', 'about'];
 
 // ─── 状态 ─────────────────────────────────────────────────────────────────────
 
@@ -134,6 +134,7 @@ function _bindDirtyListeners() {
         'tab-display': 'display',
         'tab-network': 'network',
         'tab-security': 'security',
+        'tab-about': 'about',
     };
 
     Object.entries(tabContentMap).forEach(([contentId, tabId]) => {

@@ -229,6 +229,55 @@ const MESSAGES = {
     btnRejectConnection: '拒绝连接',
     tlsDisabledWarning: '⚠️ TLS 加密已关闭，键鼠数据将以明文传输，存在安全风险',
 
+    // 页面标题
+    pageTitle: 'KVMini - 跨平台键鼠共享',
+
+    // 连接详情面板
+    detailTitle: '📡 连接详情',
+    detailLocal: '本机',
+    detailPeer: '对端',
+    detailEncryption: '加密',
+    detailLatency: '延迟',
+    detailCertFingerprint: '证书指纹',
+
+    // 重连进度
+    labelReconnectProgress: '重连进度:',
+    reconnectingText: '正在重连...',
+
+    // 授权界面
+    licenseGateTitle: '激活 KVMini',
+    licenseGateDesc: '请输入授权码激活，或购买许可证',
+    btnActivate: '激活',
+    licenseGateDivider: '或',
+    btnBuyLicense: '购买许可证',
+
+    // 授权状态
+    licenseActivated: '✓ 已激活',
+    licenseSdkError: '授权服务暂时不可用',
+
+    // 取消确认对话框
+    discardDialogTitle: '⚠️ 未保存的修改',
+    discardDialogMsg: '您有未保存的修改，是否放弃？',
+    btnDiscardChanges: '放弃修改',
+    btnContinueEditing: '继续编辑',
+
+    // 通用按钮
+    btnClose: '关闭',
+    btnRegenerateCert: '重新生成证书',
+    btnTlsDisableRetry: '关闭本机 TLS 重试',
+
+    // 显示器布局标签（layout.js 使用）
+    labelLocalMonitor: '本机',
+    labelSecondaryMonitor: '副屏',
+    labelRemoteMonitor: '远端',
+    labelPrimaryTag: '主',
+
+    // 分页导航
+    tabGeneral: '通用',
+    tabDisplay: '显示器布局',
+    tabNetwork: '网络',
+    tabSecurity: '安全',
+
     // 关于 Tab
     tabAbout: '关于',
     settingsLicense: '许可状态',
@@ -473,6 +522,55 @@ const MESSAGES = {
     btnTrustAndConnect: 'Trust & Connect',
     btnRejectConnection: 'Reject',
     tlsDisabledWarning: '⚠️ TLS encryption is disabled. Keyboard/mouse data will be transmitted in plaintext.',
+
+    // Page title
+    pageTitle: 'KVMini - Cross-platform KVM Sharing',
+
+    // Connection detail panel
+    detailTitle: '📡 Connection Details',
+    detailLocal: 'Local',
+    detailPeer: 'Peer',
+    detailEncryption: 'Encryption',
+    detailLatency: 'Latency',
+    detailCertFingerprint: 'Certificate Fingerprint',
+
+    // Reconnect progress
+    labelReconnectProgress: 'Reconnect:',
+    reconnectingText: 'Reconnecting...',
+
+    // License gate
+    licenseGateTitle: 'Activate KVMini',
+    licenseGateDesc: 'Enter a license key to activate, or purchase a license',
+    btnActivate: 'Activate',
+    licenseGateDivider: 'or',
+    btnBuyLicense: 'Buy License',
+
+    // License status
+    licenseActivated: '✓ Activated',
+    licenseSdkError: 'License service temporarily unavailable',
+
+    // Discard dialog
+    discardDialogTitle: '⚠️ Unsaved Changes',
+    discardDialogMsg: 'You have unsaved changes. Discard them?',
+    btnDiscardChanges: 'Discard Changes',
+    btnContinueEditing: 'Continue Editing',
+
+    // Common buttons
+    btnClose: 'Close',
+    btnRegenerateCert: 'Regenerate Certificate',
+    btnTlsDisableRetry: 'Disable Local TLS & Retry',
+
+    // Monitor layout labels (used by layout.js)
+    labelLocalMonitor: 'Local',
+    labelSecondaryMonitor: 'Secondary',
+    labelRemoteMonitor: 'Remote',
+    labelPrimaryTag: 'Primary',
+
+    // Tab navigation
+    tabGeneral: 'General',
+    tabDisplay: 'Display Layout',
+    tabNetwork: 'Network',
+    tabSecurity: 'Security',
 
     // About Tab
     tabAbout: 'About',

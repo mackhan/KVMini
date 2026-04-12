@@ -3,8 +3,12 @@
  * 测试 src/layout.js 中的显示器布局纯函数
  */
 
+// 加载模块
+const LayoutModule = require('../src/layout.js');
+
 beforeAll(() => {
-    require('../src/layout.js');
+    // 同时挂载到 window 上，兼容旧测试
+    (window as any).LayoutModule = LayoutModule;
 });
 
 describe('layout.js - calcBoundingBox', () => {

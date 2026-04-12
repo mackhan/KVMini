@@ -96,7 +96,8 @@ function isOverlapping(r1, r2) {
 
 /**
  * 初始化显示器布局拖拽交互
- * 支持 HTML5 Drag & Drop API
+ * 使用 mousedown/mousemove/mouseup 实现真正的拖拽（参考 Synergy/Barrier 设计）
+ * 拖拽本机显示器方块，放下后自动吸附到远端的上下左右边缘
  * @param {Function} onLayoutChange - 布局变化回调 (newLayout: string) => void
  */
 function initLayoutDrag(onLayoutChange) {
@@ -105,36 +106,73 @@ function initLayoutDrag(onLayoutChange) {
     const preview = document.getElementById('display-layout-preview');
     if (!localGroup || !remoteGroup || !preview) return;
 
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let lastValidLayout = null;
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    let originalPosition = null; // 记录拖拽前的位置，用于恢复
 
     // 拖拽开始
-    localGroup.addEventListener('dragstart', (e) => {
+    localGroup.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isDragging = true;
+
         const rect = localGroup.getBoundingClientRect();
-        dragStartX = rect.left + rect.width / 2;
-        dragStartY = rect.top + rect.height / 2;
-        localGroup.style.opacity = '0.6';
-        if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'move';
-        }
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+
+        // 记录原始位置
+        originalPosition = {
+            left: localGroup.style.left,
+            top: localGroup.style.top,
+            position: localGroup.style.position,
+        };
+
+        // 切换到绝对定位以便自由移动
+        const previewRect = preview.getBoundingClientRect();
+        localGroup.style.position = 'absolute';
+        localGroup.style.left = (rect.left - previewRect.left) + 'px';
+        localGroup.style.top = (rect.top - previewRect.top) + 'px';
+        localGroup.style.zIndex = '10';
+        localGroup.style.opacity = '0.85';
+        localGroup.style.cursor = 'grabbing';
+        localGroup.style.transition = 'none';
+
+        // 添加拖拽中的视觉反馈
+        localGroup.classList.add('dragging');
+        preview.classList.add('drag-active');
+    });
+
+    // 拖拽移动（绑定到 document 以支持鼠标移出预览区域）
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+
+        const previewRect = preview.getBoundingClientRect();
+        let newLeft = e.clientX - previewRect.left - dragOffsetX;
+        let newTop = e.clientY - previewRect.top - dragOffsetY;
+
+        // 限制在预览区域内
+        const localW = localGroup.offsetWidth;
+        const localH = localGroup.offsetHeight;
+        newLeft = Math.max(-localW / 2, Math.min(newLeft, previewRect.width - localW / 2));
+        newTop = Math.max(-localH / 2, Math.min(newTop, previewRect.height - localH / 2));
+
+        localGroup.style.left = newLeft + 'px';
+        localGroup.style.top = newTop + 'px';
     });
 
     // 拖拽结束
-    localGroup.addEventListener('dragend', () => {
+    document.addEventListener('mouseup', (e) => {
+        if (!isDragging) return;
+        isDragging = false;
+
+        // 移除拖拽视觉反馈
+        localGroup.classList.remove('dragging');
+        preview.classList.remove('drag-active');
+        localGroup.style.zIndex = '';
         localGroup.style.opacity = '1';
-        localGroup.classList.remove('drag-invalid');
-    });
+        localGroup.style.cursor = 'grab';
 
-    // 拖拽经过预览区域
-    preview.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    });
-
-    // 放置到预览区域
-    preview.addEventListener('drop', (e) => {
-        e.preventDefault();
         const previewRect = preview.getBoundingClientRect();
         const dropX = e.clientX - previewRect.left;
         const dropY = e.clientY - previewRect.top;
@@ -144,25 +182,33 @@ function initLayoutDrag(onLayoutChange) {
         const remoteCx = remoteRect.left + remoteRect.width / 2 - previewRect.left;
         const remoteCy = remoteRect.top + remoteRect.height / 2 - previewRect.top;
 
-        // 检测是否完全重叠（无效位置）
-        const localW = parseInt(localGroup.style.width) || 80;
-        const localH = parseInt(localGroup.style.height) || 60;
-        const remoteW = parseInt(remoteGroup.style.width) || 80;
-        const remoteH = parseInt(remoteGroup.style.height) || 60;
+        // 计算本机中心
+        const localCx = dropX - dragOffsetX + localGroup.offsetWidth / 2;
+        const localCy = dropY - dragOffsetY + localGroup.offsetHeight / 2;
 
-        const localRect = { x: dropX - localW / 2, y: dropY - localH / 2, w: localW, h: localH };
+        // 检测是否完全重叠（无效位置）
+        const localW = localGroup.offsetWidth;
+        const localH = localGroup.offsetHeight;
+        const remoteW = remoteGroup.offsetWidth;
+        const remoteH = remoteGroup.offsetHeight;
+
+        const localRect = { x: localCx - localW / 2, y: localCy - localH / 2, w: localW, h: localH };
         const remoteRectBox = { x: remoteCx - remoteW / 2, y: remoteCy - remoteH / 2, w: remoteW, h: remoteH };
 
         if (isOverlapping(localRect, remoteRectBox)) {
-            // 无效位置：显示红色边框，恢复上一个有效位置
+            // 无效位置：显示红色边框动画，恢复原位
             localGroup.classList.add('drag-invalid');
             setTimeout(() => localGroup.classList.remove('drag-invalid'), 800);
+            // 恢复原始位置
+            _resetLocalGroupPosition(localGroup);
             return;
         }
 
         // 计算新布局方向
-        const newLayout = calcLayoutFromDrop(dropX, dropY, remoteCx, remoteCy);
-        lastValidLayout = newLayout;
+        const newLayout = calcLayoutFromDrop(localCx, localCy, remoteCx, remoteCy);
+
+        // 恢复 flex 布局（不再使用绝对定位）
+        _resetLocalGroupPosition(localGroup);
 
         if (onLayoutChange) {
             onLayoutChange(newLayout);
@@ -170,7 +216,17 @@ function initLayoutDrag(onLayoutChange) {
     });
 }
 
-
+/**
+ * 重置本机显示器组的定位（从绝对定位恢复到 flex 布局）
+ * @param {HTMLElement} localGroup
+ */
+function _resetLocalGroupPosition(localGroup) {
+    localGroup.style.position = '';
+    localGroup.style.left = '';
+    localGroup.style.top = '';
+    localGroup.style.zIndex = '';
+    localGroup.style.transition = '';
+}
 
 /**
  * 渲染一组显示器方块到指定容器
@@ -189,6 +245,13 @@ function renderMonitorGroup(groupEl, monitors, bbox, scale, isLocal) {
     groupEl.style.width = groupW + 'px';
     groupEl.style.height = groupH + 'px';
 
+    // 使用 i18n 翻译标签（如果可用）
+    const t = (window.i18n && window.i18n.t) ? window.i18n.t : (key) => key;
+    const localLabel = t('labelLocalMonitor');
+    const secondaryLabel = t('labelSecondaryMonitor');
+    const remoteLabel = t('labelRemoteMonitor');
+    const primaryTag = t('labelPrimaryTag');
+
     groupEl.innerHTML = monitors.map((m) => {
         const ox = (m.offset_x || 0) - bbox.minX;
         const oy = (m.offset_y || 0) - bbox.minY;
@@ -203,17 +266,19 @@ function renderMonitorGroup(groupEl, monitors, bbox, scale, isLocal) {
             : 'remote-connected';
 
         const dpiPct = m.dpi_scale ? Math.round(m.dpi_scale * 100) : 100;
-        const tooltip = `${m.width}×${m.height} | DPI: ${dpiPct}% | 偏移: (${m.offset_x || 0}, ${m.offset_y || 0})`;
+        const tooltip = `${m.width}×${m.height} | DPI: ${dpiPct}% | ${t('labelMonitorOffset')}: (${m.offset_x || 0}, ${m.offset_y || 0})`;
 
         const showLabel = w >= 50 && h >= 36;
         const showSize = w >= 55 && h >= 48;
+
+        const label = isLocal ? (isPrimary ? localLabel : secondaryLabel) : remoteLabel;
 
         return `
             <div class="monitor-block ${cssClass}"
                  style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;"
                  title="${tooltip}">
-                ${showLabel ? `<span class="monitor-block-label">${isLocal ? (isPrimary ? '本机' : '副屏') : '远端'}</span>` : ''}
-                ${isPrimary ? `<span class="monitor-primary-tag">主</span>` : ''}
+                ${showLabel ? `<span class="monitor-block-label">${label}</span>` : ''}
+                ${isPrimary ? `<span class="monitor-primary-tag">${primaryTag}</span>` : ''}
                 ${showSize ? `<span class="monitor-block-size">${m.width}×${m.height}</span>` : ''}
             </div>
         `;
@@ -267,6 +332,10 @@ function renderMonitorLayout(localMonitors, remoteMonitors, layout) {
     if (hasRemote) {
         renderMonitorGroup(remoteGroup, remoteMonitors, remoteBBoxRaw, scale, false);
     } else {
+        // 使用 i18n 翻译
+        const t = (window.i18n && window.i18n.t) ? window.i18n.t : (key) => key;
+        const remoteLabel = t('labelRemoteMonitor');
+
         const placeholderW = Math.max(Math.round(remoteBBoxRaw.totalW * scale), 60);
         const placeholderH = Math.max(Math.round(remoteBBoxRaw.totalH * scale), 50);
         remoteGroup.style.width = placeholderW + 'px';
@@ -274,8 +343,8 @@ function renderMonitorLayout(localMonitors, remoteMonitors, layout) {
         remoteGroup.innerHTML = `
             <div class="monitor-block remote-placeholder"
                  style="left:0;top:0;width:${placeholderW}px;height:${placeholderH}px;"
-                 title="远端设备（未连接）">
-                <span class="monitor-block-label">远端</span>
+                 title="${remoteLabel}">
+                <span class="monitor-block-label">${remoteLabel}</span>
             </div>
         `;
     }
@@ -315,7 +384,7 @@ function updateLayoutPreview(layout, preview, hintEdge) {
 
 // ─── 导出 ────────────────────────────────────────────────────────────────────
 
-window.LayoutModule = {
+const _layoutExports = {
     // 常量
     LAYOUT_TRIGGER_EDGE,
     LAYOUT_PREVIEW_CLASS,
@@ -331,3 +400,10 @@ window.LayoutModule = {
     // 拖拽交互
     initLayoutDrag,
 };
+
+// 兼容浏览器全局和 Node.js 测试环境
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = _layoutExports;
+} else {
+    window.LayoutModule = _layoutExports;
+}

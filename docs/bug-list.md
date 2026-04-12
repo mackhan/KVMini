@@ -276,7 +276,45 @@
 
 ---
 
-## Bug #020：连接详情面板延迟颜色类名不一致 + 网卡图标不显示
+## Bug #021：中英文切换后大量文字未替换
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 设置里选择语言后点保存，界面上大量文字没有变化，仍然显示原语言文本 |
+| **根因** | 1. `applyI18n()` 只处理带 `data-i18n` 属性的元素，但 HTML 中大量元素缺少该属性（设置弹窗标题、连接详情面板标签、重连进度、授权界面、取消确认对话框、提示面板等）；2. `i18n.js` 的 MESSAGES 中缺少对应的翻译 key（`detailTitle`、`detailLocal`、`detailPeer`、`discardDialogTitle` 等）；3. `layout.js` 的 `renderMonitorGroup` 硬编码了中文"本机"、"副屏"、"远端"；4. `settings-tabs.js` 的 `SETTINGS_TABS` 数组缺少 `'about'` 分页；5. `applyI18n()` 没有更新 `document.title` 和显示器布局预览中的标签 |
+| **修改方式** | 1. 在 `i18n.js` 中英文 MESSAGES 中添加所有缺失的翻译 key（`pageTitle`、`detailTitle`、`detailLocal`、`detailPeer`、`detailEncryption`、`detailLatency`、`detailCertFingerprint`、`labelReconnectProgress`、`licenseGateTitle`、`licenseGateDesc`、`btnActivate`、`licenseGateDivider`、`btnBuyLicense`、`licenseActivated`、`licenseSdkError`、`discardDialogTitle`、`discardDialogMsg`、`btnDiscardChanges`、`btnContinueEditing`、`btnClose`、`labelLocalMonitor`、`labelSecondaryMonitor`、`labelRemoteMonitor`、`labelPrimaryTag`、`tabGeneral`、`tabDisplay`、`tabNetwork`、`tabSecurity`）；2. 在 `index.html` 中给所有硬编码文本元素添加 `data-i18n` 属性；3. 修改 `layout.js` 的 `renderMonitorGroup` 使用 `window.i18n.t()` 翻译标签；4. 在 `settings-tabs.js` 的 `SETTINGS_TABS` 数组中添加 `'about'`；5. 在 `applyI18n()` 中添加 `document.title` 更新和显示器布局预览重新渲染 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/i18n-theme-layout-fix.test.ts` - Bug #021 describe 块（77 个测试用例中的 i18n 相关部分） |
+| **关键教训** | 国际化必须覆盖所有用户可见文本，包括动态生成的文本（如 `renderMonitorGroup`）。每次添加新 UI 元素时，必须同时添加 `data-i18n` 属性和对应的翻译 key |
+
+---
+
+## Bug #022：主题切换后界面未变化
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 设置里选择主题后点保存，界面颜色没有变化 |
+| **根因** | `styles.css` 中有一个语法错误：`[data-theme="dark"] .cert-error-row` 选择器块结束后，紧跟着一段没有选择器的孤立属性声明（`font-size: 11px; color: var(--version-color); ...`），这是 `.settings-version` 的深色主题样式但缺少选择器前缀。这个语法错误导致 CSS 解析器在该位置之后的所有样式规则可能被忽略或错误解析 |
+| **修改方式** | 在孤立的属性声明前添加 `[data-theme="dark"] .settings-version` 选择器 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/i18n-theme-layout-fix.test.ts` - Bug #022 describe 块（6 个测试用例） |
+| **关键教训** | CSS 中孤立的属性声明（没有选择器）不会报错但会导致后续样式解析异常。修改 CSS 后应检查是否有遗漏的选择器 |
+
+---
+
+## Bug #023：显示器拖拽逻辑不直观（改用 mousedown/mousemove）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 1. 拖拽显示器方块时只有一个半透明 ghost image，元素不会真正跟随鼠标移动；2. 放下后元素不会移动到新位置；3. 同时还有一个下拉菜单可以选择方向，两种交互方式并存造成混乱 |
+| **根因** | 使用了 HTML5 Drag & Drop API，该 API 有严重的 UX 限制：拖拽时只有 ghost image、无法自定义拖拽中的视觉效果、放下后不会移动元素。同时保留了下拉菜单作为备选，两种交互并存增加了用户困惑 |
+| **修改方式** | 1. 将 `layout.js` 的 `initLayoutDrag` 从 HTML5 Drag & Drop API 改为 `mousedown`/`mousemove`/`mouseup` 实现（参考 Synergy/Barrier 设计）；2. 拖拽时元素真正跟随鼠标移动（切换到绝对定位），放下后自动吸附到最近的边缘方向；3. 移除 `index.html` 中的 `display-layout-select` 下拉菜单和 `draggable="true"` 属性；4. 更新 `main.js` 的 `initDisplayLayout` 和 `saveLayoutConfig` 使用 `window._currentLayout` 替代下拉菜单值；5. 添加拖拽中的视觉反馈 CSS（`.dragging`、`.drag-active`） |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/i18n-theme-layout-fix.test.ts` - Bug #023 describe 块（9 个测试用例） |
+| **关键教训** | HTML5 Drag & Drop API 不适合需要精确视觉反馈的拖拽场景。`mousedown`/`mousemove`/`mouseup` 虽然实现更复杂，但 UX 更好。交互方式应该唯一，不要同时提供两种方式让用户困惑 |
 
 | 字段 | 内容 |
 |------|------|

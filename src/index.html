@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.21">
-    <title>KVM Share - 跨平台键鼠共享</title>
+    <meta name="app-version" content="0.1.22">
+    <title>KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
     <script>
@@ -43,7 +43,7 @@
     <!-- 错误提示横幅 -->
     <div id="error-banner" class="error-banner" style="display:none;">
         <span id="error-msg" class="error-msg"></span>
-        <button id="error-close" class="error-close" title="关闭">✕</button>
+        <button id="error-close" class="error-close" data-i18n="btnClose" title="关闭">✕</button>
     </div>
 
     <div class="container">
@@ -90,25 +90,25 @@
         <div id="license-gate" class="license-gate hidden">
             <div class="license-gate-card">
                 <div class="license-gate-icon">🔑</div>
-                <h2 class="license-gate-title">激活 KVMini</h2>
-                <p class="license-gate-desc">请输入授权码激活，或购买许可证</p>
+                <h2 class="license-gate-title" data-i18n="licenseGateTitle">激活 KVMini</h2>
+                <p class="license-gate-desc" data-i18n="licenseGateDesc">请输入授权码激活，或购买许可证</p>
                 <div class="license-gate-form">
                     <input type="text" id="license-key-input" class="license-key-input"
                         placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
-                    <button id="license-activate-btn" class="btn btn-primary">激活</button>
+                    <button id="license-activate-btn" class="btn btn-primary" data-i18n="btnActivate">激活</button>
                 </div>
                 <div id="license-error-msg" class="license-error-msg hidden"></div>
-                <div class="license-gate-divider">或</div>
-                <button id="license-buy-btn" class="btn btn-secondary">购买许可证</button>
+                <div class="license-gate-divider" data-i18n="licenseGateDivider">或</div>
+                <button id="license-buy-btn" class="btn btn-secondary" data-i18n="btnBuyLicense">购买许可证</button>
             </div>
         </div>
 
         <!-- 授权状态徽章（已授权时显示在主界面） -->
-        <div id="license-status-badge" class="license-status-badge hidden">✓ 已激活</div>
+        <div id="license-status-badge" class="license-status-badge hidden" data-i18n="licenseActivated">✓ 已激活</div>
 
         <!-- SDK 初始化失败提示（不阻塞主界面） -->
         <div id="license-sdk-error" class="license-sdk-error hidden">
-            ⚠️ <span id="license-sdk-error-msg">授权服务暂时不可用</span>
+            ⚠️ <span id="license-sdk-error-msg" data-i18n="licenseSdkError">授权服务暂时不可用</span>
         </div>
 
         <!-- 状态面板 -->
@@ -119,8 +119,8 @@
             </div>
             <!-- 重连进度提示（重连中时显示） -->
             <div class="status-item" id="reconnect-status-row" style="display:none;">
-                <span class="status-label">重连进度:</span>
-                <span id="reconnect-status-text" class="status-reconnecting">正在重连...</span>
+                <span class="status-label" data-i18n="labelReconnectProgress">重连进度:</span>
+                <span id="reconnect-status-text" class="status-reconnecting" data-i18n="reconnectingText">正在重连...</span>
             </div>
             <div class="status-item">
                 <span class="status-label" data-i18n="labelControlState">控制状态:</span>
@@ -147,31 +147,31 @@
         <!-- 连接详情面板（连接成功后显示，默认隐藏） -->
         <div id="connection-detail-panel" class="connection-detail-panel hidden">
             <div class="detail-header" onclick="toggleConnectionDetail()">
-                <span class="detail-title">📡 连接详情</span>
+                <span class="detail-title" data-i18n="detailTitle">📡 连接详情</span>
                 <span class="detail-toggle-icon" id="detail-toggle-icon">▼</span>
             </div>
             <div class="detail-summary">
                 <div class="detail-row">
-                    <span class="detail-label">本机</span>
+                    <span class="detail-label" data-i18n="detailLocal">本机</span>
                     <span id="detail-local-ip" class="detail-value">-</span>
                 </div>
                 <div class="detail-row">
-                    <span class="detail-label">对端</span>
+                    <span class="detail-label" data-i18n="detailPeer">对端</span>
                     <span id="detail-peer-ip" class="detail-value">-</span>
                 </div>
                 <div class="detail-row">
-                    <span class="detail-label">加密</span>
+                    <span class="detail-label" data-i18n="detailEncryption">加密</span>
                     <span id="detail-tls-status" class="detail-value">-</span>
                 </div>
                 <div class="detail-row">
-                    <span class="detail-label">延迟</span>
+                    <span class="detail-label" data-i18n="detailLatency">延迟</span>
                     <span id="detail-latency" class="detail-value latency-normal">-</span>
                 </div>
             </div>
             <!-- 展开区域：完整证书指纹等 -->
             <div id="detail-expanded" class="detail-expanded hidden">
                 <div class="detail-row">
-                    <span class="detail-label">证书指纹</span>
+                    <span class="detail-label" data-i18n="detailCertFingerprint">证书指纹</span>
                     <span id="detail-cert-fingerprint" class="detail-value detail-fingerprint">-</span>
                 </div>
             </div>
@@ -264,8 +264,8 @@
 
         <!-- Windows 操作提示（仅 Windows 端显示） -->
         <div class="hint-panel" id="hint-panel">
-            <p class="hint-text">💡 连接成功后，将鼠标移到屏幕边缘即可自动切换到对端控制模式</p>
-            <p class="hint-text">💡 按 <kbd>Ctrl+Alt+S</kbd> 可手动切换控制权，鼠标移回本机边缘自动归还</p>
+            <p class="hint-text" data-i18n="hintMouseEdge">💡 连接成功后，将鼠标移到屏幕边缘即可自动切换到对端控制模式</p>
+            <p class="hint-text" data-i18n="hintHotkey">💡 按 Ctrl+Alt+S 可手动切换控制权，鼠标移回本机边缘自动归还</p>
         </div>
     </div>
 
@@ -274,7 +274,7 @@
         <div class="modal-overlay" onclick="closeSettings()"></div>
         <div class="modal-content modal-content-tabs">
             <div class="modal-header">
-                <h2>⚙ 设置</h2>
+                <h2 data-i18n="settingsTitle">⚙ 设置</h2>
                 <button class="modal-close" onclick="closeSettings()">✕</button>
             </div>
 
@@ -412,19 +412,9 @@
                         <!-- 大尺寸布局预览区域（占分页 70% 高度） -->
                         <div class="display-layout-container display-layout-container-large" id="display-layout-container">
                             <div class="display-layout-preview layout-left" id="display-layout-preview">
-                                <div class="monitor-group" id="local-monitor-group" draggable="true"></div>
+                                <div class="monitor-group" id="local-monitor-group"></div>
                                 <div class="layout-divider" id="layout-divider">→</div>
                                 <div class="monitor-group" id="remote-monitor-group"></div>
-                            </div>
-                            <!-- 布局方向选择 -->
-                            <div class="display-layout-select-row">
-                                <label data-i18n="labelLayoutPosition">本机位于远端的:</label>
-                                <select id="display-layout-select" class="settings-select">
-                                    <option value="LocalLeftOfRemote" data-i18n="optionLocalLeft">左侧（鼠标→右边缘切换）</option>
-                                    <option value="LocalRightOfRemote" data-i18n="optionLocalRight">右侧（鼠标→左边缘切换）</option>
-                                    <option value="LocalAboveRemote" data-i18n="optionLocalAbove">上方（鼠标→下边缘切换）</option>
-                                    <option value="LocalBelowRemote" data-i18n="optionLocalBelow">下方（鼠标→上边缘切换）</option>
-                                </select>
                             </div>
                             <div class="display-layout-hint" id="display-layout-hint">
                                 <span data-i18n="hintTriggerEdge">当前：鼠标超出</span>
@@ -566,14 +556,14 @@
         <div class="modal-overlay" onclick="onSettingsDiscardCancel()"></div>
         <div class="modal-content" style="max-width:400px;">
             <div class="modal-header">
-                <h2>⚠️ 未保存的修改</h2>
+                <h2 data-i18n="discardDialogTitle">⚠️ 未保存的修改</h2>
             </div>
             <div class="modal-body">
-                <p id="settings-discard-msg">您有未保存的修改，是否放弃？</p>
+                <p id="settings-discard-msg" data-i18n="discardDialogMsg">您有未保存的修改，是否放弃？</p>
             </div>
             <div class="modal-footer" style="gap:12px;">
-                <button class="btn btn-danger" id="settings-discard-confirm" onclick="onSettingsDiscardConfirm()">放弃修改</button>
-                <button class="btn btn-outline" id="settings-discard-cancel" onclick="onSettingsDiscardCancel()">继续编辑</button>
+                <button class="btn btn-danger" id="settings-discard-confirm" onclick="onSettingsDiscardConfirm()" data-i18n="btnDiscardChanges">放弃修改</button>
+                <button class="btn btn-outline" id="settings-discard-cancel" onclick="onSettingsDiscardCancel()" data-i18n="btnContinueEditing">继续编辑</button>
             </div>
         </div>
     </div>
