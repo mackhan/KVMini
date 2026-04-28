@@ -214,11 +214,14 @@ pub async fn discover_devices(udp_port: u16) -> KvmResult<Vec<DiscoveredDevice>>
     Ok(devices)
 }
 
+/// 子网扫描探测魔数（放在 screen_info 字段，服务端识别后不进入 Connected 状态）
+pub const PROBE_MAGIC: &[u8] = b"KVM_PROBE";
+
 /// 子网 TCP 扫描：对 /24 网段并发 TCP 探测，识别 KVMini 设备
 ///
-/// 当 UDP 广播失败时作为降级方案。仅做 TCP connect 探测（不发握手帧），
-/// 能连上端口的即视为 KVMini 设备（监听端口有 KVMini 服务）。
-/// 不发握手帧，不影响对端已有连接状态。
+/// 当 UDP 广播失败时作为降级方案。发送带探测魔数的握手帧，
+/// 只有回复 HandshakeAck 的才是真正的 KVMini 设备，避免误报其他服务。
+/// 服务端收到探测魔数后只回包、不进入 Connected 状态。
 pub async fn scan_subnet(local_ip: &str, tcp_port: u16) -> KvmResult<Vec<DiscoveredDevice>> {
     // 解析本机 IP，取前三段作为网段前缀（/24）
     let parts: Vec<&str> = local_ip.split('.').collect();
@@ -243,20 +246,39 @@ pub async fn scan_subnet(local_ip: &str, tcp_port: u16) -> KvmResult<Vec<Discove
         let handle = tokio::spawn(async move {
             let _permit = sem.acquire().await.ok()?;
             let addr = format!("{}:{}", ip_clone, tcp_port);
-            // 仅做 TCP connect 探测，不发任何帧，不影响对端状态
             let stream = timeout(
                 Duration::from_millis(SUBNET_SCAN_TIMEOUT_MS),
                 TcpStream::connect(&addr),
             ).await.ok()?.ok()?;
-            // 立即 drop stream（发 RST/FIN 关闭，对端仅看到一个短连接再断开）
-            drop(stream);
-            log::info!("[SubnetScan] 发现 KVMini 端口开放: {}", ip_clone);
-            Some(DiscoveredDevice {
-                name: ip_clone.clone(),
-                os: "Unknown".to_string(),
-                ip: ip_clone,
-                tcp_port,
-            })
+            stream.set_nodelay(true).ok();
+
+            // 发送带探测魔数的握手帧（screen_info = PROBE_MAGIC）
+            let (mut reader, mut writer) = tokio::io::split(stream);
+            let probe_frame = KvmFrame::Handshake {
+                version: PROTOCOL_VERSION,
+                platform: Platform::Unknown,
+                screen_info: PROBE_MAGIC.to_vec(),
+            };
+            protocol::write_frame_async(&mut writer, &probe_frame).await.ok()?;
+
+            // 等待 HandshakeAck，只有 KVMini 设备会回
+            let ack = timeout(
+                Duration::from_millis(SUBNET_SCAN_TIMEOUT_MS),
+                protocol::read_frame_async(&mut reader),
+            ).await.ok()?.ok()?;
+
+            if let KvmFrame::HandshakeAck { platform, .. } = ack {
+                let os = format!("{:?}", platform);
+                log::info!("[SubnetScan] 确认 KVMini 设备: {} ({})", ip_clone, os);
+                Some(DiscoveredDevice {
+                    name: ip_clone.clone(),
+                    os,
+                    ip: ip_clone,
+                    tcp_port,
+                })
+            } else {
+                None
+            }
         });
         handles.push(handle);
     }
@@ -268,7 +290,7 @@ pub async fn scan_subnet(local_ip: &str, tcp_port: u16) -> KvmResult<Vec<Discove
         }
     }
 
-    log::info!("[SubnetScan] 扫描完成，发现 {} 个开放 KVMini 端口的设备", devices.len());
+    log::info!("[SubnetScan] 扫描完成，确认 {} 个 KVMini 设备", devices.len());
     Ok(devices)
 }
 
@@ -605,7 +627,7 @@ async fn handle_stream(
 ) {
     stream.set_nodelay(true).ok();
 
-    let (mut reader, writer) = tokio::io::split(stream);
+    let (mut reader, mut writer) = tokio::io::split(stream);
 
     // 被动方：等待 Handshake，回复 HandshakeAck
     let handshake_result = timeout(
@@ -622,19 +644,31 @@ async fn handle_stream(
                 return;
             }
 
-            // 回复 HandshakeAck（使用空屏幕信息，后续由上层补充）
+            // 探测模式：screen_info == PROBE_MAGIC，只回 HandshakeAck，不建立连接
+            if screen_info == PROBE_MAGIC {
+                log::debug!("[TCP] 收到探测握手，回复 HandshakeAck 后断开");
+                let ack = KvmFrame::HandshakeAck {
+                    version: PROTOCOL_VERSION,
+                    platform: Platform::Unknown,
+                    screen_info: vec![],
+                };
+                let _ = protocol::write_frame_async(&mut writer, &ack).await;
+                return; // 不进入 Connected 状态
+            }
+
+            // 正常握手：启动 write_task，发 HandshakeAck
             let ack = KvmFrame::HandshakeAck {
                 version: PROTOCOL_VERSION,
-                platform: Platform::Unknown, // 由上层设置
+                platform: Platform::Unknown,
                 screen_info: vec![],
             };
 
-            // 启动 write_task，先发 HandshakeAck
             let (tx, rx) = mpsc::channel::<KvmFrame>(64);
             if tx.send(ack).await.is_err() {
                 return;
             }
             *write_tx_slot.lock().await = Some(tx.clone());
+            // SAFETY: writer 在探测分支已 return，此处独占所有权
             ConnectionManager::start_write_task(writer, rx);
 
             let desktop = HandshakeInfo::parse_screen_info(&screen_info)
