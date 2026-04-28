@@ -326,4 +326,44 @@
 | **测试用例** | `__tests__/connection-detail-panel.test.ts` - 21 个测试用例，覆盖：DOM 存在性、连接成功/断开、TLS 状态、延迟颜色、展开/折叠、网卡说明 UI |
 | **关键教训** | CSS 类名必须在 JS 和 CSS 中保持一致。新增 DOM 容器时，需同步更新 JS 渲染逻辑 |
 
+---
+
+### Bug #024 — 设置按钮点击无响应
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 点击「设置」按钮无任何反应，设置页面不打开。所有按钮事件均不生效 |
+| **根因** | `src/main.js` 第 81 行 `initApp()` 声明为普通函数 `function initApp()`，但第 102 行使用了 `await window.Platform.getPlatform()`。`await` 在非 `async` 函数中导致运行时语法错误，`initApp()` 在该行中断，后续的 `setupEventListeners()` 从未执行，所有 UI 按钮的 click 事件监听器都未绑定 |
+| **修改方式** | 1. 将 `function initApp()` 改为 `async function initApp()`；2. 在两处调用 `initApp()` 处添加 `.catch()` 防止 unhandled promise rejection |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | 手动验证：启动应用后点击设置按钮，确认设置页面正常打开 |
+| **关键教训** | 使用 `await` 关键字时必须确保所在函数声明为 `async`。非 `async` 函数中的 `await` 在严格模式下是语法错误，在非严格模式下可能是运行时错误。函数初始化阶段的错误会导致整个应用事件系统失效 |
+
+---
+
+### Bug #025 — 每次重装需重新授权辅助功能权限
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 每次构建安装新版本后，macOS 辅助功能权限丢失，需要在「系统设置 → 隐私与安全性 → 辅助功能」中重新授权 |
+| **根因** | `src-tauri/tauri.conf.json` 中 `signingIdentity: null` 导致 Tauri 构建使用 ad-hoc 签名。ad-hoc 签名每次构建生成不同的 identifier hash（如 `kvmini-99ef01e7bab847b4`），macOS TCC 数据库按此 identifier 记录权限，因此每次重装都被视为新应用需要重新授权 |
+| **修改方式** | 1. 更新 `scripts/sign-dev.sh` 支持 release 构建路径（Tauri 2.x 路径 `target/release/bundle/macos/KVMini.app`）；2. 在 `build.sh` 构建完成后自动调用签名脚本；3. 在 `scripts/launch-kvmshare.command` 安装前自动签名；4. 签名使用稳定的自签名证书 "KVMini Dev"，确保每次构建的 identifier 一致 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | 验证步骤：构建 → 安装 → 授权辅助功能 → 重新构建安装 → 确认辅助功能权限仍然保留 |
+| **关键教训** | macOS TCC 权限通过代码签名 identity 识别应用。ad-hoc 签名（无证书）每次构建产生不同的 identifier，导致权限不可复用。必须使用稳定的自签名证书签名，确保 identity 跨构建不变 |
+
+---
+
+## Bug #026：同局域网连接自动断开（心跳无 HeartbeatAck 回复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 两台同局域网设备连接后，约 15 秒内自动断开，提示"连接已断开，自动重连 3 次均失败，请手动重连" |
+| **根因** | `dispatch_frame` 收到对方 `Heartbeat` 帧时，只更新了 `last_heartbeat` 时间戳，但**没有回复 `HeartbeatAck`**。而心跳发送方的 `start_heartbeat` 检测的是 `HeartbeatAck` 到达时间（`HEARTBEAT_INTERVAL_SECS * 2 = 10秒`），3次超时（`HEARTBEAT_TIMEOUT_COUNT=3`，约 15 秒）后判定断开 |
+| **修改方式** | `read_loop` 和 `dispatch_frame` 增加 `writer` 参数；收到 `KvmFrame::Heartbeat` 时立即回复 `KvmFrame::HeartbeatAck` |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **关键教训** | 心跳保活必须是双向的：发送方发 Heartbeat，接收方必须回复 HeartbeatAck；只更新时间戳而不回包，发送方永远收不到 Ack 会判定断线 |
 

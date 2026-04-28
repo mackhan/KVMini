@@ -120,7 +120,7 @@ async function startListening() {
  * @returns {Promise<string>}
  */
 async function connectToPeer(peerIp) {
-    return safeInvoke('connect_to_peer', { peer_ip: peerIp }, '');
+    return safeInvoke('connect_to_peer', { peerIp: peerIp }, '');
 }
 
 /**
@@ -216,7 +216,7 @@ async function showNotification(title, body) {
  */
 async function connectByIp(ip, port) {
     try {
-        await safeInvoke('connect_to_peer', { peer_ip: ip }, '');
+        await safeInvoke('connect_to_peer', { peerIp: ip, port: port || undefined }, '');
         return { success: true, errorType: null, errorMessage: null };
     } catch (e) {
         return { success: false, errorType: 'connection_failed', errorMessage: String(e) };

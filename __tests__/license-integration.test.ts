@@ -22,20 +22,16 @@ describe('需求 4.1：index.html 包含 license UI DOM', () => {
         expect(indexHtml).toContain('id="license-gate"');
     });
 
-    test('index.html 应包含 license-key-input 输入框', () => {
-        expect(indexHtml).toContain('id="license-key-input"');
+    test('index.html 应包含 about-purchase-btn 购买按钮（IAP 系统）', () => {
+        expect(indexHtml).toContain('id="about-purchase-btn"');
     });
 
-    test('index.html 应包含 license-activate-btn 激活按钮', () => {
-        expect(indexHtml).toContain('id="license-activate-btn"');
+    test('index.html 应包含 about-restore-btn 恢复购买按钮（IAP 系统）', () => {
+        expect(indexHtml).toContain('id="about-restore-btn"');
     });
 
-    test('index.html 应包含 license-buy-btn 购买按钮', () => {
-        expect(indexHtml).toContain('id="license-buy-btn"');
-    });
-
-    test('index.html 应包含 license-error-msg 错误提示', () => {
-        expect(indexHtml).toContain('id="license-error-msg"');
+    test('index.html 应包含 about-trial-status 试用状态显示（IAP 系统）', () => {
+        expect(indexHtml).toContain('id="about-trial-status"');
     });
 
     test('index.html 应包含 license-status-badge 授权状态徽章', () => {

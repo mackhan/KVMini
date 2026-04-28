@@ -84,7 +84,7 @@ const MESSAGES = {
     overlayPollingHint: '⏳ 等待授权中，授权后将自动继续...',
 
     // 设置面板
-    titleSettings: '⚙ 设置',
+    titleSettings: '设置',
     settingsTitle: '⚙ 设置',
     settingsHotkey: '全局快捷键',
     titleHotkey: '全局快捷键',
@@ -244,12 +244,17 @@ const MESSAGES = {
     labelReconnectProgress: '重连进度:',
     reconnectingText: '正在重连...',
 
-    // 授权界面
-    licenseGateTitle: '激活 KVMini',
-    licenseGateDesc: '请输入授权码激活，或购买许可证',
-    btnActivate: '激活',
-    licenseGateDivider: '或',
-    btnBuyLicense: '购买许可证',
+    // 授权界面（过期引导 + IAP 购买）
+    licenseGateTitle: '试用已到期',
+    licenseGateDescNew: '感谢试用 KVMini！购买完整版以继续使用全部功能。',
+    licenseGateHint: '已购买？点击"恢复购买"即可恢复。',
+    purchaseSuccess: '购买成功！',
+    purchaseFailed: '购买失败，请重试',
+    restoreFailed: '恢复购买功能暂时不可用',
+    purchaseProcessing: '购买中...',
+    restoreProcessing: '恢复中...',
+    restoreSuccess: '购买已恢复！',
+    btnBack: '返回',
 
     // 授权状态
     licenseActivated: '✓ 已激活',
@@ -271,6 +276,17 @@ const MESSAGES = {
     labelSecondaryMonitor: '副屏',
     labelRemoteMonitor: '远端',
     labelPrimaryTag: '主',
+
+    // 网卡状态
+    nicStatusUp: '活跃',
+    nicStatusDown: '断开',
+    nicNoActive: '未检测到活跃网卡',
+    nicDisconnectedWarning: '选定网卡 {name} 已断开，请切换到其他网卡',
+
+    // 网络诊断
+    diagTitle: '🔍 网络诊断结果',
+    diagSuggestion: '💡 建议：检查上述标记 ⚠️ 的项目，确保对端已运行 KVMini',
+    diagAllPass: '✅ 网络配置正常，请确认对端已启动 KVMini 并在同一子网',
 
     // 分页导航
     tabGeneral: '通用',
@@ -297,6 +313,10 @@ const MESSAGES = {
     shareCopied: '分享链接已复制到剪贴板',
     changelogModalTitle: '更新日志',
     privacyModalTitle: '隐私政策',
+    privacyLoadFailed: '隐私政策内容加载失败，请稍后重试。',
+    changelogEmpty: '暂无更新日志',
+    changelogLoadFailed: '更新日志加载失败，请稍后重试。',
+    feedbackFailed: '反馈功能暂时不可用',
   },
 
   en: {
@@ -538,12 +558,17 @@ const MESSAGES = {
     labelReconnectProgress: 'Reconnect:',
     reconnectingText: 'Reconnecting...',
 
-    // License gate
-    licenseGateTitle: 'Activate KVMini',
-    licenseGateDesc: 'Enter a license key to activate, or purchase a license',
-    btnActivate: 'Activate',
-    licenseGateDivider: 'or',
-    btnBuyLicense: 'Buy License',
+    // License gate (expiry + IAP purchase)
+    licenseGateTitle: 'Trial Expired',
+    licenseGateDescNew: 'Thank you for trying KVMini! Purchase the full version to continue using all features.',
+    licenseGateHint: 'Already purchased? Tap "Restore Purchase" to restore.',
+    purchaseSuccess: 'Purchase successful!',
+    purchaseFailed: 'Purchase failed, please try again',
+    restoreFailed: 'Restore purchase is temporarily unavailable',
+    purchaseProcessing: 'Purchasing...',
+    restoreProcessing: 'Restoring...',
+    restoreSuccess: 'Purchase restored!',
+    btnBack: 'Back',
 
     // License status
     licenseActivated: '✓ Activated',
@@ -565,6 +590,17 @@ const MESSAGES = {
     labelSecondaryMonitor: 'Secondary',
     labelRemoteMonitor: 'Remote',
     labelPrimaryTag: 'Primary',
+
+    // Network interface status
+    nicStatusUp: 'Active',
+    nicStatusDown: 'Down',
+    nicNoActive: 'No active network interfaces detected',
+    nicDisconnectedWarning: 'Selected interface {name} is disconnected. Please switch to another.',
+
+    // Network Diagnostics
+    diagTitle: '🔍 Network Diagnostic Results',
+    diagSuggestion: '💡 Suggestion: Check the ⚠️ items above and make sure the remote is running KVMini',
+    diagAllPass: '✅ Network configuration looks good. Please confirm the remote has KVMini running on the same subnet.',
 
     // Tab navigation
     tabGeneral: 'General',
@@ -591,6 +627,10 @@ const MESSAGES = {
     shareCopied: 'Share link copied to clipboard',
     changelogModalTitle: 'Changelog',
     privacyModalTitle: 'Privacy Policy',
+    privacyLoadFailed: 'Failed to load privacy policy. Please try again later.',
+    changelogEmpty: 'No changelog available',
+    changelogLoadFailed: 'Failed to load changelog. Please try again later.',
+    feedbackFailed: 'Feedback is temporarily unavailable',
   },};
 
 /** 当前语言，默认中文 */

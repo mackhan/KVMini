@@ -65,10 +65,11 @@ describe('前端界面 - HTML 结构完整性', () => {
         expect(successToast.classList.contains('hidden')).toBe(true);
     });
 
-    test('设置模态框存在（初始隐藏）', () => {
-        const modal = document.getElementById('settings-modal');
-        expect(modal).not.toBeNull();
-        expect(modal.classList.contains('hidden')).toBe(true);
+    test('设置视图存在（初始隐藏）', () => {
+        // 新架构：方案 D 整页替换，使用 #view-settings 而非 modal
+        const settingsView = document.getElementById('view-settings');
+        expect(settingsView).not.toBeNull();
+        expect(settingsView.classList.contains('hidden')).toBe(true);
     });
 
     test('设置面板包含快捷键配置输入', () => {

@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{broadcast, Mutex, Notify};
+use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tokio::time::{timeout, Duration, Instant};
 
 use crate::error::{KvmError, KvmResult};
@@ -26,6 +26,12 @@ pub const DISCOVERY_MAGIC: &[u8] = b"KVM_DISCOVERY";
 
 /// 发现扫描超时（秒）
 pub const SCAN_TIMEOUT_SECS: u64 = 5;
+
+/// 子网 TCP 扫描单个主机超时（毫秒）
+pub const SUBNET_SCAN_TIMEOUT_MS: u64 = 500;
+
+/// 子网 TCP 扫描最大并发数
+pub const SUBNET_SCAN_CONCURRENCY: usize = 50;
 
 /// 心跳间隔（秒）
 pub const HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -208,6 +214,64 @@ pub async fn discover_devices(udp_port: u16) -> KvmResult<Vec<DiscoveredDevice>>
     Ok(devices)
 }
 
+/// 子网 TCP 扫描：对 /24 网段并发 TCP 探测，识别 KVMini 设备
+///
+/// 当 UDP 广播失败时作为降级方案。仅做 TCP connect 探测（不发握手帧），
+/// 能连上端口的即视为 KVMini 设备（监听端口有 KVMini 服务）。
+/// 不发握手帧，不影响对端已有连接状态。
+pub async fn scan_subnet(local_ip: &str, tcp_port: u16) -> KvmResult<Vec<DiscoveredDevice>> {
+    // 解析本机 IP，取前三段作为网段前缀（/24）
+    let parts: Vec<&str> = local_ip.split('.').collect();
+    if parts.len() != 4 {
+        return Err(KvmError::NetworkUnreachable { peer_ip: format!("无效的本机 IP: {}", local_ip) });
+    }
+    let prefix = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+
+    log::info!("[SubnetScan] 开始扫描 {}.0/24 端口 {}", prefix, tcp_port);
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(SUBNET_SCAN_CONCURRENCY));
+    let mut handles = Vec::with_capacity(253);
+
+    for i in 1u8..=254 {
+        let ip = format!("{}.{}", prefix, i);
+        // 跳过本机 IP
+        if ip == local_ip {
+            continue;
+        }
+        let sem = Arc::clone(&semaphore);
+        let ip_clone = ip.clone();
+        let handle = tokio::spawn(async move {
+            let _permit = sem.acquire().await.ok()?;
+            let addr = format!("{}:{}", ip_clone, tcp_port);
+            // 仅做 TCP connect 探测，不发任何帧，不影响对端状态
+            let stream = timeout(
+                Duration::from_millis(SUBNET_SCAN_TIMEOUT_MS),
+                TcpStream::connect(&addr),
+            ).await.ok()?.ok()?;
+            // 立即 drop stream（发 RST/FIN 关闭，对端仅看到一个短连接再断开）
+            drop(stream);
+            log::info!("[SubnetScan] 发现 KVMini 端口开放: {}", ip_clone);
+            Some(DiscoveredDevice {
+                name: ip_clone.clone(),
+                os: "Unknown".to_string(),
+                ip: ip_clone,
+                tcp_port,
+            })
+        });
+        handles.push(handle);
+    }
+
+    let mut devices = Vec::new();
+    for handle in handles {
+        if let Ok(Some(device)) = handle.await {
+            devices.push(device);
+        }
+    }
+
+    log::info!("[SubnetScan] 扫描完成，发现 {} 个开放 KVMini 端口的设备", devices.len());
+    Ok(devices)
+}
+
 /// 启动 UDP 发现监听器（响应其他 KVMini 实例的发现请求）
 pub async fn start_discovery_listener(
     udp_port: u16,
@@ -262,6 +326,7 @@ pub async fn start_discovery_listener(
 /// KVM 连接管理器
 ///
 /// 对等连接模型：两端都监听 TCP，也都可以主动连接对方。
+/// 写操作通过 mpsc channel 序列化到单一 write_task，消除锁竞争。
 pub struct ConnectionManager {
     /// TCP 监听端口
     tcp_port: u16,
@@ -269,8 +334,8 @@ pub struct ConnectionManager {
     event_tx: broadcast::Sender<NetworkEvent>,
     /// 当前连接状态
     state: Arc<Mutex<ConnectionState>>,
-    /// 写入端（用于发送帧给对端）
-    writer: Arc<Mutex<Option<tokio::io::WriteHalf<TcpStream>>>>,
+    /// 写帧 channel（None 表示未连接）
+    write_tx: Arc<Mutex<Option<mpsc::Sender<KvmFrame>>>>,
     /// 停止信号
     stop: Arc<Notify>,
     /// 对端地址（用于重连）
@@ -287,7 +352,7 @@ impl ConnectionManager {
             tcp_port,
             event_tx,
             state: Arc::new(Mutex::new(ConnectionState::Disconnected)),
-            writer: Arc::new(Mutex::new(None)),
+            write_tx: Arc::new(Mutex::new(None)),
             stop: Arc::new(Notify::new()),
             peer_addr: Arc::new(Mutex::new(None)),
             last_heartbeat: Arc::new(Mutex::new(Instant::now())),
@@ -305,6 +370,20 @@ impl ConnectionManager {
         *self.state.lock().await
     }
 
+    /// 启动 write_task：从 channel 接收帧并写入 TCP stream
+    fn start_write_task(
+        mut writer: tokio::io::WriteHalf<TcpStream>,
+        mut rx: mpsc::Receiver<KvmFrame>,
+    ) {
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                if protocol::write_frame_async(&mut writer, &frame).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     /// 启动 TCP 监听（对等模型：等待对方连接）
     pub async fn start_listening(&self) -> KvmResult<SocketAddr> {
         let addr = format!("0.0.0.0:{}", self.tcp_port);
@@ -315,7 +394,7 @@ impl ConnectionManager {
 
         let event_tx = self.event_tx.clone();
         let state = Arc::clone(&self.state);
-        let writer = Arc::clone(&self.writer);
+        let write_tx = Arc::clone(&self.write_tx);
         let stop = Arc::clone(&self.stop);
         let last_heartbeat = Arc::clone(&self.last_heartbeat);
         let peer_addr = Arc::clone(&self.peer_addr);
@@ -333,7 +412,7 @@ impl ConnectionManager {
                                 log::info!("[TCP] 接受连接: {}", addr);
                                 *peer_addr.lock().await = Some(addr.to_string());
                                 handle_stream(
-                                    stream, &event_tx, &state, &writer,
+                                    stream, &event_tx, &state, &write_tx,
                                     &last_heartbeat, false,
                                 ).await;
                                 *state.lock().await = ConnectionState::Disconnected;
@@ -423,44 +502,45 @@ impl ConnectionManager {
 
         let _ = self.event_tx.send(NetworkEvent::PeerHandshake(peer_info.clone()));
 
-        // 连接成功
+        // 连接成功：启动 write_task，存储 write_tx
         *self.state.lock().await = ConnectionState::Connected;
         let _ = self.event_tx.send(NetworkEvent::ConnectionStateChanged(
             ConnectionState::Connected,
         ));
 
-        // 保存 writer
-        *self.writer.lock().await = Some(writer);
+        let (tx, rx) = mpsc::channel::<KvmFrame>(64);
+        *self.write_tx.lock().await = Some(tx.clone());
         *self.last_heartbeat.lock().await = Instant::now();
+
+        Self::start_write_task(writer, rx);
 
         // 启动读取循环和心跳
         let event_tx = self.event_tx.clone();
         let state = Arc::clone(&self.state);
         let last_heartbeat = Arc::clone(&self.last_heartbeat);
+        let write_tx_for_read = tx.clone();
 
         tokio::spawn(async move {
-            read_loop(reader, &event_tx, &state, &last_heartbeat).await;
+            read_loop(reader, &event_tx, &state, &last_heartbeat, &write_tx_for_read).await;
         });
 
-        self.start_heartbeat();
+        self.start_heartbeat(tx);
 
         Ok(peer_info)
     }
 
     /// 发送帧给对端
     pub async fn send_frame(&self, frame: &KvmFrame) -> KvmResult<()> {
-        let mut guard = self.writer.lock().await;
-        match guard.as_mut() {
-            Some(writer) => {
-                protocol::write_frame_async(writer, frame).await
-            }
+        let guard = self.write_tx.lock().await;
+        match guard.as_ref() {
+            Some(tx) => tx.send(frame.clone()).await.map_err(|_| KvmError::Disconnected),
             None => Err(KvmError::Disconnected),
         }
     }
 
     /// 断开连接
     pub async fn disconnect(&self) {
-        *self.writer.lock().await = None;
+        *self.write_tx.lock().await = None;
         *self.state.lock().await = ConnectionState::Disconnected;
         let _ = self.event_tx.send(NetworkEvent::ConnectionStateChanged(
             ConnectionState::Disconnected,
@@ -472,17 +552,14 @@ impl ConnectionManager {
         self.stop.notify_waiters();
     }
 
-    /// 启动心跳定时器
-    fn start_heartbeat(&self) {
-        let writer = Arc::clone(&self.writer);
+    /// 启动心跳定时器（使用 write_tx 发送心跳帧，无锁竞争）
+    fn start_heartbeat(&self, tx: mpsc::Sender<KvmFrame>) {
         let state = Arc::clone(&self.state);
         let event_tx = self.event_tx.clone();
         let last_heartbeat = Arc::clone(&self.last_heartbeat);
         let stop = Arc::clone(&self.stop);
 
         tokio::spawn(async move {
-            let mut missed_count: u32 = 0;
-
             loop {
                 tokio::select! {
                     _ = stop.notified() => break,
@@ -492,31 +569,23 @@ impl ConnectionManager {
                             break;
                         }
 
-                        // 发送心跳
-                        let mut guard = writer.lock().await;
-                        if let Some(w) = guard.as_mut() {
-                            if protocol::write_frame_async(w, &KvmFrame::Heartbeat).await.is_err() {
-                                break;
-                            }
-                        } else {
+                        // 发送心跳（通过 channel，不持锁）
+                        if tx.send(KvmFrame::Heartbeat).await.is_err() {
                             break;
                         }
-                        drop(guard);
 
-                        // 检查心跳响应
+                        // 检查心跳响应：超过 HEARTBEAT_INTERVAL * TIMEOUT_COUNT 判定断开
                         let elapsed = last_heartbeat.lock().await.elapsed();
-                        if elapsed > Duration::from_secs(HEARTBEAT_INTERVAL_SECS * 2) {
-                            missed_count += 1;
-                            if missed_count >= HEARTBEAT_TIMEOUT_COUNT {
-                                log::warn!("[心跳] 连续 {} 次无响应，判定连接断开", missed_count);
-                                *state.lock().await = ConnectionState::Disconnected;
-                                let _ = event_tx.send(NetworkEvent::ConnectionStateChanged(
-                                    ConnectionState::Disconnected,
-                                ));
-                                break;
-                            }
-                        } else {
-                            missed_count = 0;
+                        let timeout_threshold = Duration::from_secs(
+                            HEARTBEAT_INTERVAL_SECS * HEARTBEAT_TIMEOUT_COUNT as u64
+                        );
+                        if elapsed > timeout_threshold {
+                            log::warn!("[心跳] {}s 内未收到 HeartbeatAck，判定连接断开", timeout_threshold.as_secs());
+                            *state.lock().await = ConnectionState::Disconnected;
+                            let _ = event_tx.send(NetworkEvent::ConnectionStateChanged(
+                                ConnectionState::Disconnected,
+                            ));
+                            break;
                         }
                     }
                 }
@@ -530,13 +599,13 @@ async fn handle_stream(
     stream: TcpStream,
     event_tx: &broadcast::Sender<NetworkEvent>,
     state: &Arc<Mutex<ConnectionState>>,
-    writer_slot: &Arc<Mutex<Option<tokio::io::WriteHalf<TcpStream>>>>,
+    write_tx_slot: &Arc<Mutex<Option<mpsc::Sender<KvmFrame>>>>,
     last_heartbeat: &Arc<Mutex<Instant>>,
     _is_initiator: bool,
 ) {
     stream.set_nodelay(true).ok();
 
-    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (mut reader, writer) = tokio::io::split(stream);
 
     // 被动方：等待 Handshake，回复 HandshakeAck
     let handshake_result = timeout(
@@ -559,13 +628,18 @@ async fn handle_stream(
                 platform: Platform::Unknown, // 由上层设置
                 screen_info: vec![],
             };
-            if protocol::write_frame_async(&mut writer, &ack).await.is_err() {
+
+            // 启动 write_task，先发 HandshakeAck
+            let (tx, rx) = mpsc::channel::<KvmFrame>(64);
+            if tx.send(ack).await.is_err() {
                 return;
             }
+            *write_tx_slot.lock().await = Some(tx.clone());
+            ConnectionManager::start_write_task(writer, rx);
 
             let desktop = HandshakeInfo::parse_screen_info(&screen_info)
                 .unwrap_or_else(|| VirtualDesktop::from_monitors(vec![]));
-            HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }
+            (HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }, tx)
         }
         _ => {
             let _ = event_tx.send(NetworkEvent::Error("握手失败".to_string()));
@@ -573,16 +647,16 @@ async fn handle_stream(
         }
     };
 
-    let _ = event_tx.send(NetworkEvent::PeerHandshake(peer_info));
+    let (peer_handshake_info, write_tx) = peer_info;
+    let _ = event_tx.send(NetworkEvent::PeerHandshake(peer_handshake_info));
 
     *state.lock().await = ConnectionState::Connected;
     let _ = event_tx.send(NetworkEvent::ConnectionStateChanged(ConnectionState::Connected));
 
-    *writer_slot.lock().await = Some(writer);
     *last_heartbeat.lock().await = Instant::now();
 
     // 读取循环
-    read_loop(reader, event_tx, state, last_heartbeat).await;
+    read_loop(reader, event_tx, state, last_heartbeat, &write_tx).await;
 }
 
 /// 读取循环：持续从 TCP 流读取帧并分发
@@ -591,6 +665,7 @@ async fn read_loop(
     event_tx: &broadcast::Sender<NetworkEvent>,
     state: &Arc<Mutex<ConnectionState>>,
     last_heartbeat: &Arc<Mutex<Instant>>,
+    write_tx: &mpsc::Sender<KvmFrame>,
 ) {
     let mut buf = Vec::with_capacity(8192);
     let mut tmp = [0u8; 4096];
@@ -609,7 +684,7 @@ async fn read_loop(
                 loop {
                     match protocol::decode(&buf) {
                         Ok((frame, consumed)) => {
-                            dispatch_frame(&frame, event_tx, last_heartbeat).await;
+                            dispatch_frame(&frame, event_tx, last_heartbeat, write_tx).await;
                             buf.drain(..consumed);
                         }
                         Err(KvmError::Incomplete) => break,
@@ -636,14 +711,18 @@ async fn dispatch_frame(
     frame: &KvmFrame,
     event_tx: &broadcast::Sender<NetworkEvent>,
     last_heartbeat: &Arc<Mutex<Instant>>,
+    write_tx: &mpsc::Sender<KvmFrame>,
 ) {
     match frame {
         KvmFrame::HeartbeatAck => {
             *last_heartbeat.lock().await = Instant::now();
         }
         KvmFrame::Heartbeat => {
-            // 收到心跳，标记活跃（回复由上层处理或自动回复）
+            // 收到心跳：更新活跃时间并通过 channel 回复 HeartbeatAck（无锁）
             *last_heartbeat.lock().await = Instant::now();
+            if let Err(e) = write_tx.send(KvmFrame::HeartbeatAck).await {
+                log::warn!("[心跳] 回复 HeartbeatAck 失败: {}", e);
+            }
         }
         KvmFrame::Pong { timestamp_ms } => {
             let now = std::time::SystemTime::now()

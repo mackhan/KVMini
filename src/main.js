@@ -78,7 +78,7 @@ function waitForTauri(timeout = 5000, interval = 50) {
 let elements = {};
 
 // 初始化应用
-function initApp() {
+async function initApp() {
     console.log('[KVMini] initApp 开始');
     try {
         const logs = JSON.parse(localStorage.getItem('kvmini_diag') || '[]');
@@ -97,6 +97,19 @@ function initApp() {
     // 初始化平台抽象层
     window.Platform.init(invoke);
 
+    // 注入平台标识到 <html> 元素，用于 CSS 平台差异化样式
+    try {
+        const platform = await window.Platform.getPlatform();
+        const platformId = (platform || '').toLowerCase().includes('windows') ? 'windows' : 'macos';
+        document.documentElement.setAttribute('data-platform', platformId);
+        console.log(`[KVMini] 平台标识: data-platform="${platformId}"`);
+    } catch (e) {
+        // 降级：通过 userAgent 判断
+        const isWin = navigator.userAgent.includes('Windows');
+        document.documentElement.setAttribute('data-platform', isWin ? 'windows' : 'macos');
+        console.warn('[KVMini] getPlatform 失败，通过 UA 降级判断:', e);
+    }
+
     // 初始化 DOM 元素引用
     elements = {
         localIp: document.getElementById('local-ip'),
@@ -114,7 +127,8 @@ function initApp() {
         scanAnimation: document.getElementById('scan-animation'),
         historyList: document.getElementById('history-list'),
         clearHistoryBtn: document.getElementById('clear-history-btn'),
-        settingsModal: document.getElementById('settings-modal'),
+        viewMain: document.getElementById('view-main'),
+        viewSettings: document.getElementById('view-settings'),
         errorToast: document.getElementById('error-toast'),
         errorMessage: document.getElementById('error-message'),
         successToast: document.getElementById('success-toast'),
@@ -198,21 +212,12 @@ function initApp() {
 
 /**
  * 根据当前平台预填充手动连接 IP 输入框的默认值
- * - Windows 端：预填 Mac 端 IP（30.19.140.39）
- * - Mac 端：预填 Windows 端 IP（30.19.24.43）
  * 仅在输入框为空时填入，不覆盖用户已输入的内容
+ * 不再硬编码开发 IP，由用户手动输入目标设备 IP
  */
 function prefillDefaultIp() {
-    if (!elements.manualIpInput) return;
-    // 已有内容则不覆盖
-    if (elements.manualIpInput.value.trim()) return;
-
-    const isWindows = navigator.userAgent.includes('Windows') ||
-        (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
-
-    // Windows 端连接 Mac，Mac 端连接 Windows
-    const defaultIp = isWindows ? '30.19.140.39' : '30.19.24.43';
-    elements.manualIpInput.value = defaultIp;
+    // 不再预填任何 IP，让用户根据实际网络环境手动输入
+    // 之前硬编码的 30.19.x.x 是特定开发环境 IP，不通用
 }
 
 // 设置事件监听器
@@ -239,8 +244,8 @@ function setupEventListeners() {
     // ESC 键关闭设置页（有未保存修改时弹出确认对话框）
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            const modal = elements.settingsModal;
-            if (modal && !modal.classList.contains('hidden')) {
+            const settingsView = elements.viewSettings;
+            if (settingsView && !settingsView.classList.contains('hidden')) {
                 e.preventDefault();
                 closeSettings();
             }
@@ -401,7 +406,7 @@ function setupEventListeners() {
                     indicator.textContent = '⚠️ TLS';
                     indicator.className = 'tls-warning-indicator';
                 }
-                log.warn('[TLS] 不一致：', message);
+                console.warn('[TLS] 不一致：', message);
 
             } else if (eventType === 'error') {
                 // 连接错误（不影响重连循环）
@@ -684,12 +689,25 @@ async function handleScan() {
     appState.scanning = true;
     setScanningState(true);
 
+    // 提示用户两阶段扫描（UDP广播 + 子网TCP扫描）可能需要几秒
+    const { t } = window.i18n;
+    if (elements.scanBtn) {
+        elements.scanBtn.title = t('scanningSubnet') || '正在扫描...（UDP广播 + 子网扫描）';
+    }
+
     try {
         const devices = await invoke('discover_devices');
         if (devices.length === 0) {
-            // 扫描成功但未发现其他设备
+            // 扫描成功但未发现设备，执行网络诊断
             updateDevicesList([]);
-            showSuccess(window.i18n.t('noDevicesFound'));
+            try {
+                const diagnostics = await invoke('diagnose_network');
+                showNetworkDiagnostics(diagnostics);
+            } catch (diagErr) {
+                console.warn('[Scan] 网络诊断失败:', diagErr);
+                // 诊断失败时显示静态提示
+                showSuccess(t('noDevicesAfterScan'));
+            }
         } else {
             updateDevicesList(devices);
             showSuccess(window.i18n.t('scanFoundDevices').replace('{n}', String(devices.length)));
@@ -701,6 +719,50 @@ async function handleScan() {
     } finally {
         appState.scanning = false;
         setScanningState(false);
+        if (elements.scanBtn) elements.scanBtn.title = '';
+    }
+}
+
+/**
+ * 格式化并展示网络诊断结果
+ * @param {Array<{check: string, ok: boolean, message: string}>} diagnostics
+ */
+function showNetworkDiagnostics(diagnostics) {
+    const { t } = window.i18n;
+    if (!diagnostics || diagnostics.length === 0) {
+        showSuccess(t('noDevicesAfterScan'));
+        return;
+    }
+
+    // 统计问题数量
+    const issues = diagnostics.filter(d => !d.ok);
+    const lines = [];
+
+    // 标题
+    lines.push(t('diagTitle'));
+    lines.push('');
+
+    // 逐项展示
+    for (const item of diagnostics) {
+        const icon = item.ok ? '✅' : '⚠️';
+        lines.push(`${icon} ${item.message}`);
+    }
+
+    // 如果有问题，给出建议
+    if (issues.length > 0) {
+        lines.push('');
+        lines.push(t('diagSuggestion'));
+    } else {
+        lines.push('');
+        lines.push(t('diagAllPass'));
+    }
+
+    // 使用 devices-list 区域展示诊断结果
+    if (elements.devicesList) {
+        const html = `<div class="network-diagnostic">
+            ${lines.map(line => line ? `<div class="diag-line">${escapeHtml(line)}</div>` : '<div class="diag-spacer"></div>').join('')}
+        </div>`;
+        elements.devicesList.innerHTML = html;
     }
 }
 // 设置扫描状态 UI
@@ -906,10 +968,13 @@ async function handleClearHistory() {
 
 // 打开设置
 function openSettings() {
+    console.log('[KVMini] openSettings: 切换到设置视图');
     loadSettingsToUI();
     loadListenConfig();
     loadLocalTlsFingerprint();
-    elements.settingsModal.classList.remove('hidden');
+    // 视图切换：隐藏主界面，显示设置页
+    elements.viewMain.classList.add('hidden');
+    elements.viewSettings.classList.remove('hidden');
     // 初始化分页模块（首次打开时）
     if (window.SettingsTabsModule) {
         window.SettingsTabsModule.initSettingsTabs();
@@ -933,12 +998,15 @@ function closeSettings() {
     _doCloseSettings();
 }
 
-// 实际关闭设置页（内部函数）
+// 实际关闭设置页（内部函数）：隐藏设置视图，显示主界面
 function _doCloseSettings() {
+    console.log('[KVMini] _doCloseSettings: 切换回主界面');
     if (window.SettingsTabsModule) {
         window.SettingsTabsModule.clearAllDirty();
     }
-    elements.settingsModal.classList.add('hidden');
+    // 视图切换：隐藏设置页，显示主界面
+    elements.viewSettings.classList.add('hidden');
+    elements.viewMain.classList.remove('hidden');
 }
 
 // 取消确认对话框：用户选择"放弃修改"
@@ -1001,7 +1069,7 @@ async function loadLocalTlsFingerprint() {
             if (certErrorMsg) certErrorMsg.textContent = e instanceof Error ? e.message : String(e);
             certErrorRow.classList.remove('hidden');
         }
-        log.warn('[TLS] 证书指纹加载失败:', e);
+        console.warn('[TLS] 证书指纹加载失败:', e);
     }
 }
 
@@ -1060,7 +1128,7 @@ async function tlsDisableAndRetry() {
 
         // 4. 触发重连
         log.info('[TLS] 已关闭本机 TLS，正在重新连接...');
-        await invoke('connect_to_peer', { ip: appState.settings.peer_ip });
+        await invoke('connect_to_peer', { peerIp: appState.settings.peer_ip });
     } catch (e) {
         log.error('[TLS] 关闭 TLS 重试失败:', e);
         showError('关闭 TLS 重试失败：' + (e instanceof Error ? e.message : String(e)));
@@ -1484,23 +1552,18 @@ function _renderNetworkIfaceList(interfaces) {
     if (!list) return;
 
     if (!interfaces || interfaces.length === 0) {
-        list.innerHTML = '<div class="monitor-list-empty">未检测到活跃网卡</div>';
+        list.innerHTML = `<div class="monitor-list-empty">${window.i18n.t('nicNoActive')}</div>`;
         return;
     }
 
+    const { t } = window.i18n;
     list.innerHTML = interfaces.map(iface => {
-        // 根据网卡名称推断类型
-        const name = iface.name.toLowerCase();
+        // 使用后端返回的 iface_type 字段（wifi/ethernet/vpn/other）
+        const type = iface.iface_type || 'other';
         let icon = '🌐';
-        let type = 'other';
-        if (name.includes('wlan') || name.includes('wifi') || name.includes('wi-fi') ||
-            (name.startsWith('en') && !name.includes('eth'))) {
-            icon = '📶'; type = 'wifi';
-        } else if (name.includes('eth') || name.includes('en0') || name.includes('en1')) {
-            icon = '🔌'; type = 'ethernet';
-        } else if (name.includes('vpn') || name.includes('tun') || name.includes('tap') || name.includes('utun')) {
-            icon = '🔒'; type = 'vpn';
-        }
+        if (type === 'wifi') icon = '📶';
+        else if (type === 'ethernet') icon = '🔌';
+        else if (type === 'vpn') icon = '🔒';
         const statusClass = iface.is_up ? 'iface-active' : 'iface-disconnected';
         return `<div class="nic-item nic-type-${type} ${statusClass}"
                      data-iface="${escapeHtml(iface.name)}" data-ip="${escapeHtml(iface.ip)}"
@@ -1508,7 +1571,7 @@ function _renderNetworkIfaceList(interfaces) {
             <span class="nic-icon">${icon}</span>
             <span class="nic-name">${escapeHtml(iface.name)}</span>
             <span class="nic-ip">${escapeHtml(iface.ip)}</span>
-            <span class="nic-status ${iface.is_up ? 'status-up' : 'status-down'}">${iface.is_up ? '活跃' : '断开'}</span>
+            <span class="nic-status ${iface.is_up ? 'status-up' : 'status-down'}">${iface.is_up ? t('nicStatusUp') : t('nicStatusDown')}</span>
         </div>`;
     }).join('');
 }
@@ -1524,7 +1587,7 @@ function _showNetworkIfaceWarning(show, ifaceName) {
     if (!warning) return;
 
     if (show) {
-        if (warningText) warningText.textContent = `选定网卡 ${ifaceName} 已断开，请切换到其他网卡`;
+        if (warningText) warningText.textContent = window.i18n.t('nicDisconnectedWarning').replace('{name}', ifaceName);
         warning.classList.remove('hidden');
     } else {
         warning.classList.add('hidden');
@@ -1873,7 +1936,7 @@ function escapeHtml(str) {
     if (window.tauriInvokeReady) {
         // 前置脚本已捕获 invoke，直接启动
         diagLog('tauriInvokeReady 就绪，直接启动');
-        initApp();
+        initApp().catch(e => console.error('[KVMini] initApp 异常:', e));
     } else {
         // 降级：等待 Tauri 就绪（非 Tauri 环境或 invoke 延迟注入）
         diagLog('tauriInvokeReady 未就绪，进入 waitForTauri 轮询');
@@ -1890,7 +1953,7 @@ function escapeHtml(str) {
                 return;
             }
             diagLog('waitForTauri 成功，invoke 就绪，调用 initApp');
-            initApp();
+            initApp().catch(e => console.error('[KVMini] initApp 异常:', e));
         });
     }
 })();
@@ -1899,9 +1962,12 @@ window.connectToDevice = connectToDevice;
 window.reconnectToDevice = reconnectToDevice;
 window.reconnectManualIp = reconnectManualIp;
 window.closeSettings = closeSettings;
+window.openSettings = openSettings;
 window.saveSettings = saveSettings;
 window.clearHotkey = clearHotkey;
 window.hideError = hideError;
+window.onSettingsDiscardConfirm = onSettingsDiscardConfirm;
+window.onSettingsDiscardCancel = onSettingsDiscardCancel;
 
 // ─── 显示器布局配置 ───────────────────────────────────────────────────────
 
@@ -2097,7 +2163,7 @@ async function initDisplayLayout() {
         window.__TAURI__.event.listen('monitors-changed', () => {
             refreshMonitors();
             const { t } = window.i18n;
-            showToast(t('msgMonitorsChanged'));
+            showSuccess(t('msgMonitorsChanged'));
         });
     }
 }
@@ -2154,8 +2220,7 @@ async function refreshMonitors() {
         }
 
         // 触发布局预览重新渲染
-        const select = document.getElementById('display-layout-select');
-        const currentLayout = select ? select.value : 'LocalLeftOfRemote';
+        const currentLayout = window._currentLayout || 'LocalLeftOfRemote';
         renderMonitorLayout(monitors, window._remoteMonitors || null, currentLayout);
 
     } catch (e) {
@@ -2185,8 +2250,7 @@ async function refreshMonitors() {
             </div>
         `;
         // 降级渲染
-        const select = document.getElementById('display-layout-select');
-        const currentLayout = select ? select.value : 'LocalLeftOfRemote';
+        const currentLayout = window._currentLayout || 'LocalLeftOfRemote';
         renderMonitorLayout(fallbackMonitors, null, currentLayout);
     }
 }
@@ -2308,16 +2372,20 @@ async function initAboutTab() {
             console.log('[About] 反馈邮件已打开');
         } catch (e) {
             console.warn('[About] 反馈失败:', e);
-            showError('反馈功能暂时不可用');
+            showError(window.i18n.t('feedbackFailed'));
         }
     });
 
     // 分享按钮
     elements.aboutShareBtn?.addEventListener('click', async () => {
-        const shareText = 'KVMini - 跨平台键鼠共享工具，让多台电脑共享一套键鼠！https://kvmini.app';
+        const { t } = window.i18n;
+        const locale = window.i18n.getLocale();
+        const shareText = locale === 'en'
+            ? 'KVMini - Cross-platform keyboard & mouse sharing tool, share one set of keyboard & mouse across multiple computers! https://kvmini.app'
+            : 'KVMini - 跨平台键鼠共享工具，让多台电脑共享一套键鼠！https://kvmini.app';
         try {
             await navigator.clipboard.writeText(shareText);
-            showSuccess(window.i18n.t('shareCopied'));
+            showSuccess(t('shareCopied'));
         } catch (e) {
             console.warn('[About] 分享复制失败:', e);
         }
@@ -2346,22 +2414,49 @@ async function initAboutTab() {
 
     // 购买按钮（App Store 版）
     elements.aboutPurchaseBtn?.addEventListener('click', async () => {
+        const btn = elements.aboutPurchaseBtn;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = window.i18n.t('purchaseProcessing');
         try {
             await invoke('purchase', { productId: 'com.kvmini.app.pro' });
+            showSuccess(window.i18n.t('purchaseSuccess'));
+            await refreshAboutTrialStatus();
         } catch (e) {
             console.warn('[About] 购买失败:', e);
-            showError('购买功能暂时不可用');
+            const detail = typeof e === 'string' ? e : (e?.message || '');
+            const msg = detail
+                ? `${window.i18n.t('purchaseFailed')}: ${detail}`
+                : window.i18n.t('purchaseFailed');
+            showError(msg);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     });
 
     // 恢复购买按钮（App Store 版）
     elements.aboutRestoreBtn?.addEventListener('click', async () => {
+        const btn = elements.aboutRestoreBtn;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = window.i18n.t('restoreProcessing');
         try {
             await invoke('restore_purchase');
+            showSuccess(window.i18n.t('restoreSuccess'));
             await refreshAboutTrialStatus();
         } catch (e) {
             console.warn('[About] 恢复购买失败:', e);
-            showError('恢复购买功能暂时不可用');
+            const detail = typeof e === 'string' ? e : (e?.message || '');
+            const msg = detail
+                ? `${window.i18n.t('restoreFailed')}: ${detail}`
+                : window.i18n.t('restoreFailed');
+            showError(msg);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     });
 }
@@ -2421,7 +2516,7 @@ async function showPrivacyModal() {
         }
     } catch (e) {
         console.warn('[About] 获取隐私政策失败:', e);
-        content = '隐私政策内容加载失败，请稍后重试。';
+        content = window.i18n.t('privacyLoadFailed');
     }
     showAboutModal(window.i18n.t('privacyModalTitle'), `<div class="about-modal-body">${content.replace(/\n/g, '<br>')}</div>`);
 }
@@ -2434,23 +2529,29 @@ async function showChangelogModal() {
     try {
         if (invoke) {
             const entries = await invoke('get_changelog');
+            const locale = window.i18n.getLocale();
             if (Array.isArray(entries) && entries.length > 0) {
-                html = entries.map(entry => `
+                html = entries.map(entry => {
+                    // 根据语言选择 changes 或 changes_en
+                    const changes = (locale === 'en' && entry.changes_en && entry.changes_en.length > 0)
+                        ? entry.changes_en
+                        : (entry.changes || []);
+                    return `
                     <div class="changelog-entry">
                         <div class="changelog-version">v${entry.version}</div>
                         <div class="changelog-date">${entry.date || ''}</div>
                         <ul class="changelog-changes">
-                            ${(entry.changes || []).map(c => `<li>${c}</li>`).join('')}
+                            ${changes.map(c => `<li>${c}</li>`).join('')}
                         </ul>
                     </div>
-                `).join('');
+                `}).join('');
             } else {
-                html = '<p>暂无更新日志</p>';
+                html = `<p>${window.i18n.t('changelogEmpty')}</p>`;
             }
         }
     } catch (e) {
         console.warn('[About] 获取更新日志失败:', e);
-        html = '<p>更新日志加载失败，请稍后重试。</p>';
+        html = `<p>${window.i18n.t('changelogLoadFailed')}</p>`;
     }
     showAboutModal(window.i18n.t('changelogModalTitle'), `<div class="about-modal-body">${html}</div>`);
 }
@@ -2474,7 +2575,7 @@ function showAboutModal(title, bodyHtml) {
                 </div>
                 <div id="about-modal-body"></div>
                 <div class="modal-footer">
-                    <button class="btn btn-outline" onclick="closeAboutModal()">关闭</button>
+                    <button class="btn btn-outline" onclick="closeAboutModal()" data-i18n="btnClose">${window.i18n.t('btnClose')}</button>
                 </div>
             </div>
         `;

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.22">
+    <meta name="app-version" content="0.1.25">
     <title>KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -46,62 +46,72 @@
         <button id="error-close" class="error-close" data-i18n="btnClose" title="关闭">✕</button>
     </div>
 
+    <!-- macOS 辅助功能权限引导（全屏遮罩，未授权时强制显示，不可关闭） -->
+    <div id="accessibility-overlay" class="accessibility-overlay hidden">
+        <div class="accessibility-overlay-card">
+            <div class="accessibility-overlay-icon">🔐</div>
+            <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
+            <p class="accessibility-overlay-desc">
+                KVMini 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
+                请在系统设置中授权后，应用将自动继续。
+            </p>
+            <div class="accessibility-overlay-steps">
+                <div class="accessibility-step">
+                    <span class="accessibility-step-num">1</span>
+                    <span>点击下方"前往授权"按钮</span>
+                </div>
+                <div class="accessibility-step">
+                    <span class="accessibility-step-num">2</span>
+                    <span>在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
+                </div>
+                <div class="accessibility-step">
+                    <span class="accessibility-step-num">3</span>
+                    <span>返回应用，权限授予后自动继续</span>
+                </div>
+            </div>
+            <button id="open-accessibility-btn" class="btn btn-accessibility-overlay">
+                前往授权 →
+            </button>
+            <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
+                ⏳ 等待授权中，授权后将自动继续...
+            </p>
+        </div>
+    </div>
+
+    <!-- 过期引导界面（试用到期时显示，默认隐藏） -->
+    <div id="license-gate" class="license-gate hidden">
+        <div class="license-gate-card">
+            <div class="license-gate-icon">⏰</div>
+            <h2 class="license-gate-title" data-i18n="licenseGateTitle">试用已到期</h2>
+            <p class="license-gate-desc-new" data-i18n="licenseGateDescNew">感谢试用 KVMini！购买完整版以继续使用全部功能。</p>
+            <button id="license-purchase-btn" class="btn btn-primary btn-purchase" data-i18n="purchaseBtn">购买完整版</button>
+            <button id="license-restore-btn" class="btn btn-outline btn-restore" data-i18n="restoreBtn">恢复购买</button>
+            <p class="license-gate-hint" data-i18n="licenseGateHint">已购买？点击"恢复购买"即可恢复。</p>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- 主界面视图 (#view-main) -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div id="view-main" class="view-container">
     <div class="container">
-        <!-- 头部 -->
-        <header>
-            <h1 data-i18n="appTitle">KVM Share</h1>
-            <p data-i18n="appSubtitle">跨平台鼠标键盘共享软件</p>
-            <p class="app-version" id="app-version">v0.1.14</p>
-        </header>
-
-        <!-- macOS 辅助功能权限引导（全屏遮罩，未授权时强制显示，不可关闭） -->
-        <div id="accessibility-overlay" class="accessibility-overlay hidden">
-            <div class="accessibility-overlay-card">
-                <div class="accessibility-overlay-icon">🔐</div>
-                <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
-                <p class="accessibility-overlay-desc">
-                    KVMini 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
-                    请在系统设置中授权后，应用将自动继续。
-                </p>
-                <div class="accessibility-overlay-steps">
-                    <div class="accessibility-step">
-                        <span class="accessibility-step-num">1</span>
-                        <span>点击下方"前往授权"按钮</span>
-                    </div>
-                    <div class="accessibility-step">
-                        <span class="accessibility-step-num">2</span>
-                        <span>在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
-                    </div>
-                    <div class="accessibility-step">
-                        <span class="accessibility-step-num">3</span>
-                        <span>返回应用，权限授予后自动继续</span>
-                    </div>
-                </div>
-                <button id="open-accessibility-btn" class="btn btn-accessibility-overlay">
-                    前往授权 →
+        <!-- 头部标题栏 -->
+        <header class="hig-header">
+            <div class="hig-header-left">
+                <h1 class="hig-title" data-i18n="appTitle">KVMini</h1>
+                <p class="hig-subtitle" data-i18n="appSubtitle">跨平台鼠标键盘共享软件</p>
+                <p class="hig-version" id="app-version">v0.1.25</p>
+            </div>
+            <div class="hig-header-right">
+                <button id="settings-btn" class="btn btn-settings-hig" data-i18n-title="btnSettings" title="设置">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 13a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M16.5 10a6.5 6.5 0 01-.4 2.2l1.3 1.5a.5.5 0 01-.1.6l-1.5.9a.5.5 0 01-.6-.1l-1.3-1.5a6.5 6.5 0 01-2.2.8v2a.5.5 0 01-.5.5h-1.8a.5.5 0 01-.5-.5v-2a6.5 6.5 0 01-2.2-.8L5.4 15.1a.5.5 0 01-.6.1l-1.5-.9a.5.5 0 01-.1-.6l1.3-1.5A6.5 6.5 0 014 10c0-.8.1-1.5.4-2.2L3.1 6.3a.5.5 0 01.1-.6l1.5-.9a.5.5 0 01.6.1l1.3 1.5A6.5 6.5 0 018.8 5.6v-2a.5.5 0 01.5-.5h1.8a.5.5 0 01.5.5v2a6.5 6.5 0 012.2.8l1.3-1.5a.5.5 0 01.6-.1l1.5.9a.5.5 0 01.1.6l-1.3 1.5c.3.7.5 1.4.5 2.2z" stroke="currentColor" stroke-width="1.5"/>
+                    </svg>
+                    <span data-i18n="btnSettings">设置</span>
                 </button>
-                <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
-                    ⏳ 等待授权中，授权后将自动继续...
-                </p>
             </div>
-        </div>
-
-        <!-- 授权引导界面（未授权时显示，默认隐藏） -->
-        <div id="license-gate" class="license-gate hidden">
-            <div class="license-gate-card">
-                <div class="license-gate-icon">🔑</div>
-                <h2 class="license-gate-title" data-i18n="licenseGateTitle">激活 KVMini</h2>
-                <p class="license-gate-desc" data-i18n="licenseGateDesc">请输入授权码激活，或购买许可证</p>
-                <div class="license-gate-form">
-                    <input type="text" id="license-key-input" class="license-key-input"
-                        placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
-                    <button id="license-activate-btn" class="btn btn-primary" data-i18n="btnActivate">激活</button>
-                </div>
-                <div id="license-error-msg" class="license-error-msg hidden"></div>
-                <div class="license-gate-divider" data-i18n="licenseGateDivider">或</div>
-                <button id="license-buy-btn" class="btn btn-secondary" data-i18n="btnBuyLicense">购买许可证</button>
-            </div>
-        </div>
+        </header>
 
         <!-- 授权状态徽章（已授权时显示在主界面） -->
         <div id="license-status-badge" class="license-status-badge hidden" data-i18n="licenseActivated">✓ 已激活</div>
@@ -190,7 +200,6 @@
             <!-- 断开/重连中时显示重新连接按钮 -->
             <button id="reconnect-btn" class="btn btn-primary hidden" data-i18n="btnReconnect">重新连接</button>
             <button id="start-sharing-btn" class="btn btn-success hidden" data-i18n="btnStartSharing">▶ 开始共享</button>
-            <button id="settings-btn" class="btn btn-outline" data-i18n="btnSettings">⚙ 设置</button>
         </div>
 
         <!-- 可滚动内容区域（设备面板 + 历史面板） -->
@@ -267,301 +276,315 @@
             <p class="hint-text" data-i18n="hintMouseEdge">💡 连接成功后，将鼠标移到屏幕边缘即可自动切换到对端控制模式</p>
             <p class="hint-text" data-i18n="hintHotkey">💡 按 Ctrl+Alt+S 可手动切换控制权，鼠标移回本机边缘自动归还</p>
         </div>
-    </div>
+    </div><!-- /.container -->
+    </div><!-- /#view-main -->
 
-    <!-- 设置面板（模态框，分页版） -->
-    <div id="settings-modal" class="modal hidden">
-        <div class="modal-overlay" onclick="closeSettings()"></div>
-        <div class="modal-content modal-content-tabs">
-            <div class="modal-header">
-                <h2 data-i18n="settingsTitle">⚙ 设置</h2>
-                <button class="modal-close" onclick="closeSettings()">✕</button>
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- 设置视图 (#view-settings) — 整页替换模式（方案 D） -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div id="view-settings" class="view-container hidden">
+        <div class="settings-page">
+            <!-- 顶部导航栏 -->
+            <div class="settings-topbar">
+                <button id="settings-back-btn" class="btn-back" onclick="closeSettings()">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span data-i18n="btnBack">返回</span>
+                </button>
+                <h2 class="settings-page-title" data-i18n="settingsTitle">设置</h2>
+                <div class="settings-topbar-actions">
+                    <button class="btn btn-primary btn-sm" id="settings-save-btn" data-i18n="btnSaveSettings" onclick="saveSettings()">保存</button>
+                </div>
             </div>
 
-            <!-- 分页导航 -->
-            <nav class="settings-tabs-nav" id="settings-tabs-nav">
-                <button class="settings-tab-btn active" data-tab="general" data-i18n="tabGeneral">通用</button>
-                <button class="settings-tab-btn" data-tab="display" data-i18n="tabDisplay">显示器布局</button>
-                <button class="settings-tab-btn" data-tab="network" data-i18n="tabNetwork">网络</button>
-                <button class="settings-tab-btn" data-tab="security" data-i18n="tabSecurity">安全</button>
-                <button class="settings-tab-btn" data-tab="about" data-i18n="tabAbout">关于</button>
-            </nav>
-            <!-- 小屏幕折叠导航（< 1200px 时显示） -->
-            <div class="settings-tabs-select-wrap" id="settings-tabs-select-wrap">
-                <select id="settings-tabs-select" class="settings-select settings-tabs-select">
-                    <option value="general" data-i18n="tabGeneral">通用</option>
-                    <option value="display" data-i18n="tabDisplay">显示器布局</option>
-                    <option value="network" data-i18n="tabNetwork">网络</option>
-                    <option value="security" data-i18n="tabSecurity">安全</option>
-                    <option value="about" data-i18n="tabAbout">关于</option>
-                </select>
+            <!-- 设置主体：左侧 Tab 导航 + 右侧内容区 -->
+            <div class="settings-layout">
+
+                <!-- 左侧垂直 Tab 导航栏 -->
+                <nav class="settings-sidebar" id="settings-tabs-nav">
+                    <button class="settings-tab-btn active" data-tab="general" data-i18n="tabGeneral">通用</button>
+                    <button class="settings-tab-btn" data-tab="display" data-i18n="tabDisplay">显示器布局</button>
+                    <button class="settings-tab-btn" data-tab="network" data-i18n="tabNetwork">网络</button>
+                    <button class="settings-tab-btn" data-tab="security" data-i18n="tabSecurity">安全</button>
+                    <button class="settings-tab-btn" data-tab="about" data-i18n="tabAbout">关于</button>
+                </nav>
+                <!-- 小屏幕折叠导航（窄屏时显示） -->
+                <div class="settings-tabs-select-wrap" id="settings-tabs-select-wrap">
+                    <select id="settings-tabs-select" class="settings-select settings-tabs-select">
+                        <option value="general" data-i18n="tabGeneral">通用</option>
+                        <option value="display" data-i18n="tabDisplay">显示器布局</option>
+                        <option value="network" data-i18n="tabNetwork">网络</option>
+                        <option value="security" data-i18n="tabSecurity">安全</option>
+                        <option value="about" data-i18n="tabAbout">关于</option>
+                    </select>
+                </div>
+
+                <!-- 右侧内容区 -->
+                <div class="settings-content-area">
+                    <div class="settings-tabs-body">
+
+                        <!-- ── 通用分页 ── -->
+                        <div class="settings-tab-content active" id="tab-general">
+                            <!-- 快捷键配置 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsHotkey">全局快捷键</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelToggleFocus">切换控制焦点:</label>
+                                    <div class="hotkey-input-group">
+                                        <input type="text" id="hotkey-input" class="hotkey-input"
+                                            placeholder="点击此处录入快捷键（默认：Ctrl+Alt+S）" readonly
+                                            data-i18n-placeholder="hotkeyPlaceholder" data-hotkey="">
+                                        <button class="btn btn-small" onclick="clearHotkey()" data-i18n="btnClearHotkey">清除</button>
+                                    </div>
+                                    <p class="feature-hint" data-i18n="hotkeyHint">按下此快捷键可在本机和远端之间切换键鼠控制权</p>
+                                </div>
+                            </div>
+
+                            <!-- 连接偏好 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsConnection">连接偏好</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelPreferConnection">优先连接方式:</label>
+                                    <select id="prefer-connection-type" class="settings-select">
+                                        <option value="auto" data-i18n="optionAuto">自动选择</option>
+                                        <option value="network" data-i18n="optionNetwork">网络优先</option>
+                                        <option value="usb" data-i18n="optionUsb">USB优先</option>
+                                    </select>
+                                </div>
+                                <div class="settings-item">
+                                    <label data-i18n="labelAutoReconnect">自动重连:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="auto-reconnect" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- 启动选项 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsStartup">启动选项</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelAutoStart">开机自启动:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="auto-start">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="settings-item">
+                                    <label data-i18n="labelStartMinimized">启动时最小化到托盘:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="start-minimized">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- 外观设置 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsAppearance">外观</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelLanguage">语言:</label>
+                                    <select id="language-select" class="settings-select">
+                                        <option value="zh">中文</option>
+                                        <option value="en">English</option>
+                                    </select>
+                                </div>
+                                <div class="settings-item">
+                                    <label data-i18n="labelTheme">主题:</label>
+                                    <select id="theme-select" class="settings-select">
+                                        <option value="auto" data-i18n="optionThemeAuto">跟随系统</option>
+                                        <option value="dark" data-i18n="optionThemeDark">深色</option>
+                                        <option value="light" data-i18n="optionThemeLight">浅色</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- 剪贴板共享 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsClipboard">剪贴板共享</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelClipboardSync">跨设备剪贴板同步:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="clipboard-sync" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）</p>
+                            </div>
+                        </div>
+
+                        <!-- ── 显示器布局分页 ── -->
+                        <div class="settings-tab-content" id="tab-display">
+                            <div class="settings-section settings-section-display">
+                                <h4 data-i18n="settingsDisplay">显示器布局</h4>
+                                <p class="settings-hint" data-i18n="hintDisplayLayout">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
+
+                                <!-- 本机显示器列表 -->
+                                <div class="monitor-list-section">
+                                    <div class="monitor-list-header">
+                                        <span data-i18n="labelMonitorList">显示器列表</span>
+                                        <span id="monitor-count-badge" class="monitor-count-badge">1</span>
+                                        <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器"
+                                            onclick="refreshMonitors()">↺</button>
+                                    </div>
+                                    <div id="monitor-list" class="monitor-list">
+                                        <!-- 由 JS 动态填充 -->
+                                    </div>
+                                </div>
+
+                                <!-- 大尺寸布局预览区域（占分页 70% 高度） -->
+                                <div class="display-layout-container display-layout-container-large" id="display-layout-container">
+                                    <div class="display-layout-preview layout-left" id="display-layout-preview">
+                                        <div class="monitor-group" id="local-monitor-group"></div>
+                                        <div class="layout-divider" id="layout-divider">→</div>
+                                        <div class="monitor-group" id="remote-monitor-group"></div>
+                                    </div>
+                                    <div class="display-layout-hint" id="display-layout-hint">
+                                        <span data-i18n="hintTriggerEdge">当前：鼠标超出</span>
+                                        <strong id="trigger-edge-text">右边缘</strong>
+                                        <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ── 网络分页 ── -->
+                        <div class="settings-tab-content" id="tab-network">
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsListen">监听地址（让对端连接到本机）</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelListenInterface">监听网卡:</label>
+                                    <select id="listen-ip-select" class="settings-select">
+                                        <option value="0.0.0.0" data-i18n="optionAllInterfaces">所有网卡（0.0.0.0，推荐）</option>
+                                    </select>
+                                </div>
+                                <!-- 网卡说明（详细解释多网卡场景） -->
+                                <div class="nic-description" id="nic-description">
+                                    <span class="nic-description-icon">ℹ️</span>
+                                    <span>您的设备有多个网络接口（如 Wi-Fi、有线网、VPN 等），选择<strong>所有网卡</strong>可接受来自任意网络的连接；选择具体网卡可限制只接受该网络的连接。</span>
+                                </div>
+                                <!-- 网卡列表（动态填充，含类型图标和悬停详情） -->
+                                <div id="nic-list" class="nic-list"></div>
+                                <!-- 选定网卡断开警告 -->
+                                <div id="network-iface-warning" class="network-iface-warning hidden">
+                                    ⚠️ <span id="network-iface-warning-text">选定网卡已断开，请切换到其他网卡</span>
+                                </div>
+                                <div class="settings-item">
+                                    <label data-i18n="labelListenPort">监听端口:</label>
+                                    <input type="number" id="listen-port-input" class="settings-input-number" value="8889"
+                                        min="1024" max="65535" placeholder="1024-65535">
+                                </div>
+                                <div class="settings-item">
+                                    <label style="color:var(--text-secondary);font-size:12px;" data-i18n="labelListenAddress">对端连接地址:</label>
+                                    <span id="listen-address-display" style="font-family:monospace;font-size:12px;color:var(--text-primary);">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ── 安全分页 ── -->
+                        <div class="settings-tab-content" id="tab-security">
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsSecurity">安全与加密</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelEnableTls">TLS 1.3 加密传输:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="enable-tls" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p class="feature-hint" data-i18n="hintEnableTls">开启后所有键鼠数据和剪贴板内容均加密传输，关闭后显示安全警告</p>
+                                <div class="settings-item" id="tls-fingerprint-row">
+                                    <label data-i18n="labelLocalFingerprint">本机证书指纹:</label>
+                                    <span id="local-tls-fingerprint" class="tls-fingerprint-text">加载中...</span>
+                                    <button class="btn btn-small" onclick="copyTlsFingerprint()"
+                                        data-i18n="btnCopyFingerprint">复制</button>
+                                </div>
+                                <p class="feature-hint" id="tls-fingerprint-hint" data-i18n="tlsFingerprintHint">
+                                    对端首次连接时需核对此指纹，确认一致后方可信任连接</p>
+                                <!-- 证书加载失败时显示 -->
+                                <div id="cert-error-row" class="cert-error-row hidden">
+                                    <span class="cert-error-icon">❌</span>
+                                    <span id="cert-error-msg" class="cert-error-msg">证书加载失败</span>
+                                    <button class="btn btn-small btn-danger" onclick="regenerateCert()"
+                                        data-i18n="btnRegenerateCert">重新生成证书</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ── 关于分页 ── -->
+                        <div class="settings-tab-content" id="tab-about">
+
+                            <!-- 许可状态卡片 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsLicense">许可状态</h4>
+                                <div id="about-trial-status" class="about-trial-status">
+                                    <span id="about-trial-status-text" data-i18n="trialChecking">检测中...</span>
+                                </div>
+                                <div id="about-purchase-actions" style="display:none;margin-top:8px;">
+                                    <button class="btn btn-primary" id="about-purchase-btn" data-i18n="purchaseBtn">购买完整版</button>
+                                    <button class="btn btn-outline" id="about-restore-btn" style="margin-left:8px;" data-i18n="restoreBtn">恢复购买</button>
+                                </div>
+                            </div>
+
+                            <!-- 关于卡片（反馈/分享/隐私/更新日志 2x2 布局） -->
+                            <div class="settings-section">
+                                <div class="about-section-header">
+                                    <h4 data-i18n="settingsAbout">关于</h4>
+                                    <button class="btn btn-outline about-rate-btn" id="about-rate-btn">👍 <span data-i18n="rateApp">给个赞吧</span></button>
+                                </div>
+                                <div class="about-actions-grid">
+                                    <button class="about-action-btn" id="about-feedback-btn">
+                                        <span class="about-action-icon">📮</span>
+                                        <span data-i18n="feedbackTitle">反馈与建议</span>
+                                    </button>
+                                    <button class="about-action-btn" id="about-share-btn">
+                                        <span class="about-action-icon">❤️</span>
+                                        <span data-i18n="shareTitle">推荐给朋友</span>
+                                    </button>
+                                    <button class="about-action-btn" id="about-privacy-btn">
+                                        <span class="about-action-icon">🔒</span>
+                                        <span data-i18n="privacyTitle">隐私政策</span>
+                                    </button>
+                                    <button class="about-action-btn" id="about-changelog-btn">
+                                        <span class="about-action-icon">📝</span>
+                                        <span data-i18n="changelogTitle">更新日志</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 版本信息卡片 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsVersion">版本信息</h4>
+                                <div class="about-version-info">
+                                    <span class="about-version-text" id="about-version-text">KVMini</span>
+                                    <span class="about-copyright">© 2026 KVMini. All rights reserved.</span>
+                                </div>
+                            </div>
+
+                        </div><!-- /#tab-about -->
+
+                    </div><!-- /.settings-tabs-body -->
+                </div><!-- /.settings-content-area -->
+
+            </div><!-- /.settings-layout -->
+
+            <!-- 底部版本号 -->
+            <div class="settings-footer">
+                <span class="settings-version" id="settings-version">v0.1.25</span>
             </div>
-
-            <!-- 分页内容区域 -->
-            <div class="settings-tabs-body">
-
-                <!-- ── 通用分页 ── -->
-                <div class="settings-tab-content active" id="tab-general">
-                    <!-- 快捷键配置 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsHotkey">全局快捷键</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelToggleFocus">切换控制焦点:</label>
-                            <div class="hotkey-input-group">
-                                <input type="text" id="hotkey-input" class="hotkey-input"
-                                    placeholder="点击此处录入快捷键（默认：Ctrl+Alt+S）" readonly
-                                    data-i18n-placeholder="hotkeyPlaceholder" data-hotkey="">
-                                <button class="btn btn-small" onclick="clearHotkey()" data-i18n="btnClearHotkey">清除</button>
-                            </div>
-                            <p class="feature-hint" data-i18n="hotkeyHint">按下此快捷键可在本机和远端之间切换键鼠控制权</p>
-                        </div>
-                    </div>
-
-                    <!-- 连接偏好 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsConnection">连接偏好</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelPreferConnection">优先连接方式:</label>
-                            <select id="prefer-connection-type" class="settings-select">
-                                <option value="auto" data-i18n="optionAuto">自动选择</option>
-                                <option value="network" data-i18n="optionNetwork">网络优先</option>
-                                <option value="usb" data-i18n="optionUsb">USB优先</option>
-                            </select>
-                        </div>
-                        <div class="settings-item">
-                            <label data-i18n="labelAutoReconnect">自动重连:</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="auto-reconnect" checked>
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- 启动选项 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsStartup">启动选项</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelAutoStart">开机自启动:</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="auto-start">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                        <div class="settings-item">
-                            <label data-i18n="labelStartMinimized">启动时最小化到托盘:</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="start-minimized">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- 外观设置 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsAppearance">外观</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelLanguage">语言:</label>
-                            <select id="language-select" class="settings-select">
-                                <option value="zh">中文</option>
-                                <option value="en">English</option>
-                            </select>
-                        </div>
-                        <div class="settings-item">
-                            <label data-i18n="labelTheme">主题:</label>
-                            <select id="theme-select" class="settings-select">
-                                <option value="auto" data-i18n="optionThemeAuto">跟随系统</option>
-                                <option value="dark" data-i18n="optionThemeDark">深色</option>
-                                <option value="light" data-i18n="optionThemeLight">浅色</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- 剪贴板共享 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsClipboard">剪贴板共享</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelClipboardSync">跨设备剪贴板同步:</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="clipboard-sync" checked>
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                        <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）</p>
-                    </div>
-                </div>
-
-                <!-- ── 显示器布局分页 ── -->
-                <div class="settings-tab-content" id="tab-display">
-                    <div class="settings-section settings-section-display">
-                        <h4 data-i18n="settingsDisplay">显示器布局</h4>
-                        <p class="settings-hint" data-i18n="hintDisplayLayout">拖拽显示器方块，设置本机与远端设备的相对位置。鼠标超出对应边缘时自动切换控制权。</p>
-
-                        <!-- 本机显示器列表 -->
-                        <div class="monitor-list-section">
-                            <div class="monitor-list-header">
-                                <span data-i18n="labelMonitorList">显示器列表</span>
-                                <span id="monitor-count-badge" class="monitor-count-badge">1</span>
-                                <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器"
-                                    onclick="refreshMonitors()">↺</button>
-                            </div>
-                            <div id="monitor-list" class="monitor-list">
-                                <!-- 由 JS 动态填充 -->
-                            </div>
-                        </div>
-
-                        <!-- 大尺寸布局预览区域（占分页 70% 高度） -->
-                        <div class="display-layout-container display-layout-container-large" id="display-layout-container">
-                            <div class="display-layout-preview layout-left" id="display-layout-preview">
-                                <div class="monitor-group" id="local-monitor-group"></div>
-                                <div class="layout-divider" id="layout-divider">→</div>
-                                <div class="monitor-group" id="remote-monitor-group"></div>
-                            </div>
-                            <div class="display-layout-hint" id="display-layout-hint">
-                                <span data-i18n="hintTriggerEdge">当前：鼠标超出</span>
-                                <strong id="trigger-edge-text">右边缘</strong>
-                                <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── 网络分页 ── -->
-                <div class="settings-tab-content" id="tab-network">
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsListen">监听地址（让对端连接到本机）</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelListenInterface">监听网卡:</label>
-                            <select id="listen-ip-select" class="settings-select">
-                                <option value="0.0.0.0" data-i18n="optionAllInterfaces">所有网卡（0.0.0.0，推荐）</option>
-                            </select>
-                        </div>
-                        <!-- 网卡说明（详细解释多网卡场景） -->
-                        <div class="nic-description" id="nic-description">
-                            <span class="nic-description-icon">ℹ️</span>
-                            <span>您的设备有多个网络接口（如 Wi-Fi、有线网、VPN 等），选择<strong>所有网卡</strong>可接受来自任意网络的连接；选择具体网卡可限制只接受该网络的连接。</span>
-                        </div>
-                        <!-- 网卡列表（动态填充，含类型图标和悬停详情） -->
-                        <div id="nic-list" class="nic-list"></div>
-                        <!-- 选定网卡断开警告 -->
-                        <div id="network-iface-warning" class="network-iface-warning hidden">
-                            ⚠️ <span id="network-iface-warning-text">选定网卡已断开，请切换到其他网卡</span>
-                        </div>
-                        <div class="settings-item">
-                            <label data-i18n="labelListenPort">监听端口:</label>
-                            <input type="number" id="listen-port-input" class="settings-input-number" value="8889"
-                                min="1024" max="65535" placeholder="1024-65535">
-                        </div>
-                        <div class="settings-item">
-                            <label style="color:#6b7280;font-size:12px;" data-i18n="labelListenAddress">对端连接地址:</label>
-                            <span id="listen-address-display" style="font-family:monospace;font-size:12px;color:#374151;">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── 安全分页 ── -->
-                <div class="settings-tab-content" id="tab-security">
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsSecurity">安全与加密</h4>
-                        <div class="settings-item">
-                            <label data-i18n="labelEnableTls">TLS 1.3 加密传输:</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="enable-tls" checked>
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                        <p class="feature-hint" data-i18n="hintEnableTls">开启后所有键鼠数据和剪贴板内容均加密传输，关闭后显示安全警告</p>
-                        <div class="settings-item" id="tls-fingerprint-row">
-                            <label data-i18n="labelLocalFingerprint">本机证书指纹:</label>
-                            <span id="local-tls-fingerprint" class="tls-fingerprint-text">加载中...</span>
-                            <button class="btn btn-small" onclick="copyTlsFingerprint()"
-                                data-i18n="btnCopyFingerprint">复制</button>
-                        </div>
-                        <p class="feature-hint" id="tls-fingerprint-hint" data-i18n="tlsFingerprintHint">
-                            对端首次连接时需核对此指纹，确认一致后方可信任连接</p>
-                        <!-- 证书加载失败时显示 -->
-                        <div id="cert-error-row" class="cert-error-row hidden">
-                            <span class="cert-error-icon">❌</span>
-                            <span id="cert-error-msg" class="cert-error-msg">证书加载失败</span>
-                            <button class="btn btn-small btn-danger" onclick="regenerateCert()"
-                                data-i18n="btnRegenerateCert">重新生成证书</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── 关于分页 ── -->
-                <div class="settings-tab-content" id="tab-about">
-
-                    <!-- 许可状态卡片 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsLicense">许可状态</h4>
-                        <div id="about-trial-status" class="about-trial-status">
-                            <span id="about-trial-status-text" data-i18n="trialChecking">检测中...</span>
-                        </div>
-                        <div id="about-purchase-actions" style="display:none;margin-top:8px;">
-                            <button class="btn btn-primary" id="about-purchase-btn" data-i18n="purchaseBtn">购买完整版</button>
-                            <button class="btn btn-outline" id="about-restore-btn" style="margin-left:8px;" data-i18n="restoreBtn">恢复购买</button>
-                        </div>
-                    </div>
-
-                    <!-- 关于卡片（反馈/分享/隐私/更新日志 2x2 布局） -->
-                    <div class="settings-section">
-                        <div class="about-section-header">
-                            <h4 data-i18n="settingsAbout">关于</h4>
-                            <button class="btn btn-outline about-rate-btn" id="about-rate-btn">👍 <span data-i18n="rateApp">给个赞吧</span></button>
-                        </div>
-                        <div class="about-actions-grid">
-                            <button class="about-action-btn" id="about-feedback-btn">
-                                <span class="about-action-icon">📮</span>
-                                <span data-i18n="feedbackTitle">反馈与建议</span>
-                            </button>
-                            <button class="about-action-btn" id="about-share-btn">
-                                <span class="about-action-icon">❤️</span>
-                                <span data-i18n="shareTitle">推荐给朋友</span>
-                            </button>
-                            <button class="about-action-btn" id="about-privacy-btn">
-                                <span class="about-action-icon">🔒</span>
-                                <span data-i18n="privacyTitle">隐私政策</span>
-                            </button>
-                            <button class="about-action-btn" id="about-changelog-btn">
-                                <span class="about-action-icon">📝</span>
-                                <span data-i18n="changelogTitle">更新日志</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 版本信息卡片 -->
-                    <div class="settings-section">
-                        <h4 data-i18n="settingsVersion">版本信息</h4>
-                        <div class="about-version-info">
-                            <span class="about-version-text" id="about-version-text">KVMini</span>
-                            <span class="about-copyright">© 2026 KVMini. All rights reserved.</span>
-                        </div>
-                    </div>
-
-                </div><!-- /#tab-about -->
-
-            </div><!-- /.settings-tabs-body -->
-
-            <div class="modal-footer modal-footer-tabs">
-                <div class="modal-footer-actions">
-                    <button class="btn btn-primary" id="settings-save-btn" data-i18n="btnSaveSettings" onclick="saveSettings()">保存设置</button>
-                    <button class="btn btn-outline" data-i18n="btnCancel" onclick="closeSettings()">取消</button>
-                </div>
-                <div class="settings-version" id="settings-version">v0.1.14</div>
-            </div>
-        </div>
-    </div>
+        </div><!-- /.settings-page -->
+    </div><!-- /#view-settings -->
     <!-- 设置页取消确认对话框 -->
-    <div id="settings-discard-dialog" class="modal hidden">
-        <div class="modal-overlay" onclick="onSettingsDiscardCancel()"></div>
-        <div class="modal-content" style="max-width:400px;">
-            <div class="modal-header">
+    <div id="settings-discard-dialog" class="dialog-overlay hidden">
+        <div class="dialog-card" style="max-width:400px;">
+            <div class="dialog-header">
                 <h2 data-i18n="discardDialogTitle">⚠️ 未保存的修改</h2>
             </div>
-            <div class="modal-body">
+            <div class="dialog-body">
                 <p id="settings-discard-msg" data-i18n="discardDialogMsg">您有未保存的修改，是否放弃？</p>
             </div>
-            <div class="modal-footer" style="gap:12px;">
+            <div class="dialog-footer">
                 <button class="btn btn-danger" id="settings-discard-confirm" onclick="onSettingsDiscardConfirm()" data-i18n="btnDiscardChanges">放弃修改</button>
                 <button class="btn btn-outline" id="settings-discard-cancel" onclick="onSettingsDiscardCancel()" data-i18n="btnContinueEditing">继续编辑</button>
             </div>

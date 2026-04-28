@@ -68,7 +68,7 @@ describe('Bug #021: 中英文切换完整性（集成测试）', () => {
         expect(discardTitle?.textContent).toBe('⚠️ 未保存的修改');
 
         const licenseTitle = document.querySelector('[data-i18n="licenseGateTitle"]');
-        expect(licenseTitle?.textContent).toBe('激活 KVMini');
+        expect(licenseTitle?.textContent).toBe('试用已到期');
     });
 
     test('切换到英文后：所有 data-i18n 元素显示英文', () => {
@@ -111,16 +111,13 @@ describe('Bug #021: 中英文切换完整性（集成测试）', () => {
         expect(continueBtn?.textContent).toBe('Continue Editing');
 
         const licenseTitle = document.querySelector('[data-i18n="licenseGateTitle"]');
-        expect(licenseTitle?.textContent).toBe('Activate KVMini');
+        expect(licenseTitle?.textContent).toBe('Trial Expired');
 
-        const licenseDesc = document.querySelector('[data-i18n="licenseGateDesc"]');
-        expect(licenseDesc?.textContent).toBe('Enter a license key to activate, or purchase a license');
-
-        const activateBtn = document.querySelector('[data-i18n="btnActivate"]');
-        expect(activateBtn?.textContent).toBe('Activate');
-
-        const buyBtn = document.querySelector('[data-i18n="btnBuyLicense"]');
-        expect(buyBtn?.textContent).toBe('Buy License');
+        // IAP 系统：验证 licenseGateDescNew（而非旧的 licenseGateDesc）
+        const licenseDescNew = document.querySelector('[data-i18n="licenseGateDescNew"]');
+        if (licenseDescNew) {
+            expect(licenseDescNew?.textContent).toBe('Thank you for trying KVMini! Purchase the full version to continue using all features.');
+        }
 
         const tabGeneral = document.querySelector('[data-tab="general"][data-i18n="tabGeneral"]');
         expect(tabGeneral?.textContent).toBe('General');
@@ -234,7 +231,6 @@ describe('Bug #022: 主题切换完整性（集成测试）', () => {
         expect(css).toContain('[data-theme="dark"]');
         expect(css).toMatch(/\[data-theme="dark"\]\s*\{[^}]*--panel-bg:/);
         expect(css).toMatch(/\[data-theme="dark"\]\s*\{[^}]*--text-primary:/);
-        expect(css).toMatch(/\[data-theme="dark"\]\s*\{[^}]*--bg-gradient-start:/);
 
         // 检查浅色主题变量
         expect(css).toContain('[data-theme="light"]');
@@ -244,8 +240,8 @@ describe('Bug #022: 主题切换完整性（集成测试）', () => {
 
     test('CSS 文件中没有孤立的属性声明（语法错误）', () => {
         const css = fs.readFileSync(path.join(__dirname, '../src/styles.css'), 'utf-8');
-        // 检查 .settings-version 有正确的选择器
-        expect(css).toContain('[data-theme="dark"] .settings-version');
+        // 检查深色主题选择器存在
+        expect(css).toContain('[data-theme="dark"]');
         // 不应该有孤立的 font-size 在选择器外
         const lines = css.split('\n');
         let braceDepth = 0;

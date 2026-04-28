@@ -128,6 +128,63 @@ pub fn save_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// 布局配置（显示器相对位置）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutConfig {
+    /// 布局方向：LocalLeftOfRemote / LocalRightOfRemote / LocalAboveRemote / LocalBelowRemote
+    #[serde(default = "default_layout")]
+    pub layout: String,
+    /// 本机主显示器宽度（像素）
+    #[serde(default)]
+    pub local_screen_width: i32,
+    /// 本机主显示器高度（像素）
+    #[serde(default)]
+    pub local_screen_height: i32,
+}
+
+fn default_layout() -> String { "LocalLeftOfRemote".to_string() }
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            layout: default_layout(),
+            local_screen_width: 1920,
+            local_screen_height: 1080,
+        }
+    }
+}
+
+/// 获取布局配置文件路径
+pub fn layout_config_path() -> PathBuf {
+    let base = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("kvmini").join("layout.json")
+}
+
+/// 加载布局配置
+pub fn load_layout_config() -> LayoutConfig {
+    let path = layout_config_path();
+    if !path.exists() { return LayoutConfig::default(); }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => LayoutConfig::default(),
+    }
+}
+
+/// 保存布局配置
+pub fn save_layout_config(config: &LayoutConfig) -> Result<(), String> {
+    let path = layout_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建配置目录失败: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("序列化布局配置失败: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("写入布局配置失败: {}", e))?;
+    Ok(())
+}
+
 // ── Tauri 命令 ──────────────────────────────────────────────────────────────
 
 /// Tauri 命令：获取当前设置

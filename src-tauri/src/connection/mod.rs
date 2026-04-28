@@ -299,6 +299,7 @@ pub async fn start_listening(
 #[tauri::command]
 pub async fn connect_to_peer(
     peer_ip: Option<String>,
+    port: Option<u16>,
     app_handle: tauri::AppHandle,
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<String, String> {
@@ -310,6 +311,9 @@ pub async fn connect_to_peer(
     if ip.is_empty() {
         return Err("请输入对端 IP 地址".to_string());
     }
+
+    let connect_port = port.unwrap_or(DEFAULT_PORT);
+    log::info!("[连接] connect_to_peer: ip={}, port={}", ip, connect_port);
 
     mgr.set_peer_ip(ip.clone()).await;
 
@@ -326,7 +330,7 @@ pub async fn connect_to_peer(
     let app_clone = app_handle.clone();
 
     tauri::async_runtime::spawn(async move {
-        match inner.connect_to(&ip_clone, DEFAULT_PORT, local_info).await {
+        match inner.connect_to(&ip_clone, connect_port, local_info).await {
             Ok(peer_info) => {
                 log::info!("[连接] 已连接到 {}", ip_clone);
                 // 检测 TLS 状态：从对端握手信息中读取 tls_enabled

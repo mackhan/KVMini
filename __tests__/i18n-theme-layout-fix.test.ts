@@ -58,8 +58,8 @@ describe('Bug #021: i18n 全量文本替换', () => {
             'detailLatency', 'detailCertFingerprint',
             // 重连进度
             'labelReconnectProgress', 'reconnectingText',
-            // 授权界面
-            'licenseGateTitle', 'licenseGateDesc', 'btnActivate', 'licenseGateDivider', 'btnBuyLicense',
+            // 授权界面（当前 IAP 版本）
+            'licenseGateTitle', 'licenseGateDescNew',
             // 授权状态
             'licenseActivated', 'licenseSdkError',
             // 提示面板

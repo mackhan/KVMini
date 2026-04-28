@@ -83,18 +83,82 @@ async function checkLicenseStatus() {
 }
 
 /**
- * 打开购买页面（App Store 版）
+ * 购买完整版（通过 tauri-commerce SDK IAP 内购）
  */
-async function openPurchasePage() {
-    const purchaseUrl = 'https://kvmini.app/purchase';
+async function purchaseProduct() {
+    const invoke = _getInvoke();
+    if (!invoke) {
+        console.warn('[License] 无 Tauri 环境，无法发起购买');
+        return;
+    }
+    // 获取按钮并添加 loading 状态
+    const btn = document.getElementById('license-purchase-btn');
+    if (btn) { btn.disabled = true; btn.textContent = window.i18n ? window.i18n.t('purchaseProcessing') : '购买中...'; }
     try {
-        if (window.__TAURI__ && window.__TAURI__.shell) {
-            await window.__TAURI__.shell.open(purchaseUrl);
+        console.log('[License] 发起 IAP 购买: com.kvmini.app.pro');
+        await invoke('purchase', { productId: 'com.kvmini.app.pro' });
+        console.log('[License] IAP 购买成功');
+        // 购买成功后自动刷新授权状态
+        const result = await checkLicenseStatus();
+        updateLicenseUI(result.licensed);
+        const msg = window.i18n ? window.i18n.t('purchaseSuccess') : '购买成功！';
+        if (typeof showSuccess === 'function') {
+            showSuccess(msg);
         } else {
-            window.open(purchaseUrl, '_blank');
+            console.log('[License] ' + msg);
         }
     } catch (e) {
-        console.warn('[License] 打开购买页面失败:', e);
+        console.error('[License] IAP 购买失败:', e);
+        const detail = typeof e === 'string' ? e : (e?.message || '');
+        const baseMsg = window.i18n ? window.i18n.t('purchaseFailed') : '购买失败，请重试';
+        const msg = detail ? `${baseMsg}: ${detail}` : baseMsg;
+        if (typeof showError === 'function') {
+            showError(msg);
+        } else {
+            console.error('[License] ' + msg);
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = window.i18n ? window.i18n.t('purchaseBtn') : '购买完整版'; }
+    }
+}
+
+/**
+ * 恢复购买（通过 tauri-commerce SDK restore_purchase 命令）
+ */
+async function restorePurchase() {
+    const invoke = _getInvoke();
+    if (!invoke) {
+        console.warn('[License] 无 Tauri 环境，无法恢复购买');
+        return;
+    }
+    // 获取按钮并添加 loading 状态
+    const btn = document.getElementById('license-restore-btn');
+    if (btn) { btn.disabled = true; btn.textContent = window.i18n ? window.i18n.t('restoreProcessing') : '恢复中...'; }
+    try {
+        console.log('[License] 发起恢复购买');
+        await invoke('restore_purchase');
+        console.log('[License] 恢复购买成功');
+        // 恢复成功后自动刷新授权状态
+        const result = await checkLicenseStatus();
+        updateLicenseUI(result.licensed);
+        const msg = window.i18n ? window.i18n.t('restoreSuccess') : '恢复购买成功！';
+        if (typeof showSuccess === 'function') {
+            showSuccess(msg);
+        } else {
+            console.log('[License] ' + msg);
+        }
+    } catch (e) {
+        console.error('[License] 恢复购买失败:', e);
+        const detail = typeof e === 'string' ? e : (e?.message || '');
+        const baseMsg = window.i18n ? window.i18n.t('restoreFailed') : '恢复购买失败';
+        const msg = detail ? `${baseMsg}: ${detail}` : baseMsg;
+        if (typeof showError === 'function') {
+            showError(msg);
+        } else {
+            console.error('[License] ' + msg);
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = window.i18n ? window.i18n.t('restoreBtn') : '恢复购买'; }
     }
 }
 
@@ -132,7 +196,7 @@ function _notifyStatusChange(licensed) {
  */
 function updateLicenseUI(licensed) {
     const licenseGate = document.getElementById('license-gate');
-    const mainContent = document.getElementById('main-content');
+    const mainContent = document.getElementById('view-main');
     const statusBadge = document.getElementById('license-status-badge');
 
     if (licensed) {
@@ -166,10 +230,28 @@ async function initLicense() {
     // 注册状态变化回调，自动更新 UI
     onStatusChange(updateLicenseUI);
 
-    // 绑定购买按钮
-    const buyBtn = document.getElementById('license-buy-btn');
-    if (buyBtn) {
-        buyBtn.addEventListener('click', openPurchasePage);
+    // 绑定 IAP 购买按钮
+    const purchaseBtn = document.getElementById('license-purchase-btn');
+    if (purchaseBtn) {
+        purchaseBtn.addEventListener('click', purchaseProduct);
+        console.log('[License] 已绑定购买按钮: license-purchase-btn');
+    }
+
+    // 绑定恢复购买按钮
+    const restoreBtn = document.getElementById('license-restore-btn');
+    if (restoreBtn) {
+        restoreBtn.addEventListener('click', restorePurchase);
+        console.log('[License] 已绑定恢复购买按钮: license-restore-btn');
+    }
+
+    // 关于 Tab 中的购买/恢复按钮（settings-purchase-btn / settings-restore-btn）
+    const settingsPurchaseBtn = document.getElementById('settings-purchase-btn');
+    if (settingsPurchaseBtn) {
+        settingsPurchaseBtn.addEventListener('click', purchaseProduct);
+    }
+    const settingsRestoreBtn = document.getElementById('settings-restore-btn');
+    if (settingsRestoreBtn) {
+        settingsRestoreBtn.addEventListener('click', restorePurchase);
     }
 
     // 检查授权状态（通过 SDK）
@@ -189,7 +271,8 @@ async function initLicense() {
 window.LicenseModule = {
     LICENSE_STATUS,
     checkLicenseStatus,
-    openPurchasePage,
+    purchaseProduct,
+    restorePurchase,
     getCurrentStatus,
     onStatusChange,
     updateLicenseUI,

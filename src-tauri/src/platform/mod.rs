@@ -37,6 +37,34 @@ pub mod macos;
 
 pub mod autostart;
 
+// ── 屏幕枚举（跨平台） ──────────────────────────────────────────────────────
+
+pub mod screen {
+    use kvm_core::error::KvmResult;
+    use kvm_core::platform::{MonitorInfo, ScreenProvider};
+
+    /// 获取当前平台的显示器列表（跨平台入口）
+    pub fn get_monitors_impl() -> KvmResult<Vec<MonitorInfo>> {
+        #[cfg(target_os = "macos")]
+        {
+            let provider = super::macos::screen::MacScreenProvider::new();
+            provider.enumerate_monitors()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let provider = super::windows::screen::WinScreenProvider::new();
+            provider.enumerate_monitors()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Ok(vec![MonitorInfo {
+                id: 0, width: 1920, height: 1080, dpi_scale: 1.0,
+                offset_x: 0, offset_y: 0, is_primary: true,
+            }])
+        }
+    }
+}
+
 // ── 获取当前平台适配器 ──────────────────────────────────────────────────────
 
 /// 创建当前平台的适配器实例

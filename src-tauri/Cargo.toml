@@ -26,11 +26,10 @@ if-addrs = "0.13"
 rcgen = "0.13"
 sha2 = "0.10"
 hex = "0.4"
-# tauri-commerce SDK - 直接下载版（默认/开发阶段）
-# 使用 Git tag 引用，升级时只需更新 tag 版本号
-tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", tag = "v0.1.2", default-features = false, features = ["trial", "i18n", "permissions", "feedback", "review", "autostart", "changelog", "privacy"] }
-# App Store 版（构建时切换 features，取消注释下行并注释上行）：
-# tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", tag = "v0.1.2", default-features = false, features = ["trial", "iap", "i18n", "permissions", "feedback", "review", "autostart"] }
+# tauri-commerce SDK - 直接下载版（开发阶段，不含 iap）
+# tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", rev = "b8da74f", default-features = false, features = ["trial", "i18n", "permissions", "feedback", "review", "autostart", "changelog", "privacy", "log"] }
+# App Store 版（启用 IAP 内购功能）：
+tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", rev = "b8da74f", default-features = false, features = ["trial", "iap", "i18n", "permissions", "feedback", "review", "autostart", "changelog", "privacy", "log"] }
 
 [dev-dependencies]
 tempfile = "3.0"
