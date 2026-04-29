@@ -30,11 +30,16 @@ function initAccessibilityEventListeners() {
     // 兼容 Tauri 2.x (core.invoke) 和旧版 (invoke)
     const invoke = tauri?.core?.invoke || tauri?.invoke || null;
 
-    // 监听权限未授权事件 → 显示引导遮罩
+    // 监听权限未授权事件 → 显示引导遮罩（仅 macOS 会发送此事件）
     tauri.event.listen('accessibility://permission-denied', () => {
         const overlay = document.getElementById('accessibility-overlay');
         if (!overlay) {
             console.warn('[Accessibility] 遮罩 DOM 元素不存在');
+            return;
+        }
+        // 双重保险：非 macOS 平台忽略此事件
+        if (navigator.userAgent.includes('Windows')) {
+            console.warn('[Accessibility] Windows 平台忽略 permission-denied 事件');
             return;
         }
         console.log('[Accessibility] 收到 permission-denied 事件，显示引导遮罩');
@@ -73,12 +78,13 @@ function initAccessibilityEventListeners() {
             result.then((status) => {
                 const overlay = document.getElementById('accessibility-overlay');
                 if (!overlay) return;
-                if (status !== 'Granted') {
+                // 'N/A' = 非 macOS 平台，无需权限，不显示遮罩
+                if (status === 'Granted' || status === 'N/A') {
+                    console.log(`[Accessibility] 初始权限状态: ${status}，无需显示遮罩`);
+                    overlay.classList.add('hidden');
+                } else {
                     console.log('[Accessibility] 初始权限状态: Denied，显示引导遮罩');
                     overlay.classList.remove('hidden');
-                } else {
-                    console.log('[Accessibility] 初始权限状态: Granted，无需显示遮罩');
-                    overlay.classList.add('hidden');
                 }
             }).catch((e) => {
                 console.warn('[Accessibility] 查询初始权限状态失败:', e);

@@ -197,11 +197,15 @@ async function initApp() {
     initVersion();
     prefillDefaultIp();
 
-    // Windows 特有：hint-panel 仅在 Windows 下显示
-    if (elements.hintPanel) {
+    // 注入平台 class 到 body，供 CSS 平台适配使用；同时控制 hint-panel 显示
+    {
         const isWindows = navigator.userAgent.includes('Windows') ||
             (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
-        elements.hintPanel.style.display = isWindows ? '' : 'none';
+        document.body.classList.remove('platform-windows', 'platform-macos');
+        document.body.classList.add(isWindows ? 'platform-windows' : 'platform-macos');
+        if (elements.hintPanel) {
+            elements.hintPanel.style.display = isWindows ? '' : 'none';
+        }
     }
 
     // 新架构：权限检测由 Rust 侧主动推送事件，前端只需注册事件监听器
@@ -209,6 +213,15 @@ async function initApp() {
 
     // 延迟初始化显示器布局配置（需要 invoke 就绪后才能调用后端）
     setTimeout(initDisplayLayout, 500);
+
+    // 自动启动 TCP 监听（等待对端连接）
+    if (invoke) {
+        invoke('start_listening').then((msg) => {
+            console.log('[KVMini] 监听已启动:', msg);
+        }).catch((e) => {
+            console.warn('[KVMini] 启动监听失败（可能端口已占用）:', e);
+        });
+    }
 }
 
 /**
@@ -355,7 +368,11 @@ function setupEventListeners() {
             const message = payload.message || '';
             const attempt = payload.attempt || null;
 
-            if (eventType === 'connected') {
+            if (eventType === 'listening') {
+                // 监听已启动，等待对端连接
+                console.log('[KVMini] 监听已启动:', message);
+
+            } else if (eventType === 'connected') {
                 // 连接成功
                 appState.connected = true;
                 appState.connectionType = 'TCP';
