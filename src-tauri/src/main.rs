@@ -609,6 +609,20 @@ fn set_locale(locale: String) -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.27".to_string(),
+            date: "2026-04-29".to_string(),
+            changes: vec![
+                "防多开：第二次启动时聚焦已有窗口，解决菜单栏出现多个图标问题".to_string(),
+                "版本号统一：以 Cargo.toml 为唯一真相，前端从后端读取，消除多处版本号不一致".to_string(),
+                "Developer ID 签名集成：Launcher 和 build.sh 均自动使用 Developer ID 签名".to_string(),
+            ],
+            changes_en: vec![
+                "Single instance: second launch focuses existing window, fixes multiple tray icons".to_string(),
+                "Version unification: Cargo.toml as single source of truth, frontend reads from backend".to_string(),
+                "Developer ID signing integrated: Launcher and build.sh auto-sign with Developer ID".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.25".to_string(),
             date: "2026-04-28".to_string(),
             changes: vec![

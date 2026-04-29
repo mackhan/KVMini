@@ -2352,10 +2352,18 @@ let _aboutTabInited = false;
  * 初始化关于 Tab（每次打开设置时调用，但事件只绑定一次）
  */
 async function initAboutTab() {
-    // 更新版本号
-    const meta = document.querySelector('meta[name="app-version"]');
-    if (meta && elements.aboutVersionText) {
-        elements.aboutVersionText.textContent = `KVMini v${meta.getAttribute('content')}`;
+    // 更新版本号（从后端读取，保证与 Cargo.toml 一致）
+    try {
+        const v = await window.Platform.getAppVersion();
+        if (v && elements.aboutVersionText) {
+            elements.aboutVersionText.textContent = `KVMini v${v}`;
+        }
+    } catch (e) {
+        // 降级：从 meta 标签读取
+        const meta = document.querySelector('meta[name="app-version"]');
+        if (meta && elements.aboutVersionText) {
+            elements.aboutVersionText.textContent = `KVMini v${meta.getAttribute('content')}`;
+        }
     }
 
     // 刷新许可状态
