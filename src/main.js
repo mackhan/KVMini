@@ -212,6 +212,15 @@ async function initApp() {
 
     // 延迟初始化显示器布局配置（需要 invoke 就绪后才能调用后端）
     setTimeout(initDisplayLayout, 500);
+
+    // 自动启动 TCP 监听（等待对端连接）
+    if (invoke) {
+        invoke('start_listening').then((msg) => {
+            console.log('[KVMini] 监听已启动:', msg);
+        }).catch((e) => {
+            console.warn('[KVMini] 启动监听失败（可能端口已占用）:', e);
+        });
+    }
 }
 
 /**
@@ -346,7 +355,11 @@ function setupEventListeners() {
             const message = payload.message || '';
             const attempt = payload.attempt || null;
 
-            if (eventType === 'connected') {
+            if (eventType === 'listening') {
+                // 监听已启动，等待对端连接
+                console.log('[KVMini] 监听已启动:', message);
+
+            } else if (eventType === 'connected') {
                 // 连接成功
                 appState.connected = true;
                 appState.connectionType = 'TCP';
