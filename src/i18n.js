@@ -317,6 +317,22 @@ const MESSAGES = {
     changelogEmpty: '暂无更新日志',
     changelogLoadFailed: '更新日志加载失败，请稍后重试。',
     feedbackFailed: '反馈功能暂时不可用',
+
+    // 自动更新
+    checkUpdate: '检查更新',
+    checkingUpdate: '检查中...',
+    updateAvailable: '发现新版本 v{version}',
+    updateAvailableTitle: '🎉 发现新版本',
+    updateAvailableDesc: '新版本 v{version} 已发布，是否立即更新？',
+    updateDownloading: '正在下载更新...',
+    updateInstalling: '正在安装更新...',
+    updateReady: '更新已就绪，重启后生效',
+    updateFailed: '更新失败，请稍后重试',
+    updateFailedDetail: '更新失败: {err}',
+    noUpdateAvailable: '已是最新版本 🎉',
+    updateNow: '立即更新',
+    updateLater: '稍后再说',
+    updateRestart: '重启应用',
   },
 
   en: {
@@ -631,6 +647,22 @@ const MESSAGES = {
     changelogEmpty: 'No changelog available',
     changelogLoadFailed: 'Failed to load changelog. Please try again later.',
     feedbackFailed: 'Feedback is temporarily unavailable',
+
+    // Auto Update
+    checkUpdate: 'Check for Updates',
+    checkingUpdate: 'Checking...',
+    updateAvailable: 'New version v{version} available',
+    updateAvailableTitle: '🎉 Update Available',
+    updateAvailableDesc: 'Version v{version} is available. Update now?',
+    updateDownloading: 'Downloading update...',
+    updateInstalling: 'Installing update...',
+    updateReady: 'Update ready, restart to apply',
+    updateFailed: 'Update failed, please try again later',
+    updateFailedDetail: 'Update failed: {err}',
+    noUpdateAvailable: 'You are up to date 🎉',
+    updateNow: 'Update Now',
+    updateLater: 'Later',
+    updateRestart: 'Restart App',
   },};
 
 /** 当前语言，默认中文 */

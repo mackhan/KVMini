@@ -184,6 +184,7 @@ async function initApp() {
         aboutPrivacyBtn: document.getElementById('about-privacy-btn'),
         aboutChangelogBtn: document.getElementById('about-changelog-btn'),
         aboutRateBtn: document.getElementById('about-rate-btn'),
+        aboutCheckUpdateBtn: document.getElementById('about-check-update-btn'),
         aboutVersionText: document.getElementById('about-version-text'),
     };
 
@@ -332,6 +333,18 @@ function setupEventListeners() {
             const state = payload.state || 'Idle';
             updateControlStateUI(state);
         }).catch(e => console.warn('控制状态事件监听注册失败:', e));
+
+        // 监听后台更新检查发现新版本事件
+        window.__TAURI__.event.listen('update-available', (event) => {
+            const payload = event.payload || {};
+            handleBackgroundUpdateAvailable(payload);
+        }).catch(e => console.warn('更新事件监听注册失败:', e));
+
+        // 监听更新下载进度事件
+        window.__TAURI__.event.listen('update-progress', (event) => {
+            const payload = event.payload || {};
+            console.log('[Updater] 进度:', payload.status, payload.version);
+        }).catch(e => console.warn('更新进度事件监听注册失败:', e));
 
         // 监听连接状态事件（后端主动通知）
         window.__TAURI__.event.listen('connection-status', (event) => {
@@ -2343,6 +2356,151 @@ function hidePermissionWarning() {
     }
 }
 
+// ─── 自动更新 ─────────────────────────────────────────────────────────────────
+
+/** 缓存的更新信息（供 install 时使用） */
+let _pendingUpdate = null;
+
+/**
+ * 手动点击"检查更新"按钮时调用
+ */
+async function handleCheckUpdate() {
+    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    const { t } = window.i18n;
+    const btn = elements.aboutCheckUpdateBtn;
+    if (!btn || btn.disabled) return;
+
+    // 更新按钮状态
+    btn.disabled = true;
+    const iconEl = btn.querySelector('.about-action-icon');
+    const textEl = btn.querySelector('[data-i18n="checkUpdate"]');
+    const originalIcon = iconEl ? iconEl.textContent : '🔄';
+    if (iconEl) iconEl.textContent = '⏳';
+    if (textEl) textEl.textContent = t('checkingUpdate');
+
+    try {
+        const info = await invoke('check_for_update');
+        if (info) {
+            // 有新版本
+            _pendingUpdate = info;
+            showUpdateModal(info);
+        } else {
+            // 已是最新版本
+            showSuccess(t('noUpdateAvailable'));
+        }
+    } catch (e) {
+        console.warn('[Updater] 检查更新失败:', e);
+        showError(t('updateFailedDetail').replace('{err}', String(e)));
+    } finally {
+        btn.disabled = false;
+        if (iconEl) iconEl.textContent = originalIcon;
+        if (textEl) textEl.textContent = t('checkUpdate');
+    }
+}
+
+/**
+ * 显示"发现新版本"模态框
+ * @param {{ version: string, body?: string, date?: string }} info
+ */
+function showUpdateModal(info) {
+    const { t } = window.i18n;
+    const version = info.version || '';
+    const body = info.body || '';
+
+    const title = t('updateAvailableTitle');
+    const desc = t('updateAvailableDesc').replace('{version}', version);
+    const bodyHtml = body ? `<div class="update-release-notes">${escapeHtml(body).replace(/\n/g, '<br>')}</div>` : '';
+
+    const html = `
+        <div class="about-modal-body">
+            <p>${escapeHtml(desc)}</p>
+            ${bodyHtml}
+            <div class="update-modal-actions" style="display:flex;gap:12px;margin-top:16px;justify-content:flex-end;">
+                <button class="btn btn-outline" id="update-later-btn">${t('updateLater')}</button>
+                <button class="btn btn-primary" id="update-now-btn">${t('updateNow')}</button>
+            </div>
+        </div>
+    `;
+
+    showAboutModal(title, html);
+
+    // 绑定按钮事件
+    setTimeout(() => {
+        const nowBtn = document.getElementById('update-now-btn');
+        const laterBtn = document.getElementById('update-later-btn');
+        if (nowBtn) {
+            nowBtn.addEventListener('click', async () => {
+                nowBtn.disabled = true;
+                nowBtn.textContent = t('updateDownloading');
+                if (laterBtn) laterBtn.style.display = 'none';
+                await handleInstallUpdate(nowBtn);
+            });
+        }
+        if (laterBtn) {
+            laterBtn.addEventListener('click', () => {
+                closeAboutModal();
+            });
+        }
+    }, 0);
+}
+
+/**
+ * 执行更新下载和安装
+ * @param {HTMLElement} btn - 更新按钮（用于显示状态）
+ */
+async function handleInstallUpdate(btn) {
+    if (!invoke) return;
+    const { t } = window.i18n;
+
+    try {
+        if (btn) btn.textContent = t('updateInstalling');
+        await invoke('install_update');
+
+        // 安装成功，提示用户重启
+        if (btn) btn.textContent = t('updateRestart');
+        if (btn) btn.disabled = false;
+        if (btn) {
+            btn.onclick = async () => {
+                try {
+                    // 使用 tauri-plugin-process 的 relaunch
+                    if (window.__TAURI__?.core?.invoke) {
+                        await window.__TAURI__.core.invoke('plugin:process|restart');
+                    }
+                } catch (e) {
+                    console.warn('[Updater] 重启失败:', e);
+                    showError(t('updateFailed'));
+                }
+            };
+        }
+
+        showSuccess(t('updateReady'));
+    } catch (e) {
+        console.error('[Updater] 安装更新失败:', e);
+        if (btn) {
+            btn.textContent = t('updateNow');
+            btn.disabled = false;
+        }
+        showError(t('updateFailedDetail').replace('{err}', String(e)));
+    }
+}
+
+/**
+ * 后台更新事件处理：Rust 端 start_background_update_check 发现新版本时触发
+ * @param {{ version: string, body?: string, date?: string }} payload
+ */
+function handleBackgroundUpdateAvailable(payload) {
+    if (!payload || !payload.version) return;
+    _pendingUpdate = payload;
+    // 显示更新模态框（如果用户在设置页则直接弹出，否则发 toast 提示）
+    const settingsVisible = elements.viewSettings && !elements.viewSettings.classList.contains('hidden');
+    if (settingsVisible) {
+        showUpdateModal(payload);
+    } else {
+        const { t } = window.i18n;
+        showSuccess(t('updateAvailable').replace('{version}', payload.version));
+    }
+}
+
 // ─── 关于 Tab ────────────────────────────────────────────────────────────────
 
 /** 关于 Tab 是否已初始化（避免重复绑定事件） */
@@ -2408,6 +2566,9 @@ async function initAboutTab() {
     elements.aboutChangelogBtn?.addEventListener('click', () => {
         showChangelogModal();
     });
+
+    // 检查更新按钮
+    elements.aboutCheckUpdateBtn?.addEventListener('click', handleCheckUpdate);
 
     // 评分按钮
     elements.aboutRateBtn?.addEventListener('click', async () => {

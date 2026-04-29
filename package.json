@@ -24,6 +24,10 @@
     "sharp": "^0.34.5",
     "ts-jest": "^29.1.2"
   },
+  "dependencies": {
+    "@tauri-apps/plugin-updater": "^2",
+    "@tauri-apps/plugin-process": "^2"
+  },
   "author": "KVMini Team",
   "license": "MIT"
 }

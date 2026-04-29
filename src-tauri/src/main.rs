@@ -9,6 +9,9 @@ use tauri::{
     Emitter, Manager,
 };
 
+// updater
+use tauri_plugin_updater::UpdaterExt;
+
 // ── 模块声明 ──────────────────────────────────────────────────────────────
 #[macro_use]
 mod macros;
@@ -582,6 +585,141 @@ fn write_startup_log(content: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── 自动更新 ──────────────────────────────────────────────────────────────
+
+/// 更新信息（序列化给前端）
+#[derive(serde::Serialize, Clone)]
+struct UpdateInfo {
+    version: String,
+    body: Option<String>,
+    date: Option<String>,
+}
+
+/// 检查是否有可用更新
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    log::info!("[Updater] 开始检查更新...");
+    match app.updater() {
+        Ok(updater) => {
+            match updater.check().await {
+                Ok(Some(update)) => {
+                    log::info!("[Updater] 发现新版本: {}", update.version);
+                    Ok(Some(UpdateInfo {
+                        version: update.version.clone(),
+                        body: update.body.clone(),
+                        date: update.date.map(|d| d.to_string()),
+                    }))
+                }
+                Ok(None) => {
+                    log::info!("[Updater] 已是最新版本");
+                    Ok(None)
+                }
+                Err(e) => {
+                    log::warn!("[Updater] 检查更新失败: {}", e);
+                    Err(format!("检查更新失败: {}", e))
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("[Updater] Updater 初始化失败: {}", e);
+            Err(format!("Updater 不可用: {}", e))
+        }
+    }
+}
+
+/// 下载并安装更新
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    log::info!("[Updater] 开始下载并安装更新...");
+    match app.updater() {
+        Ok(updater) => {
+            match updater.check().await {
+                Ok(Some(update)) => {
+                    log::info!("[Updater] 下载更新 v{}...", update.version);
+                    let _ = app.emit("update-progress", serde_json::json!({
+                        "status": "downloading",
+                        "version": update.version,
+                    }));
+                    update.download_and_install(
+                        |chunk_length, content_length| {
+                            log::debug!("[Updater] 下载进度: {} / {:?}", chunk_length, content_length);
+                        },
+                        || {
+                            log::info!("[Updater] 下载完成，准备安装");
+                        },
+                    ).await.map_err(|e| {
+                        log::error!("[Updater] 下载安装失败: {}", e);
+                        format!("下载安装失败: {}", e)
+                    })?;
+                    log::info!("[Updater] 更新安装完成，即将重启...");
+                    let _ = app.emit("update-progress", serde_json::json!({
+                        "status": "installed",
+                    }));
+                    Ok(())
+                }
+                Ok(None) => {
+                    Err("没有可用更新".to_string())
+                }
+                Err(e) => {
+                    Err(format!("检查更新失败: {}", e))
+                }
+            }
+        }
+        Err(e) => {
+            Err(format!("Updater 不可用: {}", e))
+        }
+    }
+}
+
+/// 启动后台定期检查更新（启动时检查一次，之后每 4 小时检查一次）
+fn start_background_update_check(app: tauri::AppHandle) {
+    use std::thread;
+    use std::time::Duration;
+
+    thread::spawn(move || {
+        // 启动后延迟 10 秒再检查（等待 UI 完全加载）
+        thread::sleep(Duration::from_secs(10));
+
+        loop {
+            let app_clone = app.clone();
+            // 在异步运行时中执行检查
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            if let Ok(rt) = rt {
+                rt.block_on(async {
+                    match app_clone.updater() {
+                        Ok(updater) => {
+                            match updater.check().await {
+                                Ok(Some(update)) => {
+                                    log::info!("[Updater] 后台检查：发现新版本 v{}", update.version);
+                                    let _ = app_clone.emit("update-available", serde_json::json!({
+                                        "version": update.version,
+                                        "body": update.body,
+                                        "date": update.date.map(|d| d.to_string()),
+                                    }));
+                                }
+                                Ok(None) => {
+                                    log::debug!("[Updater] 后台检查：已是最新版本");
+                                }
+                                Err(e) => {
+                                    log::debug!("[Updater] 后台检查失败: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::debug!("[Updater] Updater 不可用: {}", e);
+                        }
+                    }
+                });
+            }
+
+            // 每 4 小时检查一次
+            thread::sleep(Duration::from_secs(4 * 60 * 60));
+        }
+    });
+}
+
 // ── tauri-commerce SDK 命令 ──────────────────────────────────────────────────
 
 /// 获取试用/购买状态
@@ -1042,7 +1180,7 @@ async fn main() {
         .bundle_id("com.kvmini.app")
         .product_id("com.kvmini.app.pro")
         .feedback_email("support@kvmini.app")
-        .privacy_url("https://kvmini.app/privacy")
+        .privacy_url("https://mackhan.github.io/KVMini/privacy-policy")
         .app_description("跨平台鼠标键盘共享软件，支持 macOS 和 Windows 之间的设备控制和文件传输")
         .add_permission("辅助功能权限", "用于监听全局快捷键和模拟鼠标键盘输入")
         .add_permission("输入监控权限", "用于实现跨设备鼠标键盘共享")
@@ -1093,6 +1231,7 @@ async fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 注册所有 Tauri 命令
         .invoke_handler(tauri::generate_handler![
             // 通用
@@ -1140,12 +1279,19 @@ async fn main() {
             // 全局快捷键
             register_global_hotkey,
             unregister_global_hotkey,
+            // 自动更新
+            check_for_update,
+            install_update,
         ])
         // 托管连接管理器状态
         .manage(connection::KvmConnectionManager::new())
         // 托管全局快捷键状态
         .manage(HotkeyState::new())
         .setup(|app| {
+            // 注册 updater 插件（必须在 setup 中注册，desktop only）
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+
             // 构建系统托盘
             build_tray(app)?;
 
@@ -1181,6 +1327,9 @@ async fn main() {
                 env!("CARGO_PKG_VERSION"),
                 platform::platform_name()
             );
+
+            // 启动后台自动更新检查（启动后 10 秒首次检查，之后每 4 小时一次）
+            start_background_update_check(app.handle().clone());
 
             #[cfg(debug_assertions)]
             {
