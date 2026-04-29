@@ -196,11 +196,15 @@ async function initApp() {
     initVersion();
     prefillDefaultIp();
 
-    // Windows 特有：hint-panel 仅在 Windows 下显示
-    if (elements.hintPanel) {
+    // 注入平台 class 到 body，供 CSS 平台适配使用；同时控制 hint-panel 显示
+    {
         const isWindows = navigator.userAgent.includes('Windows') ||
             (window.__TAURI__ && window.__TAURI__?.os?.platform === 'win32');
-        elements.hintPanel.style.display = isWindows ? '' : 'none';
+        document.body.classList.remove('platform-windows', 'platform-macos');
+        document.body.classList.add(isWindows ? 'platform-windows' : 'platform-macos');
+        if (elements.hintPanel) {
+            elements.hintPanel.style.display = isWindows ? '' : 'none';
+        }
     }
 
     // 新架构：权限检测由 Rust 侧主动推送事件，前端只需注册事件监听器

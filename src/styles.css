@@ -2327,3 +2327,67 @@ button, a, input, select, textarea, label, .toggle, .btn,
 .diag-spacer {
     height: 6px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   平台适配：macOS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 无边框窗口下标题区多留 traffic-light 空间（只作用于 .hig-header，不影响其他 header 元素） */
+body.platform-macos .hig-header {
+    padding-top: 14px;
+}
+
+/* macOS HIG 圆角更大 */
+body.platform-macos .status-panel,
+body.platform-macos .devices-panel,
+body.platform-macos .history-panel,
+body.platform-macos .settings-section {
+    border-radius: 14px;
+}
+
+body.platform-macos .btn {
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+body.platform-macos .device-item {
+    border-radius: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   平台适配：Windows
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body.platform-windows {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Fluent Design 风格：边框更硬朗 */
+body.platform-windows .status-panel,
+body.platform-windows .devices-panel,
+body.platform-windows .history-panel,
+body.platform-windows .settings-section {
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] body.platform-windows .status-panel,
+[data-theme="dark"] body.platform-windows .devices-panel,
+[data-theme="dark"] body.platform-windows .history-panel,
+[data-theme="dark"] body.platform-windows .settings-section {
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+body.platform-windows .btn {
+    border-radius: 6px;
+}
+
+body.platform-windows .device-item {
+    border-radius: 6px;
+}
+
+/* Windows 等宽字体 */
+body.platform-windows .network-iface-ip,
+body.platform-windows .listen-address {
+    font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+}
