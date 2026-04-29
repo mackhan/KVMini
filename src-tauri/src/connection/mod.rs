@@ -158,6 +158,8 @@ pub struct KvmConnectionManager {
     peer_ip: Arc<Mutex<String>>,
     /// 停止信号（用于停止事件监听循环）
     stop_tx: Arc<tokio::sync::Notify>,
+    /// 最新延迟值（毫秒），None 表示尚未测量
+    last_latency: Arc<Mutex<Option<u64>>>,
 }
 
 impl KvmConnectionManager {
@@ -167,6 +169,7 @@ impl KvmConnectionManager {
             inner: Arc::new(mgr),
             peer_ip: Arc::new(Mutex::new(String::new())),
             stop_tx: Arc::new(tokio::sync::Notify::new()),
+            last_latency: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -200,6 +203,7 @@ impl KvmConnectionManager {
         let mut rx = self.inner.subscribe();
         let peer_ip = Arc::clone(&self.peer_ip);
         let stop = Arc::clone(&self.stop_tx);
+        let last_latency = Arc::clone(&self.last_latency);
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -208,6 +212,10 @@ impl KvmConnectionManager {
                     result = rx.recv() => {
                         match result {
                             Ok(event) => {
+                                // 更新延迟缓存
+                                if let NetworkEvent::LatencyUpdated(ms) = &event {
+                                    *last_latency.lock().await = Some(*ms);
+                                }
                                 let ip = peer_ip.lock().await.clone();
                                 let ip_opt = if ip.is_empty() { None } else { Some(ip.as_str()) };
                                 if let Some(ev) = network_event_to_connection_event(&event, ip_opt) {
@@ -220,6 +228,27 @@ impl KvmConnectionManager {
                 }
             }
         });
+
+        // 启动 Ping 定时器：每 3 秒发送一次 Ping 帧（连接状态下）
+        let inner = Arc::clone(&self.inner);
+        let stop2 = Arc::clone(&self.stop_tx);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop2.notified() => break,
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {
+                        if let kvm_core::network::ConnectionState::Connected = inner.state().await {
+                            let _ = inner.send_ping().await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// 获取最新延迟值（毫秒），未连接或尚未测量时返回 None
+    pub async fn get_last_latency(&self) -> Option<u64> {
+        *self.last_latency.lock().await
     }
 
     /// 停止所有网络活动
@@ -383,4 +412,15 @@ pub async fn get_connection_status(
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<ConnectionStatus, String> {
     Ok(mgr.get_status().await)
+}
+
+/// Tauri 命令：获取当前延迟（毫秒）
+///
+/// 返回 Some(ms) 表示最近一次 Ping-Pong 测量结果；
+/// 返回 None 表示连接未建立或尚未完成首次测量。
+#[tauri::command]
+pub async fn get_latency(
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<Option<u64>, String> {
+    Ok(mgr.get_last_latency().await)
 }

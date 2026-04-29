@@ -26,7 +26,7 @@
 | `save_settings` | ❌ 缺失 | ❌ | ❌ | **两端均缺失**：保存应用设置 |
 | `register_global_hotkey` | ❌ 缺失 | ❌ | ❌ | **两端均缺失**：注册全局快捷键 |
 | `kill_legacy_process` | ❌ 缺失 | ❌ | ❌ | **两端均缺失**：清理 kvnshare 遗留进程 |
-| `get_latency` | ❌ 缺失 | ❌ | ❌ | **两端均缺失**：实时延迟检测（当前为模拟值） |
+| `get_latency` | ✅ 已实现 | ✅ | ✅ | Ping-Pong 测量，每 3 秒更新一次 |
 
 ---
 

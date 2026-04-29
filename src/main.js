@@ -1732,14 +1732,16 @@ function startLatencyCheck() {
                 // 连接正常，重置重连计数
                 reconnectAttempts = 0;
             } else {
+                // null = 尚未完成首次测量，正常显示 '-'，不触发重连
                 elements.latency.textContent = '-';
                 elements.latency.style.color = '';
             }
         } catch (e) {
-            // get_latency 失败可能意味着连接中断
-            if (appState.connected) {
-                handleConnectionLost();
-            }
+            // get_latency 调用本身失败（命令不存在等）—— 只显示 '-'，不触发重连
+            // 真正的连接断开由后端 connection-status 事件推送
+            console.warn('[latency] get_latency 调用失败:', e);
+            elements.latency.textContent = '-';
+            elements.latency.style.color = '';
         }
     }, 2000);
 }

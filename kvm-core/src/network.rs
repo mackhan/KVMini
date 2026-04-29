@@ -569,6 +569,24 @@ impl ConnectionManager {
         ));
     }
 
+    /// 发送 Ping 帧（用于测量延迟）
+    ///
+    /// 返回 Ok(()) 表示帧已入队；连接不存在时返回 Err。
+    pub async fn send_ping(&self) -> KvmResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let frame = crate::protocol::KvmFrame::Ping { timestamp_ms: now };
+        let guard = self.write_tx.lock().await;
+        if let Some(tx) = guard.as_ref() {
+            tx.send(frame).await.map_err(|_| crate::error::KvmError::Disconnected)?;
+            Ok(())
+        } else {
+            Err(crate::error::KvmError::Disconnected)
+        }
+    }
+
     /// 停止所有网络活动
     pub fn stop(&self) {
         self.stop.notify_waiters();

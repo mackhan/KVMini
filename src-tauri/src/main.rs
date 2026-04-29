@@ -1252,6 +1252,7 @@ async fn main() {
             connection::connect_to_peer,
             connection::disconnect_peer,
             connection::get_connection_status,
+            connection::get_latency,
             // 配置
             config::get_settings,
             config::save_settings,
