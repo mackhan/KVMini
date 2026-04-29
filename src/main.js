@@ -408,6 +408,24 @@ function setupEventListeners() {
                 showReconnectStatus(message, attempt);
                 updateConnectionButtons(false);
 
+            } else if (eventType === 'latency') {
+                // Pong 回来，更新延迟显示
+                const ms = parseInt(message.replace(/[^0-9]/g, ''), 10);
+                if (!isNaN(ms)) {
+                    elements.latency.textContent = `${ms}ms`;
+                    if (ms > 100) {
+                        elements.latency.style.color = '#ef4444';
+                        elements.latency.title = '网络延迟过高';
+                    } else if (ms > 50) {
+                        elements.latency.style.color = '#d97706';
+                        elements.latency.title = '网络延迟较高';
+                    } else {
+                        elements.latency.style.color = '#10b981';
+                        elements.latency.title = '';
+                    }
+                    updateDetailLatency(ms);
+                }
+
             } else if (eventType === 'tls_mismatch') {
                 // TLS 配置不一致：一端开了一端没开
                 const banner = document.getElementById('tls-mismatch-banner');
@@ -1697,38 +1715,21 @@ function startLatencyCheck() {
     elements.latency.textContent = window.i18n.t('msgLatencyChecking');
     elements.latency.className = '';
     reconnectAttempts = 0;
+    // 用定时发 Ping 驱动延迟检测（后端收到 Pong 后发 latency 事件，前端在 connection-status 里更新显示）
     latencyTimer = setInterval(async () => {
         if (!invoke || !appState.connected) return;
         try {
-            const latency = await invoke('get_latency');
-            if (latency != null) {
-                elements.latency.textContent = `${latency}ms`;
-                // 延迟颜色：>100ms 红色，>50ms 黄色，否则绿色
-                if (latency > 100) {
-                    elements.latency.style.color = '#ef4444';
-                    elements.latency.title = '网络延迟过高，使用体验可能受到严重影响';
-                } else if (latency > 50) {
-                    elements.latency.style.color = '#d97706';
-                    elements.latency.title = '网络延迟较高，可能影响使用体验';
-                } else {
-                    elements.latency.style.color = '#10b981';
-                    elements.latency.title = '';
-                }
-                // 同步更新连接详情面板的延迟显示
-                updateDetailLatency(latency);
-                // 连接正常，重置重连计数
-                reconnectAttempts = 0;
-            } else {
-                elements.latency.textContent = '-';
-                elements.latency.style.color = '';
-            }
+            await invoke('send_ping');
+            // 连接正常（invoke 没抛异常），重置重连计数
+            reconnectAttempts = 0;
         } catch (e) {
-            // get_latency 失败可能意味着连接中断
+            // send_ping 失败意味着连接已断
+            console.warn('[Latency] send_ping 失败，触发重连:', e);
             if (appState.connected) {
                 handleConnectionLost();
             }
         }
-    }, 2000);
+    }, 3000);
 }
 
 // ─── 连接详情面板 ─────────────────────────────────────────────────────────────────

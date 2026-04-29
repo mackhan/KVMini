@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use serde::{Serialize, Deserialize};
 
 use kvm_core::network::{ConnectionManager, ConnectionState, NetworkEvent};
+use kvm_core::protocol::KvmFrame;
 
 /// 默认 TCP 端口
 pub const DEFAULT_PORT: u16 = 23456;
@@ -383,4 +384,19 @@ pub async fn get_connection_status(
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<ConnectionStatus, String> {
     Ok(mgr.get_status().await)
+}
+
+/// Tauri 命令：发送 Ping，用于延迟检测（Pong 回来后通过 LatencyUpdated 事件通知前端）
+#[tauri::command]
+pub async fn send_ping(
+    mgr: tauri::State<'_, KvmConnectionManager>,
+) -> Result<(), String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    mgr.inner
+        .send_frame(&kvm_core::network::KvmFrame::Ping { timestamp_ms: now_ms })
+        .await
+        .map_err(|e| e.to_string())
 }
