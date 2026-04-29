@@ -1,6 +1,6 @@
 {
   "name": "kvmini",
-  "version": "0.1.31",
+  "version": "0.1.34",
   "description": "Cross-platform mouse and keyboard sharing software",
   "main": "src/index.html",
   "scripts": {

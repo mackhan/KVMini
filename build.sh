@@ -204,35 +204,35 @@ if [ "$UPLOAD_RELEASE" = true ]; then
     MACOS_SIG=""
 
     # macOS DMG（用户下载安装包）
-    for f in src-tauri/target/release/bundle/dmg/*.dmg; do
+    for f in target/release/bundle/dmg/*.dmg; do
         [ -f "$f" ] && ARTIFACTS+=("$f")
     done
     # macOS .app.tar.gz（updater 用）
-    for f in src-tauri/target/release/bundle/macos/*.app.tar.gz; do
+    for f in target/release/bundle/macos/*.app.tar.gz; do
         if [ -f "$f" ]; then
             ARTIFACTS+=("$f")
             MACOS_TAR="$f"
         fi
     done
     # macOS updater sig
-    for f in src-tauri/target/release/bundle/macos/*.app.tar.gz.sig; do
+    for f in target/release/bundle/macos/*.app.tar.gz.sig; do
         if [ -f "$f" ]; then
             ARTIFACTS+=("$f")
             MACOS_SIG="$f"
         fi
     done
     # Windows NSIS（用户下载安装包）
-    for f in src-tauri/target/release/bundle/nsis/*.exe; do
+    for f in target/release/bundle/nsis/*.exe; do
         [ -f "$f" ] && ARTIFACTS+=("$f")
     done
     # Windows NSIS zip（updater 用）
-    for f in src-tauri/target/release/bundle/nsis/*.nsis.zip; do
+    for f in target/release/bundle/nsis/*.nsis.zip; do
         [ -f "$f" ] && ARTIFACTS+=("$f")
     done
     # Windows NSIS zip sig
     WIN_SIG=""
     WIN_ZIP=""
-    for f in src-tauri/target/release/bundle/nsis/*.nsis.zip.sig; do
+    for f in target/release/bundle/nsis/*.nsis.zip.sig; do
         if [ -f "$f" ]; then
             ARTIFACTS+=("$f")
             WIN_SIG="$f"
@@ -274,7 +274,7 @@ if [ "$UPLOAD_RELEASE" = true ]; then
     fi
 
     # 生成 latest.json（使用 Node.js 跨平台脚本）
-    LATEST_JSON="src-tauri/target/release/bundle/latest.json"
+    LATEST_JSON="target/release/bundle/macos/latest.json"
     GH_REPO="mackhan/KVMini"
 
     # 尝试下载已有 Release 的 latest.json（用于合并其他平台条目）
