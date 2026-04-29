@@ -1068,6 +1068,13 @@ async fn main() {
     }
 
     tauri::Builder::default()
+        // 防多开：第二个实例启动时聚焦已有窗口
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         // 注册 Tauri 2.x 插件
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
