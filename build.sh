@@ -118,6 +118,13 @@ if [ "$RESET_PURCHASE" = true ]; then
     echo ""
 fi
 
+# 预检：签名私钥（必须在 bump 版本号之前检查，避免构建失败时反复 bump）
+if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+    log_error "未设置 TAURI_SIGNING_PRIVATE_KEY 环境变量，无法构建 updater 签名"
+    log_error "请先执行: export TAURI_SIGNING_PRIVATE_KEY=\$(cat ~/.tauri/KVMini-updater.key)"
+    exit 1
+fi
+
 # 智能版本号管理：检测 tag，决定是否 bump
 TAG_EXISTS=false
 log_info "检查版本号..."
