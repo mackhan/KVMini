@@ -1,6 +1,6 @@
 #!/bin/bash
 # sign-dev.sh
-# 使用自签名证书对 KVMini 构建进行代码签名
+# 使用 Developer ID Application 证书对 KVMini 构建进行代码签名
 #
 # 用途：每次构建后运行此脚本，确保可执行文件有稳定的签名 identity，
 #       使 macOS TCC 数据库能稳定记录辅助功能权限，避免重新编译后权限失效。
@@ -15,8 +15,146 @@
 
 set -e
 
-CERT_NAME="KVMini Dev"
+# 优先使用 Developer ID Application，降级到自签名 KVMini Dev
+DEVELOPER_ID_CERT="Developer ID Application: han yufei (8F772XVA9L)"
+FALLBACK_CERT="KVMini Dev"
 ENTITLEMENTS="src-tauri/entitlements.plist"
+
+# Tauri 2.x 构建路径
+DEBUG_BINARY="target/debug/kvmini"
+DEBUG_APP_BUNDLE="target/debug/bundle/macos/KVMini.app"
+RELEASE_BINARY="target/release/kvmini"
+RELEASE_APP_BUNDLE="target/release/bundle/macos/KVMini.app"
+
+# 兼容旧路径
+LEGACY_DEBUG_BINARY="src-tauri/target/debug/kvmini"
+LEGACY_DEBUG_APP="src-tauri/target/debug/bundle/macos/KVMini.app"
+LEGACY_RELEASE_BINARY="src-tauri/target/release/kvmini"
+LEGACY_RELEASE_APP="src-tauri/target/release/bundle/macos/KVMini.app"
+
+# 解析参数
+MODE="auto"
+for arg in "$@"; do
+    case $arg in
+        --release) MODE="release" ;;
+        --debug)   MODE="debug" ;;
+        --auto)    MODE="auto" ;;
+        *)
+            echo "用法: $0 [--release|--debug|--auto]"
+            exit 1
+            ;;
+    esac
+done
+
+echo "🔏 KVMini 构建签名工具"
+echo "================================"
+echo "签名模式: $MODE"
+
+# 检查是否为 macOS
+if [[ "$OSTYPE" != "darwin"* ]]; then
+    echo "ℹ️  非 macOS 系统，跳过代码签名"
+    exit 0
+fi
+
+# 选择可用证书：优先 Developer ID Application
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$DEVELOPER_ID_CERT"; then
+    CERT_NAME="$DEVELOPER_ID_CERT"
+    SIGN_OPTS="--options runtime"
+    echo "✅ 使用 Developer ID Application 证书（重装后辅助功能权限不丢失）"
+elif security find-certificate -c "$FALLBACK_CERT" login.keychain-db &>/dev/null; then
+    CERT_NAME="$FALLBACK_CERT"
+    SIGN_OPTS=""
+    echo "⚠️  未找到 Developer ID Application，降级使用自签名证书 \"$FALLBACK_CERT\""
+    echo "    提示：使用自签名证书重装后可能需要重新授权辅助功能权限"
+else
+    echo "⚠️  未找到任何可用签名证书，尝试自动创建自签名证书..."
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ -f "$SCRIPT_DIR/create-dev-cert.sh" ]; then
+        bash "$SCRIPT_DIR/create-dev-cert.sh"
+        if security find-certificate -c "$FALLBACK_CERT" login.keychain-db &>/dev/null; then
+            CERT_NAME="$FALLBACK_CERT"
+            SIGN_OPTS=""
+        else
+            echo "❌ 证书创建失败，请手动运行：./scripts/create-dev-cert.sh"
+            exit 1
+        fi
+    else
+        echo "❌ 未找到证书，请先申请 Developer ID Application 证书"
+        exit 1
+    fi
+fi
+
+echo "证书: $CERT_NAME"
+
+# 签名函数
+sign_binary() {
+    local binary="$1"
+    local label="$2"
+    if [ -f "$binary" ]; then
+        echo "📦 正在签名${label}可执行文件：$binary"
+        codesign --force --sign "$CERT_NAME" $SIGN_OPTS \
+            --entitlements "$ENTITLEMENTS" \
+            "$binary" 2>/dev/null || \
+        codesign --force --sign "$CERT_NAME" $SIGN_OPTS "$binary"
+        echo "✅ ${label}可执行文件签名完成"
+        return 0
+    fi
+    return 1
+}
+
+sign_app_bundle() {
+    local app="$1"
+    local label="$2"
+    if [ -d "$app" ]; then
+        echo "📦 正在签名${label}应用包：$app"
+        codesign --force --deep --sign "$CERT_NAME" $SIGN_OPTS \
+            --entitlements "$ENTITLEMENTS" \
+            "$app" 2>/dev/null || \
+        codesign --force --deep --sign "$CERT_NAME" $SIGN_OPTS "$app"
+        echo "✅ ${label}应用包签名完成"
+        return 0
+    fi
+    return 1
+}
+
+SIGNED=0
+
+# Release 签名
+if [ "$MODE" = "release" ] || [ "$MODE" = "auto" ]; then
+    sign_binary "$RELEASE_BINARY" "Release " && SIGNED=1
+    sign_app_bundle "$RELEASE_APP_BUNDLE" "Release " && SIGNED=1
+    if [ $SIGNED -eq 0 ]; then
+        sign_binary "$LEGACY_RELEASE_BINARY" "Release(legacy) " && SIGNED=1
+        sign_app_bundle "$LEGACY_RELEASE_APP" "Release(legacy) " && SIGNED=1
+    fi
+fi
+
+# Debug 签名
+if [ "$MODE" = "debug" ] || [ "$MODE" = "auto" ]; then
+    sign_binary "$DEBUG_BINARY" "Debug " && SIGNED=1
+    sign_app_bundle "$DEBUG_APP_BUNDLE" "Debug " && SIGNED=1
+    if [ $SIGNED -eq 0 ]; then
+        sign_binary "$LEGACY_DEBUG_BINARY" "Debug(legacy) " && SIGNED=1
+        sign_app_bundle "$LEGACY_DEBUG_APP" "Debug(legacy) " && SIGNED=1
+    fi
+fi
+
+echo ""
+if [ $SIGNED -gt 0 ]; then
+    echo "🎉 签名完成！证书：$CERT_NAME"
+    echo ""
+    if [ -d "$RELEASE_APP_BUNDLE" ]; then
+        echo "📌 验证签名：codesign -dv \"$RELEASE_APP_BUNDLE\""
+    fi
+    if [ "$CERT_NAME" = "$DEVELOPER_ID_CERT" ]; then
+        echo "💡 使用 Developer ID 签名，重装后辅助功能权限自动保留，无需重新授权。"
+    else
+        echo "💡 使用自签名证书，首次运行后在系统设置 → 辅助功能中授权一次即可。"
+    fi
+else
+    echo "⚠️  未找到任何可签名的构建产物，请先运行构建命令"
+fi
+
 
 # Tauri 2.x 构建路径（输出在项目根目录的 target/ 下，不在 src-tauri/target/）
 DEBUG_BINARY="target/debug/kvmini"
