@@ -183,12 +183,12 @@ describe('i18n 守卫：禁止新增硬编码中文', () => {
     test('plan v0.1.38 列出的关键 key 必须存在', () => {
         const { MESSAGES } = require('../src/i18n.js');
         const requiredKeys = [
-            // plan A2 列出的
-            'detailLocal', 'detailPeer', 'detailEncryption', 'detailLatency', 'detailCertFingerprint',
+            // plan A2 列出的（v0.1.38 组 F 删除了 detailLocal/Peer/Encryption/Latency/Title，仅保留 detailCertFingerprint）
+            'detailCertFingerprint',
             'btnReconnect', 'tabGeneral', 'tabDisplay', 'tabNetwork', 'tabSecurity', 'tabAbout',
             'licenseActivated', 'statusDisconnected', 'labelReconnectProgress', 'reconnectingText',
             'labelControlState', 'controlStateIdle', 'labelConnectedDevice', 'labelConnectionType',
-            'labelLocalIp', 'labelLatency', 'detailTitle', 'peerAddressPrefix',
+            'labelLocalIp', 'labelLatency', 'peerAddressPrefix',
             // plan A2 新增硬编码迁移 key
             'errTauriNotReady', 'errTauriInitFailed', 'errDisconnectPrefix', 'errReconnectFailPrefix',
             'errSettingsSavePrefix', 'errHotkeyRegisterPrefix', 'errDisableTlsRetryPrefix',

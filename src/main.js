@@ -401,8 +401,8 @@ function setupEventListeners() {
                 }
                 showSuccess(message || window.i18n.t('msgConnectedToIp').replace('{ip}', peerIp || ''));
                 updateConnectionButtons(true);
-                // 显示连接详情面板
-                updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
+                // 更新智能状态面板（v0.1.38 组 F）
+                updateSmartStatus({ connected: true, peer_ip: peerIp });
 
             } else if (eventType === 'reconnect_success') {
                 // 重连成功
@@ -415,8 +415,8 @@ function setupEventListeners() {
                 }
                 showSuccess(message || window.i18n.t('msgReconnectSuccessDefault'));
                 updateConnectionButtons(true);
-                // 显示连接详情面板
-                updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
+                // 更新智能状态面板
+                updateSmartStatus({ connected: true, peer_ip: peerIp });
 
             } else if (eventType === 'disconnected') {
                 // 连接断开
@@ -429,8 +429,8 @@ function setupEventListeners() {
                 }
                 showReconnectToast(message || window.i18n.t('msgConnectionLostDefault'));
                 updateConnectionButtons(false);
-                // 隐藏连接详情面板
-                updateConnectionDetailPanel({ connected: false });
+                // 清空智能状态面板（徽章/指纹）
+                updateSmartStatus({ connected: false });
 
             } else if (eventType === 'reconnecting') {
                 // 重连中
@@ -1788,8 +1788,8 @@ function startLatencyCheck() {
                     elements.latency.style.color = '#10b981';
                     elements.latency.title = '';
                 }
-                // 同步更新连接详情面板的延迟显示
-                updateDetailLatency(latency);
+                // v0.1.38 组 F：主面板 elements.latency 已作为延迟单一数据源，
+                // 原 updateDetailLatency 已随 #connection-detail-panel 删除。
                 // 连接正常，重置重连计数
                 reconnectAttempts = 0;
             } else {
@@ -1807,75 +1807,73 @@ function startLatencyCheck() {
     }, 2000);
 }
 
-// ─── 连接详情面板 ─────────────────────────────────────────────────────────────────
+// ─── 智能状态面板（v0.1.38 组 F：合并原 status-panel + connection-detail-panel） ─
 
 /**
- * 更新连接详情面板
- * @param {object} data - 连接信息
+ * 统一入口：更新智能状态面板
+ *
+ * 数据源单一，避免主面板与详情面板字段重复导致的不一致（BUG-024）。
+ *
+ * @param {object} [data]
+ * @param {boolean} [data.connected]          是否已连接
+ * @param {string}  [data.peer_ip]            对端 IP
+ * @param {string}  [data.local_ip]           本机 IP
+ * @param {number}  [data.latency_ms]         延迟（毫秒）
+ * @param {boolean} [data.tls_enabled]        是否启用 TLS（未传时读 appState.settings.enable_tls）
+ * @param {string}  [data.cert_fingerprint]   对端证书指纹（连接成功且 TLS 开启时）
  */
-function updateConnectionDetailPanel(data) {
-    const panel = document.getElementById('connection-detail-panel');
-    if (!panel) return;
+function updateSmartStatus(data) {
+    const payload = data || {};
+    const connected = !!payload.connected;
 
-    if (!data || !data.connected) {
-        panel.classList.add('hidden');
-        return;
+    // ── 1. 加密徽章（🔒 / ⚠️），放在连接状态行后面
+    const badge = document.getElementById('encryption-badge');
+    if (badge) {
+        const { t } = window.i18n || { t: (k) => k };
+        const tlsEnabled = payload.tls_enabled !== undefined
+            ? !!payload.tls_enabled
+            : (appState.settings?.enable_tls !== false);
+        if (connected) {
+            badge.textContent = tlsEnabled ? '🔒' : '⚠️';
+            badge.title = tlsEnabled ? t('tlsBadgeOn') : t('tlsBadgeOff');
+            badge.classList.remove('hidden');
+            badge.classList.toggle('encryption-badge--warn', !tlsEnabled);
+        } else {
+            badge.textContent = '';
+            badge.title = '';
+            badge.classList.add('hidden');
+            badge.classList.remove('encryption-badge--warn');
+        }
     }
 
-    panel.classList.remove('hidden');
-
-    // 本机 IP
-    const localIpEl = document.getElementById('detail-local-ip');
-    if (localIpEl) {
-        const localIp = appState.settings?.local_ip || data.local_ip || '-';
-        const port = appState.settings?.port || 8765;
-        localIpEl.textContent = localIp !== '-' ? `${localIp}:${port}` : '-';
+    // ── 2. 证书指纹折叠区
+    const fpDetails = document.getElementById('peer-fingerprint-details');
+    const fpEl = document.getElementById('detail-cert-fingerprint');
+    if (fpDetails && fpEl) {
+        const tlsEnabled = payload.tls_enabled !== undefined
+            ? !!payload.tls_enabled
+            : (appState.settings?.enable_tls !== false);
+        if (connected && tlsEnabled && payload.cert_fingerprint) {
+            fpEl.textContent = payload.cert_fingerprint;
+            fpDetails.hidden = false;
+        } else {
+            fpEl.textContent = '-';
+            fpDetails.hidden = true;
+        }
     }
-
-    // 对端 IP
-    const peerIpEl = document.getElementById('detail-peer-ip');
-    if (peerIpEl) {
-        peerIpEl.textContent = data.peer_ip || appState.settings?.peer_ip || '-';
-    }
-
-    // TLS 状态
-    const tlsEl = document.getElementById('detail-tls-status');
-    if (tlsEl) {
-        const tlsEnabled = appState.settings?.enable_tls !== false;
-        tlsEl.textContent = tlsEnabled ? window.i18n.t('tlsBadgeOn') : window.i18n.t('tlsBadgeOff');
-        tlsEl.className = `detail-value ${tlsEnabled ? 'tls-on' : 'tls-off tls-warning'}`;
-    }
-
-    // 证书指纹（展开区域）
-    if (data.cert_fingerprint) {
-        const fpEl = document.getElementById('detail-cert-fingerprint');
-        if (fpEl) fpEl.textContent = data.cert_fingerprint;
-    }
-
-    log.info('[Detail] 连接详情面板已更新');
 }
 
 /**
- * 更新详情面板的延迟显示
- * @param {number} ms - 延迟毫秒数
+ * 更新延迟显示（主状态面板单一真相）
+ * @param {number} ms
  */
-function updateDetailLatency(ms) {
-    const el = document.getElementById('detail-latency');
-    if (!el) return;
-    el.textContent = `${ms}ms`;
-    // latency-critical(>300ms 红色) / latency-warning(>100ms 黄色) / latency-normal(正常绿色)
-    el.className = `detail-value ${ms > 300 ? 'latency-critical' : ms > 100 ? 'latency-warning' : 'latency-normal'}`;
-}
-
-/**
- * 切换连接详情面板的展开/折叠状态
- */
-function toggleConnectionDetail() {
-    const expanded = document.getElementById('detail-expanded');
-    const icon = document.getElementById('detail-toggle-icon');
-    if (!expanded) return;
-    const isHidden = expanded.classList.toggle('hidden');
-    if (icon) icon.textContent = isHidden ? '▼' : '▲';
+function updateLatencyDisplay(ms) {
+    if (!elements.latency) return;
+    elements.latency.textContent = `${ms}ms`;
+    // latency-critical(>300ms 红色) / latency-warning(>100ms 黄色) / latency-normal(绿)
+    elements.latency.className = ms > 300
+        ? 'latency-critical'
+        : ms > 100 ? 'latency-warning' : 'latency-normal';
 }
 
 /**

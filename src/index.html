@@ -122,10 +122,12 @@
         </div>
 
         <!-- 状态面板 -->
-        <div class="status-panel">
+        <div class="status-panel" id="smart-status-panel">
             <div class="status-item">
                 <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
                 <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">未连接</span>
+                <!-- v0.1.38 组 F：加密徽章，连接成功时显示 🔒/⚠️ -->
+                <span id="encryption-badge" class="encryption-badge" title=""></span>
             </div>
             <!-- 重连进度提示（重连中时显示） -->
             <div class="status-item" id="reconnect-status-row" style="display:none;">
@@ -152,39 +154,11 @@
                 <span class="status-label" data-i18n="labelLatency">延迟:</span>
                 <span id="latency">-</span>
             </div>
-        </div>
-
-        <!-- 连接详情面板（连接成功后显示，默认隐藏） -->
-        <div id="connection-detail-panel" class="connection-detail-panel hidden">
-            <div class="detail-header" onclick="toggleConnectionDetail()">
-                <span class="detail-title" data-i18n="detailTitle">📡 连接详情</span>
-                <span class="detail-toggle-icon" id="detail-toggle-icon">▼</span>
-            </div>
-            <div class="detail-summary">
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailLocal">本机</span>
-                    <span id="detail-local-ip" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailPeer">对端</span>
-                    <span id="detail-peer-ip" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailEncryption">加密</span>
-                    <span id="detail-tls-status" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailLatency">延迟</span>
-                    <span id="detail-latency" class="detail-value latency-normal">-</span>
-                </div>
-            </div>
-            <!-- 展开区域：完整证书指纹等 -->
-            <div id="detail-expanded" class="detail-expanded hidden">
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailCertFingerprint">证书指纹</span>
-                    <span id="detail-cert-fingerprint" class="detail-value detail-fingerprint">-</span>
-                </div>
-            </div>
+            <!-- v0.1.38 组 F：证书指纹折叠区（替代旧 #connection-detail-panel） -->
+            <details class="status-fingerprint-details" id="peer-fingerprint-details" hidden>
+                <summary data-i18n="detailCertFingerprint">证书指纹</summary>
+                <code id="detail-cert-fingerprint" class="detail-fingerprint">-</code>
+            </details>
         </div>
 
         <!-- 连接成功后权限不足提示（仅 macOS 且权限未授予时显示） -->

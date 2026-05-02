@@ -240,11 +240,6 @@ const MESSAGES = {
     pageTitle: 'KVMini - 跨平台键鼠共享',
 
     // 连接详情面板
-    detailTitle: '📡 连接详情',
-    detailLocal: '本机',
-    detailPeer: '对端',
-    detailEncryption: '加密',
-    detailLatency: '延迟',
     detailCertFingerprint: '证书指纹',
 
     // 重连进度
@@ -615,11 +610,6 @@ const MESSAGES = {
     pageTitle: 'KVMini - Cross-platform KVM Sharing',
 
     // Connection detail panel
-    detailTitle: '📡 Connection Details',
-    detailLocal: 'Local',
-    detailPeer: 'Peer',
-    detailEncryption: 'Encryption',
-    detailLatency: 'Latency',
     detailCertFingerprint: 'Certificate Fingerprint',
 
     // Reconnect progress

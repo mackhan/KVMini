@@ -61,8 +61,9 @@ describe('Bug #021: 中英文切换完整性（集成测试）', () => {
         const settingsTitle = document.querySelector('[data-i18n="settingsTitle"]');
         expect(settingsTitle?.textContent).toBe('⚙ 设置');
 
-        const detailLocal = document.querySelector('[data-i18n="detailLocal"]');
-        expect(detailLocal?.textContent).toBe('本机');
+        // v0.1.38 组 F：detailLocal 已随旧面板移除，改验证证书指纹 summary
+        const detailCert = document.querySelector('[data-i18n="detailCertFingerprint"]');
+        expect(detailCert?.textContent).toBe('证书指纹');
 
         const discardTitle = document.querySelector('[data-i18n="discardDialogTitle"]');
         expect(discardTitle?.textContent).toBe('⚠️ 未保存的修改');
@@ -80,18 +81,8 @@ describe('Bug #021: 中英文切换完整性（集成测试）', () => {
         const settingsTitle = document.querySelector('[data-i18n="settingsTitle"]');
         expect(settingsTitle?.textContent).toBe('⚙ Settings');
 
-        const detailLocal = document.querySelector('[data-i18n="detailLocal"]');
-        expect(detailLocal?.textContent).toBe('Local');
-
-        const detailPeer = document.querySelector('[data-i18n="detailPeer"]');
-        expect(detailPeer?.textContent).toBe('Peer');
-
-        const detailEncryption = document.querySelector('[data-i18n="detailEncryption"]');
-        expect(detailEncryption?.textContent).toBe('Encryption');
-
-        const detailLatency = document.querySelector('[data-i18n="detailLatency"]');
-        expect(detailLatency?.textContent).toBe('Latency');
-
+        // v0.1.38 组 F：detailLocal/detailPeer/detailEncryption/detailLatency 已随
+        // #connection-detail-panel 移除；只保留 detailCertFingerprint（折叠区 summary）
         const detailCert = document.querySelector('[data-i18n="detailCertFingerprint"]');
         expect(detailCert?.textContent).toBe('Certificate Fingerprint');
 
@@ -147,8 +138,9 @@ describe('Bug #021: 中英文切换完整性（集成测试）', () => {
         const settingsTitle = document.querySelector('[data-i18n="settingsTitle"]');
         expect(settingsTitle?.textContent).toBe('⚙ 设置');
 
-        const detailLocal = document.querySelector('[data-i18n="detailLocal"]');
-        expect(detailLocal?.textContent).toBe('本机');
+        // v0.1.38 组 F：detailLocal 已随旧面板移除，改验证证书指纹 summary 回中文
+        const detailCert = document.querySelector('[data-i18n="detailCertFingerprint"]');
+        expect(detailCert?.textContent).toBe('证书指纹');
     });
 
     test('页面标题切换到英文后变化', () => {
