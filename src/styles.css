@@ -1143,6 +1143,18 @@ button, a, input, select, textarea, label, .toggle, .btn,
     border-radius: 50%;
 }
 
+/* B2: 顶部保存按钮脉冲动画（有任一分页未保存时） */
+@keyframes save-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.btn-save-dirty {
+    animation: save-pulse 1.6s ease-out infinite;
+    position: relative;
+}
+
 /* 右侧内容区 */
 .settings-content-area {
     flex: 1;

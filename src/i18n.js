@@ -68,6 +68,9 @@ const MESSAGES = {
     btnReconnect: '重连',
     manualIpLabel: '手动 IP',
 
+    // 设置页分页（dirty tooltip）
+    tabDirtyTooltip: '此分类下有未保存的修改',
+
     // 提示面板
     hintMouseEdge: '💡 提示：连接成功后，将鼠标移到屏幕右边缘即可切换到 Mac 控制模式',
     hintHotkey: '💡 按 Ctrl+Alt+Tab 切换回 Windows 本地控制',
@@ -439,6 +442,9 @@ const MESSAGES = {
     noHistory: 'No connection history',
     btnReconnect: 'Reconnect',
     manualIpLabel: 'Manual IP',
+
+    // Settings tabs (dirty tooltip)
+    tabDirtyTooltip: 'Unsaved changes in this section',
 
     // Hint panel
     hintMouseEdge: '💡 Tip: After connecting, move the mouse to the right edge to switch to Mac control',
