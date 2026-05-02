@@ -326,72 +326,13 @@ fn get_cert_dir() -> std::path::PathBuf {
         .join("certs")
 }
 
-/// 生成自签名 TLS 证书，返回 DER 格式的证书字节
-fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
-    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
-
-    let mut params = CertificateParams::default();
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "KVMini");
-    dn.push(DnType::OrganizationName, "KVMini");
-    params.distinguished_name = dn;
-
-    let key_pair = KeyPair::generate().map_err(|e| format!("生成密钥对失败: {}", e))?;
-    let cert = params.self_signed(&key_pair).map_err(|e| format!("生成证书失败: {}", e))?;
-
-    let cert_der = cert.der().to_vec();
-    let key_der = key_pair.serialize_der();
-
-    Ok((cert_der, key_der))
-}
-
-/// 计算证书 DER 字节的 SHA-256 指纹（格式：XX:XX:XX:...）
-fn compute_cert_fingerprint(cert_der: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(cert_der);
-    hash.iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-/// 加载或生成本机 TLS 证书，返回 SHA-256 指纹
+/// 加载或生成本机 TLS 证书，返回 SHA-256 指纹（AA:BB:CC... 形式）
+///
+/// v0.1.38 组 C-5：统一走 `kvm_core::tls::SelfSignedCert`，不再在前端层重复实现 rcgen/sha2。
 #[tauri::command]
 fn get_local_tls_fingerprint() -> Result<String, String> {
-    let cert_dir = get_cert_dir();
-    let cert_path = cert_dir.join("cert.der");
-    let key_path = cert_dir.join("key.der");
-
-    // 尝试加载已有证书
-    if cert_path.exists() && key_path.exists() {
-        match std::fs::read(&cert_path) {
-            Ok(cert_der) => {
-                log::info!("[TLS] 加载已有证书: {:?}", cert_path);
-                return Ok(compute_cert_fingerprint(&cert_der));
-            }
-            Err(e) => {
-                // 证书文件损坏，删除并重新生成
-                log::warn!("[TLS] 证书文件损坏，重新生成: {}", e);
-                let _ = std::fs::remove_file(&cert_path);
-                let _ = std::fs::remove_file(&key_path);
-            }
-        }
-    }
-
-    // 生成新证书
-    log::info!("[TLS] 生成新的自签名证书");
-    std::fs::create_dir_all(&cert_dir)
-        .map_err(|e| format!("创建证书目录失败: {}", e))?;
-
-    let (cert_der, key_der) = generate_self_signed_cert()?;
-
-    std::fs::write(&cert_path, &cert_der)
-        .map_err(|e| format!("保存证书失败: {}", e))?;
-    std::fs::write(&key_path, &key_der)
-        .map_err(|e| format!("保存密钥失败: {}", e))?;
-
-    log::info!("[TLS] 新证书已生成并保存: {:?}", cert_path);
-    Ok(compute_cert_fingerprint(&cert_der))
+    let cert = load_or_generate_local_cert()?;
+    Ok(cert.fingerprint_sha256_colon())
 }
 
 /// 重新生成 TLS 证书（删除旧证书，生成新证书），返回新指纹
@@ -400,24 +341,50 @@ fn regenerate_tls_cert() -> Result<String, String> {
     let cert_dir = get_cert_dir();
     let cert_path = cert_dir.join("cert.der");
     let key_path = cert_dir.join("key.der");
-
-    // 删除旧证书
     if cert_path.exists() { let _ = std::fs::remove_file(&cert_path); }
     if key_path.exists() { let _ = std::fs::remove_file(&key_path); }
-
     log::info!("[TLS] 重新生成证书");
+    let cert = load_or_generate_local_cert()?;
+    Ok(cert.fingerprint_sha256_colon())
+}
+
+/// 加载或生成 `kvm_core::tls::SelfSignedCert`，并持久化到磁盘
+fn load_or_generate_local_cert() -> Result<kvm_core::tls::SelfSignedCert, String> {
+    use kvm_core::tls::SelfSignedCert;
+
+    let cert_dir = get_cert_dir();
+    let cert_path = cert_dir.join("cert.der");
+    let key_path = cert_dir.join("key.der");
+
+    // 尝试加载已有证书
+    if cert_path.exists() && key_path.exists() {
+        match (std::fs::read(&cert_path), std::fs::read(&key_path)) {
+            (Ok(cert_der), Ok(key_der)) => {
+                log::info!("[TLS] 加载已有证书: {:?}", cert_path);
+                return Ok(SelfSignedCert { cert_der, key_der });
+            }
+            (cert_res, key_res) => {
+                log::warn!(
+                    "[TLS] 证书文件读取失败（cert={:?} key={:?}），将重新生成",
+                    cert_res.as_ref().err(), key_res.as_ref().err()
+                );
+                let _ = std::fs::remove_file(&cert_path);
+                let _ = std::fs::remove_file(&key_path);
+            }
+        }
+    }
+
+    log::info!("[TLS] 生成新的自签名证书");
     std::fs::create_dir_all(&cert_dir)
         .map_err(|e| format!("创建证书目录失败: {}", e))?;
-
-    let (cert_der, key_der) = generate_self_signed_cert()?;
-
-    std::fs::write(&cert_path, &cert_der)
+    let cert = SelfSignedCert::generate("KVMini")
+        .map_err(|e| format!("生成证书失败: {}", e))?;
+    std::fs::write(&cert_path, &cert.cert_der)
         .map_err(|e| format!("保存证书失败: {}", e))?;
-    std::fs::write(&key_path, &key_der)
+    std::fs::write(&key_path, &cert.key_der)
         .map_err(|e| format!("保存密钥失败: {}", e))?;
-
-    log::info!("[TLS] 证书已重新生成: {:?}", cert_path);
-    Ok(compute_cert_fingerprint(&cert_der))
+    log::info!("[TLS] 新证书已生成并保存: {:?}", cert_path);
+    Ok(cert)
 }
 
 /// 扫描局域网内的 KVMini 设备
