@@ -367,3 +367,61 @@
 | **出现次数** | 1 |
 | **关键教训** | 心跳保活必须是双向的：发送方发 Heartbeat，接收方必须回复 HeartbeatAck；只更新时间戳而不回包，发送方永远收不到 Ack 会判定断线 |
 
+
+---
+
+## Bug #027：启动时只提示开了辅助功能权限，漏了输入监控权限
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | macOS 用户首次启动 KVMini 0.1.35 时，只看到"辅助功能未授权"的全屏引导；当用户点"去授权"回来后看到 App 能用，实际使用中却发现键鼠事件既不能捕获（CGEventTap 被 TCC 拒绝），界面上也不给任何提示。用户被迫自行去系统设置找"输入监控"开关 |
+| **根因** | macOS 上 KVMini 同时需要两种权限：① Accessibility（AXIsProcessTrusted，用于注入鼠标/键盘事件）；② Input Monitoring（CGPreflightListenEventAccess，用于 CGEventTap 抓取事件）。v0.1.35 前启动自检只调用了 `check_accessibility_permission`，完全没有检查输入监控；即便输入监控未开，也不会发任何事件给前端，遮罩就永远不显示。更糟的是 `CGPreflightListenEventAccess` 在进程生命周期内有缓存，必须先调用 `CGRequestListenEventAccess()` 主动注册 TCC 列表，否则用户去系统设置都找不到 KVMini 的开关（这块归为 BUG-021 的前置动作） |
+| **修改方式** | 1. 后端 `src-tauri/src/platform/macos/permission.rs` 新增 `check_input_monitoring()` / `request_input_monitoring()` / `open_input_monitoring_settings()` 三个函数，用 `#[link(name = "CoreGraphics")]` 声明 `CGPreflightListenEventAccess`/`CGRequestListenEventAccess` 符号；2. `main.rs::check_macos_permission` 扩展为双路检测：先查辅助功能发 `accessibility://permission-*`，再调 `request_input_monitoring()` 主动注册 TCC + 发 `input-monitoring://permission-*` 事件；未授权时 `start_input_monitoring_polling()` 每 3s 轮询一次（上限 5 分钟），授权后立即发 granted 并退出；3. 新增两个 Tauri 命令 `check_input_monitoring_permission` / `open_input_monitoring_settings` 并注册到 invoke_handler；4. 前端 `src/accessibility.js` 重写为"双权限版"：`_currentOverlayKind` 记录当前遮罩种类，`applyOverlayText()` 按种类切换 i18n 文案，同时监听 4 个事件；"前往授权"按钮按种类分别调用不同的后端命令；5. `src/index.html` 遮罩内所有硬编码中文加 `data-i18n` 属性；`src/i18n.js` zh/en 字典新增 `overlayInputMonitoringTitle` / `overlayInputMonitoringDesc`；6. `checkInitialPermissions()` 修复：只有明确收到 'Denied' 才主动显示遮罩，undefined/null/未知值一律保持现状等待事件（避免 mock 场景误触发） |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/permission-dual-check.test.ts`（12 用例，覆盖 i18n 完整性 / HTML data-i18n 标注 / accessibility.js 事件监听注册）；`src-tauri/src/platform/macos/permission.rs::tests`（新增 3 用例：test_status_display / test_check_input_monitoring_no_crash / test_check_accessibility_no_crash） |
+| **关键教训** | 多权限场景必须做成"显式清单 + 分别提示"，任何一个未授权都应有对应文案；不要假设"只要主权限过了其它自然也过"。测试 mock 返回 undefined 时，前端逻辑不应把 undefined 等同于未授权，否则会出现"真实环境没事、测试环境误触发"的脆弱断言 |
+
+
+---
+
+## Bug #018：手动连接成功后误报「TLS 不一致」
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 两台 Mac 都已开启 TLS，连接成功后弹横幅「本机已开启 TLS 加密，但对端未开启」 |
+| **根因** | 握手协议在 wire 上只传了 `desktop`（VirtualDesktop），并未把 `tls_enabled` 透传给对端；`HandshakeAck.screen_info` 里携带的是空/默认 desktop，导致 connect_to 端解析得到的 `peer_info.tls_enabled = false`，与本机的 `true` 比较后误判为不一致 |
+| **修改方式** | 1. 新增 `pub(crate) struct HandshakePayload { desktop, tls_enabled }`，二者均 `#[serde(default)]` 兼容旧格式；2. `HandshakeInfo::screen_info_bytes()` 序列化整个 payload；`parse_payload()` 用 `bytes.windows().any()` 检查字节流中存在 `desktop` 或 `tls_enabled` 字符串才走新路径，否则回退旧 VirtualDesktop 解析；3. `connect_to` / `handle_stream` 双向写入 tls_enabled，`accept_loop` / `start_listening(&self, local_info)` 透传 local_info |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/handshake-tls-payload.test.ts`（5 用例）+ `kvm-core/src/network.rs::tests`（roundtrip / 旧格式兼容 / 字段保留 / 默认值，5 用例） |
+| **关键教训** | 跨进程协议变更必须显式写入 wire，不能假设两端"都开了所以一致"；向后兼容用 `serde(default)` + 字符串嗅探回退而非版本字段，零成本无破坏性 |
+
+---
+
+## Bug #019：连接成功后点击「开始共享」按钮没有任何反应
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 两端连接成功，状态栏显示 Connected，但点击「开始共享」按钮无任何变化（按钮无 hover 反馈、不调命令、不切状态、键鼠不转发） |
+| **根因** | 重大功能缺口：① 后端从未注册 `toggle_sharing` / `toggle_control` Tauri 命令；② 前端 listen('hotkey-triggered') 调的 `invoke('toggle_control')` 是幽灵命令，永远抛错；③ `StateMachine` / `InputCapture` / `InputExecutor` 代码全部存在但从未接入主流程，`platform/mod.rs` 顶部 `#![allow(dead_code)]` 是证据；④ 接收侧 `connection::start_event_loop` 的 `_ => None` 分支把所有 `KvmFrame::InputEvent` 直接丢弃 |
+| **修改方式** | 1. 新建 `src-tauri/src/sharing.rs::SharingManager`，托管 `Arc<Mutex<StateMachine>>` + `PlatformCapture` + `PlatformExecutor`；新增 `toggle_sharing` / `get_control_state` Tauri 命令并在 main.rs invoke_handler 注册；`.manage(Arc::new(SharingManager::new()))`；2. `connection::start_event_loop` 新增 FrameReceived(MouseMove/MouseButton/MouseScroll/KeyEvent)→`sm.inject_remote_frame()`、SwitchControl→`on_remote_switch_control`、SwitchControlAck→`on_remote_switch_ack`、ConnectionStateChanged(Disconnected)→`on_disconnected` 转发；3. `KvmConnectionManager::inner_send_frame` 转发到 `inner.send_frame`；SharingManager 通过 `app.try_state::<KvmConnectionManager>()` 动态发送；4. 按 macos-cgevent-tap-hotkey skill 改造 `MacInputCapture`：用专用 std::thread 跑 CFRunLoop（sync_channel 握手验证 Tap 创建成功 + `std::mem::forget(tap)` 保持 CFMachPort 强引用），stop 时 `CFRunLoop::stop` 唤醒退出；5. 前端 `setupEventListeners` 绑定 startSharingBtn click → handleToggleSharing → invoke('toggle_sharing')；listen('control-state-changed') 在 to=LocalControlling/Idle 间切换按钮 data-i18n（btnStartSharing ↔ btnStopSharing）+ 状态栏 + showSuccess 提示；删除 toggle_control / stop_input_capture 幽灵调用 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/sharing-button.test.ts`（6 用例：click→invoke、错误→showError、状态→按钮 i18n、英文模式、字典完整性）+ `src-tauri/src/sharing.rs::tests`（4 用例：raw_to_frame 各分支 + state_name） |
+| **关键教训** | 前端调一个未注册的 Tauri 命令时只会在 console.warn，不会有任何用户可见反馈；后端关键链路缺口必须用 grep `invoke_handler!` + 平台 capture/executor 实例化点进行交叉校验，不能凭"代码存在"就假设接入；CGEventTap 在主 RunLoop 上注册时会被 Tauri/tokio 调度抢占，必须自管理子线程 RunLoop |
+
+---
+
+## Bug #020：macOS 防火墙开启 + VPN(utun6) 时两台机器互相扫描不到
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 两台 Mac 都打开 KVMini，主界面扫描列表始终为空；ping 通对端 IP，手动输 IP 也能连接成功 |
+| **根因** | ① VPN（utun*）会接管系统默认路由：UDP 广播只 bind 在 `0.0.0.0` 时，会优先从 utun 出去（utun 没有 broadcast 概念，包被丢弃），物理网卡上一个广播都没发出去；② 之前 `discover_devices` 只用单 socket 兜底广播，且没有按物理网卡分别 bind+定向广播；③ macOS 防火墙未授权时，应用主动收发 UDP 也会被静默拦截，但前端没有任何提示 |
+| **修改方式** | 1. 新建 `src-tauri/src/network_scan.rs`：`LanIface { name, ipv4, broadcast }`、`is_vpn_iface`（按 utun*/ppp*/tun*/tap*/wg*/tailscale/openvpn 等前缀+包含词过滤）、`compute_broadcast(ip,mask) = ip|!mask`、`list_lan_ipv4_ifaces`；2. `discover_devices_multi(udp_port)` 对每张物理网卡 `bind(<iface_ip>:0)` + `set_broadcast(true)` + `send_to(<iface_broadcast>:port, MAGIC)` + 兜底 `send_to(255.255.255.255:port)`，并发收 1.5s 内的响应去重；3. `scan_subnet_multi(tcp_port)` 对每张物理网卡并发跑现有 scan_subnet 合并去重；4. main.rs `discover_devices` 改三段式：多接口 UDP → 单 socket 广播兜底 → 多接口子网 TCP 扫描；`get_local_lan_ip` 优先用 `list_lan_ipv4_ifaces()` 第一张物理网卡；5. `diagnose_network` 检测到 utun*/VPN 时按 locale 返回中英双语可操作提示（含 macOS `socketfilterfw` / Windows `netsh advfirewall` 命令、临时断开 VPN 建议） |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `src-tauri/src/network_scan.rs::tests`（6 用例：is_vpn_iface 各前缀 / compute_broadcast /24 与 /16 / list_lan_ipv4_ifaces 不为空 / detect_vpn_ifaces）+ `__tests__/i18n.test.ts` 新增 vpnInterferenceTip / firewallBlockTipMacos / firewallBlockTipWindows 三个 key 中英双语完整性校验 |
+| **关键教训** | UDP 广播在多接口/VPN 环境下必须显式 bind 物理网卡 IP 才能保证从该网卡出去；255.255.255.255 受系统路由表影响不可靠；扫描失败必须给用户**可执行**的诊断信息（具体命令），不能只说"未发现设备" |
+
