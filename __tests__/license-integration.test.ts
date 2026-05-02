@@ -82,6 +82,9 @@ describe('需求 4.3：LicenseModule 调用正确的 SDK 命令', () => {
         (window as any).__TAURI__ = {
             core: { invoke: mockInvoke },
         };
+        // v0.1.37 起 license.js 默认 bypass=true；此 describe 验证的是真实 SDK 路径，
+        // 因此强制关闭 bypass，保留旧断言（将来恢复商业化 UI 时此组测试仍然有效）
+        (window as any).__LICENSE_GATE_BYPASS__ = false;
         document.body.innerHTML = `
             <div id="license-gate" class="hidden"></div>
             <div id="main-content"></div>
@@ -100,6 +103,7 @@ describe('需求 4.3：LicenseModule 调用正确的 SDK 命令', () => {
     afterEach(() => {
         delete (window as any).__TAURI__;
         delete (window as any).LicenseModule;
+        delete (window as any).__LICENSE_GATE_BYPASS__;
     });
 
     test('checkLicenseStatus 应调用 invoke("get_trial_status")', async () => {
@@ -172,6 +176,8 @@ describe('需求 4.4：SDK 初始化失败不阻塞主界面', () => {
         (window as any).__TAURI__ = {
             core: { invoke: jest.fn().mockRejectedValue(new Error('网络错误')) },
         };
+        // 关闭 bypass 走真实 SDK 路径
+        (window as any).__LICENSE_GATE_BYPASS__ = false;
         document.body.innerHTML = `
             <div id="license-gate" class="hidden"></div>
             <div id="main-content"></div>
@@ -190,6 +196,7 @@ describe('需求 4.4：SDK 初始化失败不阻塞主界面', () => {
     afterEach(() => {
         delete (window as any).__TAURI__;
         delete (window as any).LicenseModule;
+        delete (window as any).__LICENSE_GATE_BYPASS__;
     });
 
     test('invoke 抛出异常时，checkLicenseStatus 应返回 sdk_error 状态，降级允许使用', async () => {

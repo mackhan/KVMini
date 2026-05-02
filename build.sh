@@ -39,6 +39,7 @@ log_error() {
 # 解析参数
 RESET_PURCHASE=false
 UPLOAD_RELEASE=false
+SINGLE_ARCH=false   # 仅构建当前架构（默认在 macOS 上同时构建 aarch64 + x86_64）
 
 for arg in "$@"; do
     case $arg in
@@ -50,9 +51,14 @@ for arg in "$@"; do
             UPLOAD_RELEASE=true
             shift
             ;;
+        --single-arch)
+            SINGLE_ARCH=true
+            shift
+            ;;
         *)
             log_error "未知参数: $arg"
-            echo "用法: $0 [--reset-purchase] [--upload]"
+            echo "用法: $0 [--reset-purchase] [--upload] [--single-arch]"
+            echo "  --single-arch  仅构建当前架构（默认 macOS 上同时构建 aarch64 + x86_64）"
             exit 1
             ;;
     esac
@@ -146,12 +152,43 @@ fi
 log_info "开始构建 KVMini..."
 echo ""
 
-if command -v npm >/dev/null 2>&1; then
-    npm run build
-else
+if ! command -v npm >/dev/null 2>&1; then
     log_error "未找到 npm，请先安装 Node.js"
     exit 1
 fi
+
+# 决定要构建的目标架构
+BUILD_TARGETS=()
+if [[ "$OSTYPE" == "darwin"* ]] && [ "$SINGLE_ARCH" = false ]; then
+    # macOS 默认同时构建 Apple Silicon + Intel
+    BUILD_TARGETS=("aarch64-apple-darwin" "x86_64-apple-darwin")
+    log_info "macOS 双架构构建：${BUILD_TARGETS[*]}"
+
+    # 校验 Rust target 已安装
+    INSTALLED_TARGETS=$(rustup target list --installed 2>/dev/null || echo "")
+    for t in "${BUILD_TARGETS[@]}"; do
+        if ! echo "$INSTALLED_TARGETS" | grep -q "^$t$"; then
+            log_warn "Rust target $t 未安装，正在安装..."
+            rustup target add "$t" || {
+                log_error "无法安装 Rust target $t"
+                exit 1
+            }
+        fi
+    done
+else
+    # Windows 或 --single-arch：用默认 npm run build（当前架构）
+    BUILD_TARGETS=("")  # 空字符串代表不传 --target
+fi
+
+for target in "${BUILD_TARGETS[@]}"; do
+    if [ -z "$target" ]; then
+        log_info "构建当前平台默认架构..."
+        npm run build
+    else
+        log_info "构建目标架构: $target"
+        npx tauri build --target "$target"
+    fi
+done
 
 log_info "✓ 构建完成"
 
@@ -159,7 +196,6 @@ log_info "✓ 构建完成"
 if [[ "$OSTYPE" == "darwin"* ]]; then
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     SIGN_SCRIPT="$SCRIPT_DIR/scripts/sign-dev.sh"
-    # 如果 build.sh 在项目根目录，sign-dev.sh 在 scripts/ 下
     if [ ! -f "$SIGN_SCRIPT" ]; then
         SIGN_SCRIPT="scripts/sign-dev.sh"
     fi
@@ -167,10 +203,30 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         echo ""
         log_info "正在对构建产物进行代码签名..."
         chmod +x "$SIGN_SCRIPT"
+        # sign-dev.sh 默认只签 target/release，需要再额外对每个 --target 子目录签名
         bash "$SIGN_SCRIPT" --release || {
-            log_warn "代码签名失败（不影响构建），但每次安装后可能需要重新授权辅助功能权限"
-            log_warn "请运行 ./scripts/create-dev-cert.sh 创建签名证书后重试"
+            log_warn "默认产物签名失败（不影响构建）"
         }
+
+        # 对每个交叉编译的 target 子目录单独签名
+        DEV_CERT="Developer ID Application: han yufei (8F772XVA9L)"
+        ENTITLEMENTS_FILE="src-tauri/entitlements.plist"
+        if security find-identity -v -p codesigning 2>/dev/null | grep -q "$DEV_CERT"; then
+            for target in "${BUILD_TARGETS[@]}"; do
+                [ -z "$target" ] && continue
+                CROSS_APP="target/$target/release/bundle/macos/KVMini.app"
+                CROSS_BIN="target/$target/release/kvmini"
+                if [ -d "$CROSS_APP" ]; then
+                    log_info "签名 $target 产物..."
+                    codesign --force --sign "$DEV_CERT" --options runtime \
+                        --entitlements "$ENTITLEMENTS_FILE" "$CROSS_BIN" 2>/dev/null || true
+                    codesign --force --deep --sign "$DEV_CERT" --options runtime \
+                        --entitlements "$ENTITLEMENTS_FILE" "$CROSS_APP" \
+                        && log_info "✓ $target 签名完成" \
+                        || log_warn "$target 签名失败"
+                fi
+            done
+        fi
     else
         log_warn "未找到签名脚本，跳过代码签名"
     fi
@@ -200,27 +256,52 @@ if [ "$UPLOAD_RELEASE" = true ]; then
 
     # 查找构建产物
     ARTIFACTS=()
-    MACOS_TAR=""
-    MACOS_SIG=""
 
-    # macOS DMG（用户下载安装包）
-    for f in target/release/bundle/dmg/*.dmg; do
-        [ -f "$f" ] && ARTIFACTS+=("$f")
-    done
-    # macOS .app.tar.gz（updater 用）
-    for f in target/release/bundle/macos/*.app.tar.gz; do
-        if [ -f "$f" ]; then
-            ARTIFACTS+=("$f")
-            MACOS_TAR="$f"
-        fi
-    done
-    # macOS updater sig
-    for f in target/release/bundle/macos/*.app.tar.gz.sig; do
-        if [ -f "$f" ]; then
-            ARTIFACTS+=("$f")
-            MACOS_SIG="$f"
-        fi
-    done
+    # 双架构产物收集（macOS）
+    # darwin-aarch64：默认 target/release 路径（npm run build 在 arm64 机器上的输出）
+    #                 或显式 target/aarch64-apple-darwin/release（双架构构建）
+    # darwin-x86_64 ：target/x86_64-apple-darwin/release
+    declare -A MAC_TAR     # platform_key -> tar.gz 路径
+    declare -A MAC_SIG     # platform_key -> sig 路径
+
+    # 候选基础目录（按优先级）
+    MAC_DIRS_AARCH64=(
+        "target/aarch64-apple-darwin/release/bundle"
+        "target/release/bundle"
+    )
+    MAC_DIRS_X86_64=(
+        "target/x86_64-apple-darwin/release/bundle"
+    )
+
+    # 收集函数：从指定目录列表中找 dmg / app.tar.gz / sig
+    collect_mac_artifacts() {
+        local platform_key="$1"
+        shift
+        local dirs=("$@")
+        for base in "${dirs[@]}"; do
+            for f in "$base"/dmg/*.dmg; do
+                [ -f "$f" ] && ARTIFACTS+=("$f")
+            done
+            for f in "$base"/macos/*.app.tar.gz; do
+                if [ -f "$f" ] && [ -z "${MAC_TAR[$platform_key]:-}" ]; then
+                    ARTIFACTS+=("$f")
+                    MAC_TAR[$platform_key]="$f"
+                fi
+            done
+            for f in "$base"/macos/*.app.tar.gz.sig; do
+                if [ -f "$f" ] && [ -z "${MAC_SIG[$platform_key]:-}" ]; then
+                    ARTIFACTS+=("$f")
+                    MAC_SIG[$platform_key]="$f"
+                fi
+            done
+        done
+    }
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        collect_mac_artifacts "darwin-aarch64" "${MAC_DIRS_AARCH64[@]}"
+        collect_mac_artifacts "darwin-x86_64"  "${MAC_DIRS_X86_64[@]}"
+    fi
+
     # Windows NSIS（用户下载安装包）
     for f in target/release/bundle/nsis/*.exe; do
         [ -f "$f" ] && ARTIFACTS+=("$f")
@@ -250,35 +331,13 @@ if [ "$UPLOAD_RELEASE" = true ]; then
         echo "  - $(basename "$f")"
     done
 
-    # 检测当前平台
-    ARCH=$(uname -m)
-    if [ "$(uname -s)" = "Darwin" ]; then
-        if [ "$ARCH" = "arm64" ]; then
-            PLATFORM_KEY="darwin-aarch64"
-        else
-            PLATFORM_KEY="darwin-x86_64"
-        fi
-    else
-        PLATFORM_KEY="windows-x86_64"
-    fi
-
-    # 收集本次平台的 URL 和签名文件
-    THIS_URL=""
-    THIS_SIG_FILE=""
-    if [ -n "$MACOS_TAR" ] && [ -n "$MACOS_SIG" ]; then
-        THIS_URL="https://github.com/mackhan/KVMini/releases/download/${TAG}/$(basename "$MACOS_TAR")"
-        THIS_SIG_FILE="$MACOS_SIG"
-    elif [ -n "$WIN_ZIP" ] && [ -n "$WIN_SIG" ]; then
-        THIS_URL="https://github.com/mackhan/KVMini/releases/download/${TAG}/$(basename "$WIN_ZIP")"
-        THIS_SIG_FILE="$WIN_SIG"
-    fi
-
     # 生成 latest.json（使用 Node.js 跨平台脚本）
     LATEST_JSON="target/release/bundle/macos/latest.json"
     GH_REPO="mackhan/KVMini"
 
     # 尝试下载已有 Release 的 latest.json（用于合并其他平台条目）
     EXISTING_ARG=""
+    TMP_LATEST=""
     if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
         TMP_LATEST=$(mktemp /tmp/kvmini-latest-XXXXXX.json)
         if gh release download "$TAG" --repo "$GH_REPO" --pattern "latest.json" --output "$TMP_LATEST" >/dev/null 2>&1; then
@@ -286,23 +345,47 @@ if [ "$UPLOAD_RELEASE" = true ]; then
             log_info "已下载旧 latest.json 用于合并"
         else
             rm -f "$TMP_LATEST"
+            TMP_LATEST=""
         fi
     fi
 
-    if [ -n "$THIS_URL" ] && [ -n "$THIS_SIG_FILE" ]; then
-        node scripts/generate-latest-json.js \
-            --version "$VERSION" \
-            --tag "$TAG" \
-            --platform "$PLATFORM_KEY" \
-            --url "$THIS_URL" \
-            --signature-file "$THIS_SIG_FILE" \
-            --output "$LATEST_JSON" \
-            $EXISTING_ARG
+    # 收集要写入 latest.json 的 (platform, url, sig) 三元组
+    declare -a LATEST_ENTRIES   # 每条形如 "platform|url|sig_file"
+    for plat in "darwin-aarch64" "darwin-x86_64"; do
+        tar_path="${MAC_TAR[$plat]:-}"
+        sig_path="${MAC_SIG[$plat]:-}"
+        if [ -n "$tar_path" ] && [ -n "$sig_path" ]; then
+            url="https://github.com/mackhan/KVMini/releases/download/${TAG}/$(basename "$tar_path")"
+            LATEST_ENTRIES+=("${plat}|${url}|${sig_path}")
+        fi
+    done
+    if [ -n "$WIN_ZIP" ] && [ -n "$WIN_SIG" ]; then
+        url="https://github.com/mackhan/KVMini/releases/download/${TAG}/$(basename "$WIN_ZIP")"
+        LATEST_ENTRIES+=("windows-x86_64|${url}|${WIN_SIG}")
+    fi
+
+    if [ ${#LATEST_ENTRIES[@]} -gt 0 ]; then
+        # 多次调用 generate-latest-json.js，每次合并一个 platform
+        CURRENT_EXISTING_ARG="$EXISTING_ARG"
+        for entry in "${LATEST_ENTRIES[@]}"; do
+            IFS='|' read -r plat url sig_file <<< "$entry"
+            log_info "写入 latest.json 平台条目: $plat"
+            node scripts/generate-latest-json.js \
+                --version "$VERSION" \
+                --tag "$TAG" \
+                --platform "$plat" \
+                --url "$url" \
+                --signature-file "$sig_file" \
+                --output "$LATEST_JSON" \
+                $CURRENT_EXISTING_ARG
+            # 后续条目以刚生成的 latest.json 为基础继续合并
+            CURRENT_EXISTING_ARG="--existing $LATEST_JSON"
+        done
         log_info "生成 latest.json:"
         cat "$LATEST_JSON"
         ARTIFACTS+=("$LATEST_JSON")
     else
-        log_warn "未找到 updater 签名文件，跳过 latest.json 生成"
+        log_warn "未找到任何 updater 签名文件，跳过 latest.json 生成"
     fi
 
     # 清理临时文件

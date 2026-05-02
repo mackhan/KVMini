@@ -17,7 +17,9 @@ use tauri_plugin_updater::UpdaterExt;
 mod macros;
 mod config;
 mod connection;
+mod network_scan;
 mod platform;
+mod sharing;
 
 // ── 通用 Tauri 命令 ────────────────────────────────────────────────────────
 
@@ -26,6 +28,176 @@ mod platform;
 fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+// ── 持久化日志初始化 ──────────────────────────────────────────────────────────
+
+/// 同时写 stderr 和持久化日志文件的 Writer
+///
+/// 日志文件路径：
+/// - macOS:   ~/Library/Logs/KVMini/runtime.log
+/// - Windows: %LOCALAPPDATA%/KVMini/Logs/runtime.log
+/// - Linux:   ~/.local/share/KVMini/logs/runtime.log
+///
+/// Rotate 策略：启动时若已有 runtime.log 且大小 > 2MB，重命名为 runtime.log.1，
+///              仅保留最近 3 个历史文件。
+struct DualWriter {
+    file: Option<std::sync::Mutex<std::fs::File>>,
+}
+
+impl std::io::Write for DualWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // 先写 stderr
+        let _ = std::io::stderr().write_all(buf);
+        // 再写文件（失败不影响 stderr）
+        if let Some(ref m) = self.file {
+            if let Ok(mut f) = m.lock() {
+                let _ = f.write_all(buf);
+            }
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        if let Some(ref m) = self.file {
+            if let Ok(mut f) = m.lock() {
+                let _ = f.flush();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 返回日志目录路径（已确保目录存在）
+fn resolve_log_dir() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").ok()?;
+        let dir = std::path::PathBuf::from(home).join("Library").join("Logs").join("KVMini");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var("LOCALAPPDATA").ok()?;
+        let dir = std::path::PathBuf::from(local).join("KVMini").join("Logs");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let home = std::env::var("HOME").ok()?;
+        let dir = std::path::PathBuf::from(home).join(".local").join("share").join("KVMini").join("logs");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+}
+
+/// 启动时做日志 rotate：若 runtime.log > 2MB，依次 rotate 到 .1/.2/.3，删除最老的
+fn rotate_log_if_needed(log_path: &std::path::Path) {
+    const MAX_SIZE: u64 = 2 * 1024 * 1024;
+    const KEEP: usize = 3;
+    let size = std::fs::metadata(log_path).ok().map(|m| m.len()).unwrap_or(0);
+    if size < MAX_SIZE {
+        return;
+    }
+    // 从最老的开始删除/重命名
+    for i in (1..=KEEP).rev() {
+        let cur = log_path.with_extension(format!("log.{}", i));
+        if i == KEEP {
+            let _ = std::fs::remove_file(&cur);
+        } else {
+            let next = log_path.with_extension(format!("log.{}", i + 1));
+            let _ = std::fs::rename(&cur, &next);
+        }
+    }
+    let _ = std::fs::rename(log_path, log_path.with_extension("log.1"));
+}
+
+fn init_persistent_logger() {
+    use std::io::Write;
+
+    let file_handle = resolve_log_dir().and_then(|dir| {
+        let log_path = dir.join("runtime.log");
+        rotate_log_if_needed(&log_path);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()
+            .map(|f| (log_path, f))
+    });
+
+    let mut builder = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info")
+    );
+
+    if let Some((log_path, file)) = file_handle {
+        let dual = DualWriter {
+            file: Some(std::sync::Mutex::new(file)),
+        };
+        builder
+            .target(env_logger::Target::Pipe(Box::new(dual)))
+            .format(|buf, record| {
+                writeln!(
+                    buf,
+                    "{} [{}] {}: {}",
+                    chrono_style_timestamp(),
+                    record.level(),
+                    record.target(),
+                    record.args()
+                )
+            });
+        // 初始化后立即记录一条，方便用户确认日志目录
+        builder.init();
+        log::info!("KVMini v{} 启动，日志文件: {}", env!("CARGO_PKG_VERSION"), log_path.display());
+    } else {
+        // 日志目录创建失败时退化为只写 stderr（保持原行为）
+        builder.init();
+        log::warn!("[Logger] 无法创建持久化日志文件，仅写 stderr");
+    }
+}
+
+/// 生成简易时间戳（避免引入 chrono 依赖）
+/// 格式：YYYY-MM-DDTHH:MM:SS
+fn chrono_style_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    // 简化：只记录 UTC 秒数对应的 YMD/HMS，足够排查用
+    // 计算天数
+    let days = secs / 86400;
+    let sod = secs % 86400;
+    let hh = sod / 3600;
+    let mm = (sod % 3600) / 60;
+    let ss = sod % 60;
+    // 从 1970-01-01 开始算 y/m/d
+    let (year, month, day) = epoch_days_to_ymd(days);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hh, mm, ss)
+}
+
+fn epoch_days_to_ymd(mut days: i64) -> (i64, u32, u32) {
+    // 以 1970-01-01 为起点往后累加
+    let mut year: i64 = 1970;
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let year_days = if leap { 366 } else { 365 };
+        if days < year_days { break; }
+        days -= year_days;
+        year += 1;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let months: [i64; 12] = [31, if leap {29} else {28}, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u32;
+    for (i, &dim) in months.iter().enumerate() {
+        if days < dim { month = (i + 1) as u32; break; }
+        days -= dim;
+    }
+    let day = (days + 1) as u32;
+    (year, month, day)
+}
+
 
 /// 获取本机所有局域网 IP 列表
 ///
@@ -250,67 +422,65 @@ fn regenerate_tls_cert() -> Result<String, String> {
 
 /// 扫描局域网内的 KVMini 设备
 ///
-/// 策略：UDP 广播优先（5秒），无结果时自动降级为子网 TCP 扫描（/24 并发探测）。
-/// 降级扫描对 VPN 环境和防火墙屏蔽 UDP 广播的场景有效。
+/// 策略：多接口 UDP 广播优先（按物理网卡 bind+定向广播，规避 VPN 干扰），
+/// 无结果时降级为多接口子网 TCP 扫描（每张物理网卡的 /24 并发探测）。
 #[tauri::command]
 async fn discover_devices() -> Result<Vec<kvm_core::network::DiscoveredDevice>, String> {
-    log::info!("[Discover] 开始局域网设备扫描（UDP 广播 255.255.255.255:{}）...",
-        kvm_core::network::DEFAULT_UDP_PORT);
+    log::info!(
+        "[Discover] 开始多接口局域网设备扫描（UDP 广播 :{}）...",
+        kvm_core::network::DEFAULT_UDP_PORT
+    );
 
-    // 第一阶段：UDP 广播
-    let udp_result = kvm_core::network::discover_devices(kvm_core::network::DEFAULT_UDP_PORT).await;
-    match &udp_result {
-        Ok(devices) if !devices.is_empty() => {
-            log::info!("[Discover] UDP 广播发现 {} 个设备", devices.len());
-            return Ok(devices.clone());
-        }
-        Ok(_) => {
-            log::warn!("[Discover] UDP 广播无结果，尝试子网 TCP 扫描降级...");
-        }
-        Err(e) => {
-            log::warn!("[Discover] UDP 广播失败: {}，尝试子网 TCP 扫描降级...", e);
+    // 第一阶段：多接口 UDP 定向广播（v2，规避 VPN）
+    let udp_devices =
+        network_scan::discover_devices_multi(kvm_core::network::DEFAULT_UDP_PORT).await;
+    if !udp_devices.is_empty() {
+        log::info!("[Discover] 多接口 UDP 广播发现 {} 个设备", udp_devices.len());
+        return Ok(udp_devices);
+    }
+    log::warn!("[Discover] 多接口 UDP 广播无结果，回退到 kvm-core 单 socket 广播...");
+
+    // 第二阶段：兼容路径，跑一次老的 0.0.0.0 广播（极端情况下 VPN 没干扰，老路径仍可工作）
+    if let Ok(devices) =
+        kvm_core::network::discover_devices(kvm_core::network::DEFAULT_UDP_PORT).await
+    {
+        if !devices.is_empty() {
+            log::info!("[Discover] 单 socket 广播兜底发现 {} 个设备", devices.len());
+            return Ok(devices);
         }
     }
+    log::warn!("[Discover] UDP 广播全部失败，降级到多接口子网 TCP 扫描");
 
-    // 第二阶段：子网 TCP 扫描（降级）
-    // 获取本机非 loopback、非 VPN 的第一个 IPv4 地址
-    let local_ip = get_local_lan_ip();
-    match local_ip {
-        Some(ip) => {
-            log::info!("[Discover] 使用本机 IP {} 进行子网扫描", ip);
-            match kvm_core::network::scan_subnet(&ip, kvm_core::network::DEFAULT_TCP_PORT).await {
-                Ok(devices) => {
-                    if devices.is_empty() {
-                        log::warn!("[Discover] 子网扫描也未发现设备，请检查对端是否运行 KVMini");
-                    } else {
-                        log::info!("[Discover] 子网扫描发现 {} 个设备", devices.len());
-                    }
-                    Ok(devices)
-                }
-                Err(e) => {
-                    log::error!("[Discover] 子网扫描失败: {}", e);
-                    Ok(vec![]) // 返回空列表而非错误，让前端触发诊断
-                }
-            }
-        }
-        None => {
-            log::error!("[Discover] 无法获取本机局域网 IP，跳过子网扫描");
-            Ok(vec![])
-        }
+    // 第三阶段：多接口子网 TCP 扫描（降级）
+    let scan_devices =
+        network_scan::scan_subnet_multi(kvm_core::network::DEFAULT_TCP_PORT).await;
+    if scan_devices.is_empty() {
+        log::warn!("[Discover] 多接口子网扫描也未发现设备，请检查对端是否运行 KVMini / 防火墙 / VPN");
+    } else {
+        log::info!("[Discover] 多接口子网扫描发现 {} 个设备", scan_devices.len());
     }
+    Ok(scan_devices)
 }
 
-/// 获取本机局域网 IP（排除 loopback、VPN utun* 接口，优先返回 192.168/10./172.16-31 网段）
+/// 获取本机局域网 IP（优先使用 network_scan 过滤掉 VPN 的物理网卡，兜底走 8.8.8.8 connect）
+#[allow(dead_code)] // 保留作为后续 NIC/监听 IP 选择的工具函数
 fn get_local_lan_ip() -> Option<String> {
-    // 通过连接外部地址来获取本机出口 IP（不实际发送数据）
+    // 优先：枚举物理网卡（已排除 utun*/ppp*/tun*/tap*/loopback/APIPA），取第一张
+    let ifaces = network_scan::list_lan_ipv4_ifaces();
+    if let Some(first) = ifaces.first() {
+        let ip = first.ipv4.to_string();
+        log::info!("[Discover] 使用物理网卡 {} 的 IP: {}", first.name, ip);
+        return Some(ip);
+    }
+
+    // 兜底：通过 connect 拿出口 IP（极端情况下 if_addrs 失败时使用，但可能命中 VPN）
     use std::net::UdpSocket as StdUdpSocket;
-    // 尝试连接公共 DNS，获取路由出口 IP
     if let Ok(socket) = StdUdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
                 let ip = addr.ip().to_string();
                 if ip != "0.0.0.0" && !ip.starts_with("127.") {
-                    log::info!("[Discover] 检测到本机出口 IP: {}", ip);
+                    log::warn!("[Discover] 物理网卡枚举失败，回退使用出口 IP: {}", ip);
                     return Some(ip);
                 }
             }
@@ -337,6 +507,7 @@ struct DiagnosticItem {
 async fn diagnose_network() -> Vec<DiagnosticItem> {
     let mut results = Vec::new();
     let udp_port = kvm_core::network::DEFAULT_UDP_PORT;
+    let is_en = tauri_commerce::i18n::get_locale().starts_with("en");
 
     // 1. 检查 UDP 端口是否可绑定
     let port_ok = match tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).await {
@@ -353,49 +524,67 @@ async fn diagnose_network() -> Vec<DiagnosticItem> {
         check: "udp_port".to_string(),
         ok: port_ok,
         message: if port_ok {
-            format!("UDP 端口 {} 可用", udp_port)
+            if is_en {
+                format!("UDP port {} is available", udp_port)
+            } else {
+                format!("UDP 端口 {} 可用", udp_port)
+            }
+        } else if is_en {
+            format!("UDP port {} is in use or cannot bind", udp_port)
         } else {
             format!("UDP 端口 {} 被占用或无法绑定", udp_port)
         },
     });
 
-    // 2. 检查网络接口是否有活跃的 IP
-    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
-    let active_ipv4: Vec<_> = interfaces.iter()
-        .filter(|iface| !iface.is_loopback() && iface.addr.ip().is_ipv4())
-        .collect();
-    let has_network = !active_ipv4.is_empty();
+    // 2. 检查物理 LAN 网卡
+    let lan_ifaces = network_scan::list_lan_ipv4_ifaces();
+    let has_lan = !lan_ifaces.is_empty();
     results.push(DiagnosticItem {
         check: "network_interface".to_string(),
-        ok: has_network,
-        message: if has_network {
-            format!("检测到 {} 个活跃网络接口", active_ipv4.len())
+        ok: has_lan,
+        message: if has_lan {
+            let names: Vec<String> = lan_ifaces
+                .iter()
+                .map(|i| format!("{}({})", i.name, i.ipv4))
+                .collect();
+            if is_en {
+                format!("Found {} physical LAN interface(s): {}", names.len(), names.join(", "))
+            } else {
+                format!("检测到 {} 个物理局域网接口: {}", names.len(), names.join(", "))
+            }
+        } else if is_en {
+            "No active physical LAN interface found (only loopback / VPN)".to_string()
         } else {
-            "未检测到活跃的 IPv4 网络接口".to_string()
+            "未检测到物理局域网接口（仅 loopback / VPN）".to_string()
         },
     });
 
-    // 3. 检查是否存在 VPN 网卡（常见 VPN 接口名称）
-    let vpn_keywords = ["tun", "tap", "utun", "ppp", "vpn", "wg", "tailscale", "wireguard"];
-    let vpn_ifaces: Vec<_> = interfaces.iter()
-        .filter(|iface| {
-            let name = iface.name.to_lowercase();
-            vpn_keywords.iter().any(|kw| name.contains(kw))
-        })
-        .map(|iface| iface.name.clone())
-        .collect();
+    // 3. 检查是否存在 VPN 网卡（提供具体的可操作提示）
+    let vpn_ifaces = network_scan::detect_vpn_ifaces();
     let has_vpn = !vpn_ifaces.is_empty();
     results.push(DiagnosticItem {
         check: "vpn".to_string(),
-        ok: !has_vpn, // VPN 存在时标记为 "不正常"（可能干扰）
+        ok: !has_vpn,
         message: if has_vpn {
-            format!("检测到 VPN 网卡 ({})，可能干扰 UDP 广播", vpn_ifaces.join(", "))
+            if is_en {
+                format!(
+                    "VPN interface(s) detected ({}). VPN may hijack the default route and break LAN broadcast. Try temporarily disconnecting the VPN, then rescan.",
+                    vpn_ifaces.join(", ")
+                )
+            } else {
+                format!(
+                    "检测到 VPN 网卡 ({})，VPN 可能劫持默认路由导致局域网广播失败。建议临时断开 VPN 后重新扫描。",
+                    vpn_ifaces.join(", ")
+                )
+            }
+        } else if is_en {
+            "No VPN interface detected".to_string()
         } else {
             "未检测到 VPN 网卡".to_string()
         },
     });
 
-    // 4. 平台特定：macOS 检查防火墙
+    // 4. 平台特定：macOS 检查防火墙（含可执行的修复命令）
     #[cfg(target_os = "macos")]
     {
         let fw_status = std::process::Command::new("/usr/libexec/ApplicationFirewall/socketfilterfw")
@@ -409,7 +598,13 @@ async fn diagnose_network() -> Vec<DiagnosticItem> {
                     check: "firewall".to_string(),
                     ok: !fw_enabled,
                     message: if fw_enabled {
-                        "macOS 防火墙已开启，可能阻止 UDP 广播".to_string()
+                        if is_en {
+                            "macOS firewall is ON. Run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app".to_string()
+                        } else {
+                            "macOS 防火墙已开启。请执行: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app".to_string()
+                        }
+                    } else if is_en {
+                        "macOS firewall is off".to_string()
                     } else {
                         "macOS 防火墙未开启".to_string()
                     },
@@ -419,13 +614,17 @@ async fn diagnose_network() -> Vec<DiagnosticItem> {
                 results.push(DiagnosticItem {
                     check: "firewall".to_string(),
                     ok: true,
-                    message: "无法检测防火墙状态".to_string(),
+                    message: if is_en {
+                        "Cannot detect firewall state".to_string()
+                    } else {
+                        "无法检测防火墙状态".to_string()
+                    },
                 });
             }
         }
     }
 
-    // 4. 平台特定：Windows 检查防火墙
+    // 4. 平台特定：Windows 检查防火墙（含可执行的修复命令）
     #[cfg(target_os = "windows")]
     {
         let fw_status = std::process::Command::new("netsh")
@@ -439,7 +638,13 @@ async fn diagnose_network() -> Vec<DiagnosticItem> {
                     check: "firewall".to_string(),
                     ok: !fw_on,
                     message: if fw_on {
-                        "Windows 防火墙已开启，请确保 KVMini 已被允许通过".to_string()
+                        if is_en {
+                            "Windows firewall is ON. Allow KVMini in 'Windows Defender Firewall > Allowed apps', or run: netsh advfirewall firewall add rule name=KVMini dir=in action=allow program=\"%LOCALAPPDATA%\\KVMini\\KVMini.exe\" enable=yes".to_string()
+                        } else {
+                            "Windows 防火墙已开启。请在「Windows Defender 防火墙 > 允许的应用」中放行 KVMini，或执行: netsh advfirewall firewall add rule name=KVMini dir=in action=allow program=\"%LOCALAPPDATA%\\KVMini\\KVMini.exe\" enable=yes".to_string()
+                        }
+                    } else if is_en {
+                        "Windows firewall is off".to_string()
                     } else {
                         "Windows 防火墙未开启".to_string()
                     },
@@ -449,7 +654,11 @@ async fn diagnose_network() -> Vec<DiagnosticItem> {
                 results.push(DiagnosticItem {
                     check: "firewall".to_string(),
                     ok: true,
-                    message: "无法检测防火墙状态".to_string(),
+                    message: if is_en {
+                        "Cannot detect firewall state".to_string()
+                    } else {
+                        "无法检测防火墙状态".to_string()
+                    },
                 });
             }
         }
@@ -533,6 +742,27 @@ fn request_accessibility_permission() -> Result<(), String> {
 fn open_accessibility_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     { platform::macos::permission::open_accessibility_settings().map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
+/// 检查 macOS 输入监控权限（BUG-027）
+/// 返回 "Granted" / "Denied" / "N/A"（非 macOS）
+#[tauri::command]
+fn check_input_monitoring_permission() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let status = platform::macos::permission::check_input_monitoring();
+        return status.to_string();
+    }
+    #[cfg(not(target_os = "macos"))]
+    "N/A".to_string()
+}
+
+/// 打开 macOS 输入监控设置页面（BUG-027）
+#[tauri::command]
+fn open_input_monitoring_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    { platform::macos::permission::open_input_monitoring_settings().map_err(|e| e.to_string())?; }
     Ok(())
 }
 
@@ -746,6 +976,48 @@ fn set_locale(locale: String) -> Result<(), String> {
 #[tauri::command]
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.37".to_string(),
+            date: "2026-05-01".to_string(),
+            changes: vec![
+                "前端暂时屏蔽试用到期与购买相关界面，统一视为已购买，后端 Commerce/IAP 初始化和 Keychain 记录完全保留，已购用户数据不会丢失".to_string(),
+                "关于页「许可状态」固定显示为『已购买』，购买/恢复按钮隐藏；将来通过单一开关即可恢复完整商业化 UI".to_string(),
+            ],
+            changes_en: vec![
+                "Temporarily hide trial-expired and purchase UI on the frontend; all users are treated as licensed. Backend Commerce/IAP init and Keychain records are fully preserved — existing purchases will NOT be lost".to_string(),
+                "About page now always shows 'Purchased', purchase/restore buttons are hidden. A single flag restores the full commerce UI when needed".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.36".to_string(),
+            date: "2026-05-01".to_string(),
+            changes: vec![
+                "后端启动持久化日志：日志同时写入 stderr 和 ~/Library/Logs/KVMini/runtime.log（Windows: %LOCALAPPDATA%/KVMini/Logs/runtime.log），方便用户自查和反馈".to_string(),
+                "macOS 权限自检完整化：同时检查辅助功能 + 输入监控（Input Monitoring）两项权限，任一缺失均在启动时弹窗提醒，带「打开设置」按钮，修复以前只提醒一个权限的问题（BUG-027）".to_string(),
+                "macOS 主动调用 CGRequestListenEventAccess 将 KVMini 注册到 TCC 输入监控列表，否则用户可能在系统设置里根本看不到应用开关（BUG-021）".to_string(),
+            ],
+            changes_en: vec![
+                "Persistent backend logs: written to both stderr and ~/Library/Logs/KVMini/runtime.log (Windows: %LOCALAPPDATA%/KVMini/Logs/runtime.log) for easier diagnostics".to_string(),
+                "Complete macOS permission self-check: validates both Accessibility and Input Monitoring permissions at startup; shows a bilingual dialog with 'Open Settings' button if either is missing (BUG-027)".to_string(),
+                "Proactively call CGRequestListenEventAccess so KVMini is registered in the TCC Input Monitoring list — otherwise the toggle won't show up in System Settings (BUG-021)".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.35".to_string(),
+            date: "2026-05-01".to_string(),
+            changes: vec![
+                "修复连接成功后误报「TLS 不一致」（双端均开启 TLS 时不再弹警告）".to_string(),
+                "接入键鼠共享主流程：「开始共享」按钮真正可用，点击后双端键鼠互相转发，再次点击恢复".to_string(),
+                "扫描鲁棒性：自动过滤 VPN/虚拟网卡，多接口定向广播 + 多网段并发扫描，无结果时给出可操作的诊断提示（中英双语）".to_string(),
+                "macOS CGEventTap 在专用线程跑 CFRunLoop，避免与 Tauri 主线程冲突".to_string(),
+            ],
+            changes_en: vec![
+                "Fix false 'TLS mismatch' warning when both sides have TLS enabled".to_string(),
+                "Wire up keyboard/mouse sharing: 'Start Sharing' button is now functional — click to take over remote, click again to release".to_string(),
+                "Scan robustness: filter VPN/virtual interfaces, per-interface targeted UDP broadcast + multi-subnet TCP scan, with actionable bilingual diagnostics on empty result".to_string(),
+                "macOS CGEventTap now runs CFRunLoop in a dedicated thread to avoid conflict with Tauri main thread".to_string(),
+            ],
+        },
         tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.27".to_string(),
             date: "2026-04-29".to_string(),
@@ -1116,23 +1388,47 @@ fn emit_initial_status(app: &tauri::AppHandle) {
     });
 }
 
-/// 检查 macOS 辅助功能权限，并通知前端，权限不足时启动后台轮询
+/// 检查 macOS 权限（辅助功能 + 输入监控），并通知前端
+/// BUG-027：原来只检查辅助功能，用户授权后以为一切就绪，但「开始共享」仍失败。
+/// 现在同时检查两个权限，任一未授予都发对应事件。
 fn check_macos_permission(app: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        use platform::macos::permission::{check_accessibility, AccessibilityStatus};
-        let status = check_accessibility();
-        log::info!("[Mac] 辅助功能权限状态: {:?}", status);
+        use platform::macos::permission::{
+            check_accessibility, check_input_monitoring, request_input_monitoring,
+            AccessibilityStatus,
+        };
 
-        if status == AccessibilityStatus::Granted {
-            // 已授权：通知前端隐藏遮罩
+        // ─── 1. 辅助功能权限 ─────────────────────────────────────────────
+        let ax = check_accessibility();
+        log::info!("[Mac] 辅助功能权限状态: {:?}", ax);
+
+        if ax == AccessibilityStatus::Granted {
             let _ = app.emit("accessibility://permission-granted", ());
-            log::info!("[Mac] 辅助功能权限已授权，通知前端");
         } else {
-            // 未授权：通知前端显示引导遮罩，并启动后台轮询
             log::warn!("[Mac] 辅助功能权限未授权，通知前端引导用户");
             let _ = app.emit("accessibility://permission-denied", ());
             start_accessibility_polling(app.clone());
+        }
+
+        // ─── 2. 输入监控权限（BUG-021 / BUG-027） ────────────────────────
+        // 主动调用 CGRequestListenEventAccess 把 KVMini 注册到 TCC 数据库的
+        // "输入监控"列表，否则用户在系统设置里根本看不到 KVMini 的开关。
+        // 注意：这里的返回值受进程内缓存影响，授权后需重启才会变 true。
+        let im_after_request = request_input_monitoring();
+        let im = check_input_monitoring();
+        log::info!(
+            "[Mac] 输入监控权限状态: preflight={:?}, request={:?}",
+            im,
+            im_after_request
+        );
+
+        if im == AccessibilityStatus::Granted || im_after_request == AccessibilityStatus::Granted {
+            let _ = app.emit("input-monitoring://permission-granted", ());
+        } else {
+            log::warn!("[Mac] 输入监控权限未授权，通知前端引导用户");
+            let _ = app.emit("input-monitoring://permission-denied", ());
+            start_input_monitoring_polling(app.clone());
         }
     }
     // 非 macOS 平台无需权限检查
@@ -1140,7 +1436,7 @@ fn check_macos_permission(app: &tauri::AppHandle) {
     let _ = app;
 }
 
-/// 启动后台权限轮询（每 2 秒检测一次，授权后发送 granted 事件并停止）
+/// 启动后台辅助功能权限轮询（每 2 秒检测一次，授权后发送 granted 事件并停止）
 #[cfg(target_os = "macos")]
 fn start_accessibility_polling(app: tauri::AppHandle) {
     use platform::macos::permission::{check_accessibility, AccessibilityStatus};
@@ -1153,16 +1449,39 @@ fn start_accessibility_polling(app: tauri::AppHandle) {
             thread::sleep(Duration::from_secs(2));
             match check_accessibility() {
                 AccessibilityStatus::Granted => {
-                    log::info!("[Mac] 轮询检测到权限已授权，通知前端");
+                    log::info!("[Mac] 轮询检测到辅助功能权限已授权");
                     let _ = app.emit("accessibility://permission-granted", ());
                     break;
                 }
-                _ => {
-                    // 继续轮询
-                }
+                _ => {}
             }
         }
         log::info!("[Mac] 辅助功能权限轮询已停止");
+    });
+}
+
+/// 启动后台输入监控权限轮询
+/// 注意：CGPreflightListenEventAccess 进程内缓存不刷新，此轮询主要用于
+/// 在用户"打开设置"之后，Rust 侧无法感知授权 —— 实际生效靠重启 App。
+/// 这里保留轮询是为了兜底（某些 macOS 版本/情况下缓存可能刷新）。
+#[cfg(target_os = "macos")]
+fn start_input_monitoring_polling(app: tauri::AppHandle) {
+    use platform::macos::permission::{check_input_monitoring, AccessibilityStatus};
+    use std::thread;
+    use std::time::Duration;
+
+    thread::spawn(move || {
+        log::info!("[Mac] 启动输入监控权限轮询（每 3 秒，最多 5 分钟）");
+        let deadline = std::time::Instant::now() + Duration::from_secs(300);
+        while std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_secs(3));
+            if check_input_monitoring() == AccessibilityStatus::Granted {
+                log::info!("[Mac] 轮询检测到输入监控权限已授权");
+                let _ = app.emit("input-monitoring://permission-granted", ());
+                return;
+            }
+        }
+        log::warn!("[Mac] 输入监控权限轮询超时（进程内缓存未刷新，需重启 App）");
     });
 }
 
@@ -1170,8 +1489,11 @@ fn start_accessibility_polling(app: tauri::AppHandle) {
 
 #[tokio::main]
 async fn main() {
-    // 初始化日志
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // 初始化日志（持久化 + stderr 双路输出）
+    // BUG-027 之前：env_logger 只写 stderr，用户反馈 bug 时无法提供日志
+    // 现在：同时写 stderr 和 ~/Library/Logs/KVMini/runtime.log
+    //       （Windows: %LOCALAPPDATA%\KVMini\Logs\runtime.log）
+    init_persistent_logger();
 
     // 初始化 tauri-commerce SDK
     let commerce_config = tauri_commerce::CommerceConfig::builder()
@@ -1264,6 +1586,8 @@ async fn main() {
             check_accessibility_permission,
             request_accessibility_permission,
             open_accessibility_settings,
+            check_input_monitoring_permission,
+            open_input_monitoring_settings,
             // 诊断日志
             write_startup_log,
             // tauri-commerce SDK
@@ -1283,9 +1607,14 @@ async fn main() {
             // 自动更新
             check_for_update,
             install_update,
+            // 键鼠共享（Bug 2 / BUG-019）
+            sharing::toggle_sharing,
+            sharing::get_control_state,
         ])
         // 托管连接管理器状态
         .manage(connection::KvmConnectionManager::new())
+        // 托管键鼠共享管理器（Bug 2 / BUG-019）
+        .manage(std::sync::Arc::new(sharing::SharingManager::new()))
         // 托管全局快捷键状态
         .manage(HotkeyState::new())
         .setup(|app| {

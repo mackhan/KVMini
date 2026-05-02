@@ -31,6 +31,7 @@ const MESSAGES = {
     btnScanDevices: '扫描设备',
     btnDisconnect: '断开连接',
     btnStartSharing: '▶ 开始共享',
+    btnStopSharing: '■ 停止共享',
     btnSettings: '⚙ 设置',
     btnSwitchRole: '切换',
     btnSwitch: '切换',
@@ -77,6 +78,9 @@ const MESSAGES = {
     // 辅助功能权限遮罩
     overlayTitle: '需要辅助功能权限',
     overlayDesc: 'KVMini 需要辅助功能（Accessibility）权限才能捕获和注入键盘鼠标事件。\n请在系统设置中授权后，应用将自动继续。',
+    // 输入监控权限遮罩（BUG-027：macOS 除了辅助功能还需要输入监控权限）
+    overlayInputMonitoringTitle: '需要输入监控权限',
+    overlayInputMonitoringDesc: 'KVMini 还需要输入监控（Input Monitoring）权限才能接收键盘和鼠标事件。\n请在系统设置中授权后，应用将自动继续。',
     overlayStep1: '点击下方"前往授权"按钮',
     overlayStep2: '在系统设置中找到 KVMini，打开开关',
     overlayStep3: '返回应用，权限授予后自动继续',
@@ -287,6 +291,12 @@ const MESSAGES = {
     diagTitle: '🔍 网络诊断结果',
     diagSuggestion: '💡 建议：检查上述标记 ⚠️ 的项目，确保对端已运行 KVMini',
     diagAllPass: '✅ 网络配置正常，请确认对端已启动 KVMini 并在同一子网',
+    vpnInterferenceTip: '⚠️ 检测到 VPN 网卡（{names}），可能劫持默认路由导致局域网广播失败。建议临时断开 VPN 后重新扫描。',
+    firewallBlockTipMacos: '🛡️ macOS 防火墙可能拦截 KVMini。可执行：sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
+    firewallBlockTipWindows: '🛡️ Windows 防火墙可能拦截 KVMini。请在「Windows Defender 防火墙 > 允许的应用」中放行 KVMini。',
+    sharingStarted: '共享已启动，正在控制对端',
+    sharingStopped: '共享已停止',
+    shareToggleFailed: '切换共享状态失败，请检查辅助功能权限或连接状态',
 
     // 分页导航
     tabGeneral: '通用',
@@ -361,6 +371,7 @@ const MESSAGES = {
     btnScanDevices: 'Scan Devices',
     btnDisconnect: 'Disconnect',
     btnStartSharing: '▶ Start Sharing',
+    btnStopSharing: '■ Stop Sharing',
     btnSettings: '⚙ Settings',
     btnSwitchRole: 'Switch',
     btnSwitch: 'Switch',
@@ -407,6 +418,9 @@ const MESSAGES = {
     // Accessibility overlay
     overlayTitle: 'Accessibility Permission Required',
     overlayDesc: 'KVMini needs Accessibility permission to capture and inject keyboard/mouse events.\nPlease authorize in System Settings and the app will continue automatically.',
+    // Input Monitoring overlay (BUG-027: macOS needs BOTH Accessibility and Input Monitoring)
+    overlayInputMonitoringTitle: 'Input Monitoring Permission Required',
+    overlayInputMonitoringDesc: 'KVMini also needs Input Monitoring permission to receive keyboard and mouse events.\nPlease authorize in System Settings and the app will continue automatically.',
     overlayStep1: 'Click the "Authorize" button below',
     overlayStep2: 'Find KVMini in System Settings and enable it',
     overlayStep3: 'Return to the app, it will continue automatically after authorization',
@@ -617,6 +631,12 @@ const MESSAGES = {
     diagTitle: '🔍 Network Diagnostic Results',
     diagSuggestion: '💡 Suggestion: Check the ⚠️ items above and make sure the remote is running KVMini',
     diagAllPass: '✅ Network configuration looks good. Please confirm the remote has KVMini running on the same subnet.',
+    vpnInterferenceTip: '⚠️ VPN interface(s) detected ({names}). VPN may hijack the default route and break LAN broadcast. Try temporarily disconnecting the VPN, then rescan.',
+    firewallBlockTipMacos: '🛡️ macOS firewall may be blocking KVMini. Run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
+    firewallBlockTipWindows: '🛡️ Windows firewall may be blocking KVMini. Allow KVMini in "Windows Defender Firewall > Allowed apps".',
+    sharingStarted: 'Sharing started, you are now controlling the remote machine',
+    sharingStopped: 'Sharing stopped',
+    shareToggleFailed: 'Failed to toggle sharing. Check accessibility permission or connection status.',
 
     // Tab navigation
     tabGeneral: 'General',

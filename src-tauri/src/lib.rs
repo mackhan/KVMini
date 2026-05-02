@@ -5,4 +5,6 @@
 pub mod macros;
 pub mod config;
 pub mod connection;
+pub mod network_scan;
 pub mod platform;
+pub mod sharing;

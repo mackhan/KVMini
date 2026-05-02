@@ -5,7 +5,7 @@
 //! 通过 Tauri 事件向前端推送连接状态变更。
 
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use serde::{Serialize, Deserialize};
 
@@ -199,11 +199,15 @@ impl KvmConnectionManager {
     }
 
     /// 启动事件监听循环，将 NetworkEvent 转发给前端
+    ///
+    /// 同时把 FrameReceived(InputEvent/SwitchControl/...) 与 ConnectionStateChanged(Disconnected)
+    /// 转发给 SharingManager（Bug 2 / BUG-019：接入键鼠共享主流程）。
     pub fn start_event_loop(&self, app: tauri::AppHandle) {
         let mut rx = self.inner.subscribe();
         let peer_ip = Arc::clone(&self.peer_ip);
         let stop = Arc::clone(&self.stop_tx);
         let last_latency = Arc::clone(&self.last_latency);
+        let app_for_sharing = app.clone();
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -216,6 +220,40 @@ impl KvmConnectionManager {
                                 if let NetworkEvent::LatencyUpdated(ms) = &event {
                                     *last_latency.lock().await = Some(*ms);
                                 }
+
+                                // ── Bug 2：把输入帧 / 控制权切换 / 断开转发给 SharingManager ──
+                                if let Some(sm_state) =
+                                    app_for_sharing.try_state::<std::sync::Arc<crate::sharing::SharingManager>>()
+                                {
+                                    let sm = sm_state.inner().clone();
+                                    match &event {
+                                        NetworkEvent::FrameReceived(frame) => {
+                                            use kvm_core::protocol::KvmFrame::*;
+                                            match frame {
+                                                MouseMove { .. }
+                                                | MouseButton { .. }
+                                                | MouseScroll { .. }
+                                                | KeyEvent { .. } => {
+                                                    sm.inject_remote_frame(frame).await;
+                                                }
+                                                SwitchControl { .. } => {
+                                                    sm.on_remote_switch_control(&app_for_sharing).await;
+                                                }
+                                                SwitchControlAck => {
+                                                    sm.on_remote_switch_ack(&app_for_sharing).await;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        NetworkEvent::ConnectionStateChanged(
+                                            kvm_core::network::ConnectionState::Disconnected,
+                                        ) => {
+                                            sm.on_disconnected(&app_for_sharing).await;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
                                 let ip = peer_ip.lock().await.clone();
                                 let ip_opt = if ip.is_empty() { None } else { Some(ip.as_str()) };
                                 if let Some(ev) = network_event_to_connection_event(&event, ip_opt) {
@@ -249,6 +287,14 @@ impl KvmConnectionManager {
     /// 获取最新延迟值（毫秒），未连接或尚未测量时返回 None
     pub async fn get_last_latency(&self) -> Option<u64> {
         *self.last_latency.lock().await
+    }
+
+    /// 转发：通过底层 ConnectionManager 发送一帧（供 sharing 模块使用）
+    pub(crate) async fn inner_send_frame(
+        &self,
+        frame: &kvm_core::protocol::KvmFrame,
+    ) -> kvm_core::error::KvmResult<()> {
+        self.inner.send_frame(frame).await
     }
 
     /// 停止所有网络活动
@@ -318,7 +364,10 @@ pub async fn start_listening(
     app_handle: tauri::AppHandle,
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<String, String> {
-    let addr = mgr.inner.start_listening().await
+    // 构造本端握手信息：HandshakeAck 需要携带本机 TLS 状态给对端
+    let local_info = crate::platform::local_handshake_info();
+    log::info!("[监听] 启动，local_tls={}", local_info.tls_enabled);
+    let addr = mgr.inner.start_listening(local_info).await
         .map_err(|e| e.to_string())?;
     let _ = app_handle.emit("connection-status", ConnectionEvent::listening(addr.port()));
     Ok(format!("已启动监听，端口 {}", addr.port()))

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.34">
+    <meta name="app-version" content="0.1.37">
     <title>KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -50,29 +50,29 @@
     <div id="accessibility-overlay" class="accessibility-overlay hidden">
         <div class="accessibility-overlay-card">
             <div class="accessibility-overlay-icon">🔐</div>
-            <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
-            <p class="accessibility-overlay-desc">
+            <h2 class="accessibility-overlay-title" data-i18n="overlayTitle">需要辅助功能权限</h2>
+            <p class="accessibility-overlay-desc" data-i18n="overlayDesc">
                 KVMini 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
                 请在系统设置中授权后，应用将自动继续。
             </p>
             <div class="accessibility-overlay-steps">
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">1</span>
-                    <span>点击下方"前往授权"按钮</span>
+                    <span data-i18n="overlayStep1">点击下方"前往授权"按钮</span>
                 </div>
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">2</span>
-                    <span>在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
+                    <span data-i18n="overlayStep2">在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
                 </div>
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">3</span>
-                    <span>返回应用，权限授予后自动继续</span>
+                    <span data-i18n="overlayStep3">返回应用，权限授予后自动继续</span>
                 </div>
             </div>
-            <button id="open-accessibility-btn" class="btn btn-accessibility-overlay">
+            <button id="open-accessibility-btn" class="btn btn-accessibility-overlay" data-i18n="btnGoAuthorize">
                 前往授权 →
             </button>
-            <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
+            <p class="accessibility-overlay-hint" id="accessibility-polling-hint" data-i18n="overlayPollingHint">
                 ⏳ 等待授权中，授权后将自动继续...
             </p>
         </div>
@@ -234,7 +234,7 @@
                         <input type="text" id="manual-ip-input" class="manual-ip-input" placeholder="请输入目标设备 IP 地址"
                             data-i18n-placeholder="manualIpPlaceholder" maxlength="15">
                         <input type="number" id="manual-port-input" class="manual-port-input" placeholder="端口"
-                            value="8889" min="1024" max="65535">
+                            min="1024" max="65535">
                         <button id="manual-connect-btn" class="btn btn-manual-connect"
                             data-i18n="btnManualConnect">连接</button>
                     </div>
@@ -472,7 +472,7 @@
                                 </div>
                                 <div class="settings-item">
                                     <label data-i18n="labelListenPort">监听端口:</label>
-                                    <input type="number" id="listen-port-input" class="settings-input-number" value="8889"
+                                    <input type="number" id="listen-port-input" class="settings-input-number"
                                         min="1024" max="65535" placeholder="1024-65535">
                                 </div>
                                 <div class="settings-item">

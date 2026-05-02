@@ -1,4 +1,6 @@
 import { incrementVersion, validateVersion } from '../scripts/version-update';
+// decideBumpAction 是纯函数，直接 require 取避免 TS 类型限制
+const { decideBumpAction } = require('../scripts/version-update');
 
 // 版本管理测试套件
 describe('Version Manager', () => {
@@ -210,5 +212,88 @@ describe('generate-latest-json', () => {
     expect(result.platforms['darwin-aarch64'].signature).toBe('new-sig');
     expect(result.platforms['darwin-aarch64'].url).toBe('https://example.com/new.tar.gz');
     expect(Object.keys(result.platforms)).toHaveLength(1);
+  });
+});
+
+// decideBumpAction 纯函数测试：核心版本号决策逻辑
+// 回归场景：v0.1.35 情况下 build.sh 又把版本 bump 到 v0.1.36 造成跳号
+describe('decideBumpAction', () => {
+  test('current tag not exists → skip bump, use current version (exit 0)', () => {
+    // 场景：用户手动改了 package.json 到目标发布版（如 0.1.35），尚未发布
+    const result = decideBumpAction({
+      currentVersion: '0.1.35',
+      currentTagExists: false,
+      nextTagExists: false,
+      bumpDisabled: false,
+    });
+    expect(result.action).toBe('skip');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.exitCode).toBe(0);
+  });
+
+  test('current tag exists and next tag not exists → bump to next (exit 0)', () => {
+    // 场景：当前版本已发布，需要出新版本
+    const result = decideBumpAction({
+      currentVersion: '0.1.34',
+      currentTagExists: true,
+      nextTagExists: false,
+      bumpDisabled: false,
+    });
+    expect(result.action).toBe('bump');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.exitCode).toBe(0);
+  });
+
+  test('both tags exist → bump to match existing tag (exit 2)', () => {
+    // 场景：另一平台先构建 next 版本并 push tag，本地代码还是旧版
+    const result = decideBumpAction({
+      currentVersion: '0.1.34',
+      currentTagExists: true,
+      nextTagExists: true,
+      bumpDisabled: false,
+    });
+    expect(result.action).toBe('bump');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.exitCode).toBe(2);
+  });
+
+  test('BUMP_VERSION=0 + current tag not exists → skip, exit 0', () => {
+    // 场景：用户强制不 bump，当前版本未发布
+    const result = decideBumpAction({
+      currentVersion: '0.1.35',
+      currentTagExists: false,
+      nextTagExists: false,
+      bumpDisabled: true,
+    });
+    expect(result.action).toBe('skip');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.exitCode).toBe(0);
+  });
+
+  test('BUMP_VERSION=0 + current tag exists → skip, exit 2', () => {
+    // 场景：强制不 bump，但当前版本已发布（跳过 tag 创建）
+    const result = decideBumpAction({
+      currentVersion: '0.1.35',
+      currentTagExists: true,
+      nextTagExists: false,
+      bumpDisabled: true,
+    });
+    expect(result.action).toBe('skip');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.exitCode).toBe(2);
+  });
+
+  test('regression: v0.1.35 未发布时不应跳到 v0.1.36', () => {
+    // 严格复现报告 bug：手动改 package.json 到 0.1.35、写好 changelog 后跑 build.sh
+    // 期望：保持 0.1.35 作为发布版本，不要再 bump
+    const result = decideBumpAction({
+      currentVersion: '0.1.35',
+      currentTagExists: false,
+      nextTagExists: false,
+      bumpDisabled: false,
+    });
+    expect(result.targetVersion).not.toBe('0.1.36');
+    expect(result.targetVersion).toBe('0.1.35');
+    expect(result.action).toBe('skip');
   });
 });
