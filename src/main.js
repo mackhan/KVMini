@@ -399,7 +399,7 @@ function setupEventListeners() {
                 if (peerIp && elements.connectedDevice) {
                     elements.connectedDevice.textContent = peerIp;
                 }
-                showSuccess(message || `已连接到 ${peerIp}`);
+                showSuccess(message || window.i18n.t('msgConnectedToIp').replace('{ip}', peerIp || ''));
                 updateConnectionButtons(true);
                 // 显示连接详情面板
                 updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
@@ -413,7 +413,7 @@ function setupEventListeners() {
                 if (peerIp && elements.connectedDevice) {
                     elements.connectedDevice.textContent = peerIp;
                 }
-                showSuccess(message || '重连成功');
+                showSuccess(message || window.i18n.t('msgReconnectSuccessDefault'));
                 updateConnectionButtons(true);
                 // 显示连接详情面板
                 updateConnectionDetailPanel({ connected: true, peer_ip: peerIp });
@@ -427,7 +427,7 @@ function setupEventListeners() {
                 if (elements.connectedDevice) {
                     elements.connectedDevice.textContent = '-';
                 }
-                showReconnectToast(message || '连接已断开');
+                showReconnectToast(message || window.i18n.t('msgConnectionLostDefault'));
                 updateConnectionButtons(false);
                 // 隐藏连接详情面板
                 updateConnectionDetailPanel({ connected: false });
@@ -444,7 +444,7 @@ function setupEventListeners() {
                 const banner = document.getElementById('tls-mismatch-banner');
                 const msgEl = document.getElementById('tls-mismatch-msg');
                 if (banner && msgEl) {
-                    msgEl.textContent = message || 'TLS 配置不一致，请检查双端设置';
+                    msgEl.textContent = message || window.i18n.t('msgTlsMismatchDefault');
                     banner.classList.remove('hidden');
                 }
                 // 连接状态区域显示警告图标
@@ -508,7 +508,7 @@ async function loadLocalIp() {
 
 // 处理断开连接
 async function handleDisconnect() {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     try {
         // 断开 TCP 连接（包括握手建立的连接），停止自动重连
@@ -521,23 +521,23 @@ async function handleDisconnect() {
         hideReconnectStatus();
         stopLatencyCheck();
         hidePermissionWarning();
-        showSuccess(t('msgDisconnectSuccess') || '已手动断开连接');
+        showSuccess(t('msgDisconnectSuccess') || t('msgDisconnectManual'));
         updateConnectionButtons(false);
     } catch (error) {
-        showError('断开连接错误: ' + error);
+        showError(window.i18n.t('errDisconnectPrefix') + error);
     }
 }
 
 // 处理手动重新连接
 async function handleReconnect() {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     try {
         setConnectionStatus('connecting');
-        showReconnectStatus('正在连接...');
+        showReconnectStatus(window.i18n.t('statusConnecting'));
         updateConnectionButtons(false);
         await invoke('reconnect_to_peer').catch(() => {});
     } catch (error) {
-        showError('重新连接失败: ' + error);
+        showError(window.i18n.t('errReconnectFailPrefix') + error);
     }
 }
 
@@ -558,11 +558,11 @@ function showReconnectStatus(message, attempt) {
         elements.reconnectStatusRow.style.display = '';
     }
     if (elements.reconnectStatusText) {
-        elements.reconnectStatusText.textContent = message || '正在重连...';
+        elements.reconnectStatusText.textContent = message || window.i18n.t('reconnectingText');
     }
     // 重连超过 10 次时显示 Toast 提示
     if (attempt && attempt === 11) {
-        showReconnectToast('重连失败，仍在后台尝试...');
+        showReconnectToast(window.i18n.t('msgReconnectFailRetrying'));
     }
 }
 
@@ -589,7 +589,7 @@ function showReconnectToast(message) {
 
 // 连接到特定设备
 async function connectToDevice(deviceId) {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
@@ -657,7 +657,7 @@ function hideManualConnectStatus() {
  */
 async function handleManualConnect() {
     // 需求 3.1：invoke 为 null 时显示错误提示
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
 
     const ip = elements.manualIpInput.value.trim();
     const port = parseInt(elements.manualPortInput.value, 10) || appState.defaults?.tcpPort || 23456;
@@ -737,7 +737,7 @@ async function handleManualConnect() {
 // 处理扫描按鈕
 async function handleScan() {
     if (appState.scanning) return;
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
 
     appState.scanning = true;
     setScanningState(true);
@@ -745,7 +745,7 @@ async function handleScan() {
     // 提示用户两阶段扫描（UDP广播 + 子网TCP扫描）可能需要几秒
     const { t } = window.i18n;
     if (elements.scanBtn) {
-        elements.scanBtn.title = t('scanningSubnet') || '正在扫描...（UDP广播 + 子网扫描）';
+        elements.scanBtn.title = t('scanningSubnetTip');
     }
 
     try {
@@ -972,7 +972,7 @@ function renderHistoryList(history) {
 }
 // 快速重连（自动发现设备）
 async function reconnectToDevice(deviceId, deviceName) {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     try {
         setConnectionStatus('connecting');
@@ -1147,9 +1147,9 @@ async function regenerateCert() {
             elements.localTlsFingerprint.title = fp || '';
         }
         if (certErrorRow) certErrorRow.classList.add('hidden');
-        showToast(t('certRegenSuccess') || '证书已重新生成');
+        showToast(t('certRegenSuccess'));
     } catch (e) {
-        showToast(t('certRegenFailed') || '证书重新生成失败');
+        showToast(t('certRegenFailed'));
     }
 }
 
@@ -1193,7 +1193,7 @@ async function tlsDisableAndRetry() {
         await invoke('connect_to_peer', { peerIp: appState.settings.peer_ip });
     } catch (e) {
         log.error('[TLS] 关闭 TLS 重试失败:', e);
-        showError('关闭 TLS 重试失败：' + (e instanceof Error ? e.message : String(e)));
+        showError(window.i18n.t('errDisableTlsRetryPrefix') + (e instanceof Error ? e.message : String(e)));
     }
 }
 
@@ -1215,7 +1215,7 @@ function showTlsConfirmDialog(address, fingerprint) {
         // 只显示前 47 个字符，完整指纹放 title
         fpEl.textContent = fingerprint ? fingerprint.substring(0, 47) + '...' : fingerprint;
         fpEl.title = fingerprint || '';
-        if (addrEl) addrEl.textContent = `对端地址：${address}`;
+        if (addrEl) addrEl.textContent = window.i18n.t('peerAddressPrefix') + address;
 
         modal.classList.remove('hidden');
 
@@ -1312,7 +1312,7 @@ async function saveSettings() {
             await invoke('save_settings', { config: appState.settings });
         } catch (e) {
             // 显示后端错误（如开机自启动注册失败）
-            showError(`设置保存失败: ${e}`);
+            showError(window.i18n.t('errSettingsSavePrefix') + e);
             return;
         }
 
@@ -1327,7 +1327,7 @@ async function saveSettings() {
                     console.warn('保存监听配置失败:', e);
                 }
             } else {
-                showError('监听端口范围应为 1024-65535');
+                showError(window.i18n.t('errPortRange'));
                 return;
             }
         }
@@ -1344,7 +1344,7 @@ async function saveSettings() {
             }
         } catch (e) {
             // 快捷键冲突或注册失败，显示提示但不阻止保存
-            showError(`快捷键注册失败: ${e}`);
+            showError(window.i18n.t('errHotkeyRegisterPrefix') + e);
         }
     }
 
@@ -1599,7 +1599,7 @@ async function loadListenConfig() {
         }
 
         // 保留默认的"所有网卡"选项，追加具体网卡
-        const defaultOption = '<option value="0.0.0.0">所有网卡（0.0.0.0，推荐）</option>';
+        const defaultOption = `<option value="0.0.0.0">${escapeHtml(window.i18n.t('optionAllInterfaces'))}</option>`;
         const ifaceOptions = interfaces.map(iface =>
             `<option value="${escapeHtml(iface.ip)}">${escapeHtml(iface.name)} (${escapeHtml(iface.ip)})</option>`
         ).join('');
@@ -1702,7 +1702,7 @@ function updateListenAddressDisplay(ip, port) {
     } else if (ip !== '0.0.0.0') {
         elements.listenAddressDisplay.textContent = `${ip}:${port}`;
     } else {
-        elements.listenAddressDisplay.textContent = `本机IP:${port}`;
+        elements.listenAddressDisplay.textContent = `${window.i18n.t('labelLocalIpShort')}${port}`;
     }
 }
 
@@ -1780,10 +1780,10 @@ function startLatencyCheck() {
                 // 延迟颜色：>100ms 红色，>50ms 黄色，否则绿色
                 if (latency > 100) {
                     elements.latency.style.color = '#ef4444';
-                    elements.latency.title = '网络延迟过高，使用体验可能受到严重影响';
+                    elements.latency.title = window.i18n.t('latencyTipCritical');
                 } else if (latency > 50) {
                     elements.latency.style.color = '#d97706';
-                    elements.latency.title = '网络延迟较高，可能影响使用体验';
+                    elements.latency.title = window.i18n.t('latencyTipHigh');
                 } else {
                     elements.latency.style.color = '#10b981';
                     elements.latency.title = '';
@@ -1842,7 +1842,7 @@ function updateConnectionDetailPanel(data) {
     const tlsEl = document.getElementById('detail-tls-status');
     if (tlsEl) {
         const tlsEnabled = appState.settings?.enable_tls !== false;
-        tlsEl.textContent = tlsEnabled ? '🔒 TLS 加密' : '⚠️ 未加密';
+        tlsEl.textContent = tlsEnabled ? window.i18n.t('tlsBadgeOn') : window.i18n.t('tlsBadgeOff');
         tlsEl.className = `detail-value ${tlsEnabled ? 'tls-on' : 'tls-off tls-warning'}`;
     }
 
@@ -1888,7 +1888,7 @@ async function handleConnectionLost() {
         appState.connected = false;
         setConnectionStatus('disconnected');
         showError(window.i18n.t('reconnectFailed').replace('{max}', MAX_RECONNECT_ATTEMPTS));
-        window.Platform.showNotification('KVMini', '连接已断开，请手动重连').catch(() => {});
+        window.Platform.showNotification('KVMini', window.i18n.t('notifyDisconnectedManualRetry')).catch(() => {});
         return;
     }
 
@@ -2010,7 +2010,7 @@ function updateSharingButtonForState(state) {
 
 // 处理「开始/停止共享」按钮点击：直接 toggle，由后端状态机决定方向
 async function handleToggleSharing() {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     try {
         console.log('[KVMini] toggle sharing 请求');
@@ -2078,7 +2078,7 @@ function escapeHtml(str) {
                 const errorToast = document.getElementById('error-toast');
                 const errorMessage = document.getElementById('error-message');
                 if (errorToast && errorMessage) {
-                    errorMessage.textContent = 'Tauri 环境初始化失败，请重启应用';
+                    errorMessage.textContent = window.i18n.t('errTauriInitFailed');
                     errorToast.classList.remove('hidden');
                 }
                 return;
@@ -2166,8 +2166,8 @@ function renderMonitorLayout(localMonitors, remoteMonitors, layout) {
         remoteGroup.innerHTML = `
             <div class="monitor-block remote-placeholder"
                  style="left:0;top:0;width:${placeholderW}px;height:${placeholderH}px;"
-                 title="远端设备（未连接）">
-                <span class="monitor-block-label">远端</span>
+                 title="${escapeHtml(window.i18n.t('monitorRemoteDisconnected'))}">
+                <span class="monitor-block-label">${escapeHtml(window.i18n.t('labelRemoteMonitor'))}</span>
             </div>
         `;
     }
@@ -2224,18 +2224,29 @@ function renderMonitorGroup(groupEl, monitors, bbox, scale, isLocal) {
             : 'remote-connected';
 
         const dpiPct = m.dpi_scale ? Math.round(m.dpi_scale * 100) : 100;
-        const tooltip = `${m.width}×${m.height} | DPI: ${dpiPct}% | 偏移: (${m.offset_x || 0}, ${m.offset_y || 0})`;
+        const tooltip = window.i18n.t('monitorTooltipTemplate')
+            .replace('{w}', String(m.width))
+            .replace('{h}', String(m.height))
+            .replace('{dpi}', String(dpiPct))
+            .replace('{x}', String(m.offset_x || 0))
+            .replace('{y}', String(m.offset_y || 0));
 
         // 方块内容：尺寸足够时显示分辨率文字
         const showLabel = w >= 50 && h >= 36;
         const showSize = w >= 55 && h >= 48;
 
+        const localLabel = isPrimary
+            ? window.i18n.t('labelLocalMonitor')
+            : window.i18n.t('labelSecondaryMonitor');
+        const remoteLabel = window.i18n.t('labelRemoteMonitor');
+        const primaryTag = window.i18n.t('labelPrimaryTag');
+
         return `
             <div class="monitor-block ${cssClass}"
                  style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;"
-                 title="${tooltip}">
-                ${showLabel ? `<span class="monitor-block-label">${isLocal ? (isPrimary ? '本机' : '副屏') : '远端'}</span>` : ''}
-                ${isPrimary ? `<span class="monitor-primary-tag">主</span>` : ''}
+                 title="${escapeHtml(tooltip)}">
+                ${showLabel ? `<span class="monitor-block-label">${escapeHtml(isLocal ? localLabel : remoteLabel)}</span>` : ''}
+                ${isPrimary ? `<span class="monitor-primary-tag">${escapeHtml(primaryTag)}</span>` : ''}
                 ${showSize ? `<span class="monitor-block-size">${m.width}×${m.height}</span>` : ''}
             </div>
         `;
@@ -2484,7 +2495,7 @@ let _pendingUpdate = null;
  * 手动点击"检查更新"按钮时调用
  */
 async function handleCheckUpdate() {
-    if (!invoke) { showError('Tauri 环境未就绪，请重启应用'); return; }
+    if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     const btn = elements.aboutCheckUpdateBtn;
     if (!btn || btn.disabled) return;
@@ -2664,10 +2675,7 @@ async function initAboutTab() {
     // 分享按钮
     elements.aboutShareBtn?.addEventListener('click', async () => {
         const { t } = window.i18n;
-        const locale = window.i18n.getLocale();
-        const shareText = locale === 'en'
-            ? 'KVMini - Cross-platform keyboard & mouse sharing tool, share one set of keyboard & mouse across multiple computers! https://kvmini.app'
-            : 'KVMini - 跨平台键鼠共享工具，让多台电脑共享一套键鼠！https://kvmini.app';
+        const shareText = t('shareText');
         try {
             await navigator.clipboard.writeText(shareText);
             showSuccess(t('shareCopied'));
