@@ -61,25 +61,15 @@ impl PasswordAuth {
     }
 }
 
-/// 简单的 SHA-256 哈希实现（使用标准库）
-/// 注意：生产环境应使用 sha2 crate，这里用简化版本避免额外依赖
+/// 真 SHA-256 哈希（使用 `sha2` crate）
+///
+/// v0.1.38 组 C-4 起改为真 SHA-256；此前是 DJB2 变体的"伪哈希"，
+/// 导致与 TLS 指纹模型对不上号，且理论上存在碰撞风险。
 fn sha256_hash(input: &str) -> Vec<u8> {
-    // 使用 DJB2 变体作为简化哈希（后续可替换为 sha2 crate）
-    let mut hash: [u8; 32] = [0; 32];
-    let mut h: u64 = 5381;
-    for (i, byte) in input.bytes().enumerate() {
-        h = h.wrapping_mul(33).wrapping_add(byte as u64);
-        hash[i % 32] ^= (h & 0xFF) as u8;
-    }
-    // 多轮混合
-    for round in 0..4 {
-        for i in 0..32 {
-            let prev = hash[(i + 31) % 32] as u64;
-            let curr = hash[i] as u64;
-            hash[i] = ((curr.wrapping_mul(33).wrapping_add(prev).wrapping_add(round)) & 0xFF) as u8;
-        }
-    }
-    hash.to_vec()
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    hasher.finalize().to_vec()
 }
 
 #[cfg(test)]
@@ -135,5 +125,22 @@ mod tests {
         let h1 = sha256_hash("hello");
         let h2 = sha256_hash("world");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_matches_real_sha256_vector() {
+        // 真 SHA-256("hello") 的已知向量
+        let h = sha256_hash("hello");
+        assert_eq!(
+            hex::encode(&h),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn test_hash_output_is_32_bytes() {
+        assert_eq!(sha256_hash("").len(), 32);
+        assert_eq!(sha256_hash("a").len(), 32);
+        assert_eq!(sha256_hash("long input string ....").len(), 32);
     }
 }
