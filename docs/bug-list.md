@@ -425,3 +425,58 @@
 | **测试用例** | `src-tauri/src/network_scan.rs::tests`（6 用例：is_vpn_iface 各前缀 / compute_broadcast /24 与 /16 / list_lan_ipv4_ifaces 不为空 / detect_vpn_ifaces）+ `__tests__/i18n.test.ts` 新增 vpnInterferenceTip / firewallBlockTipMacos / firewallBlockTipWindows 三个 key 中英双语完整性校验 |
 | **关键教训** | UDP 广播在多接口/VPN 环境下必须显式 bind 物理网卡 IP 才能保证从该网卡出去；255.255.255.255 受系统路由表影响不可靠；扫描失败必须给用户**可执行**的诊断信息（具体命令），不能只说"未发现设备" |
 
+
+---
+
+## Bug #023：试用商业化伪装绕过测试（v0.1.37→v0.1.38）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 之前 v0.1.37 为了快速绕过试用到期，前端把购买/试用 UI 全屏蔽，但 `updateSmartStatus` 的加密徽章 tooltip 仍然写「🔒 TLS 加密」，容易让用户误以为数据已经加密 |
+| **根因** | i18n 文案与真实功能不一致：TLS 当前只是握手时交换一个 `tls_enabled` 协商位，应用层数据仍是明文；徽章 tooltip 过度承诺 |
+| **修改方式** | 修改 `src/i18n.js` 的 `tlsBadgeOn/tlsBadgeOff`（zh/en）为诚实表述：「🔒 TLS 兼容模式（数据暂未加密，将在 v0.1.39 启用真实 TLS 加密）」；changelog 同步披露 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **关键教训** | 文案必须对真实能力负责：宁可显示"兼容模式"也不能让用户误以为端到端已加密 |
+
+---
+
+## Bug #024：连接详情面板与智能状态面板重复渲染
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 主界面连接成功后，存在两个显示相同信息（本机/对端/延迟/证书指纹）的面板：顶部的 `#smart-status-panel` + 下方的 `#connection-detail-panel`，信息重复、UI 杂乱 |
+| **根因** | 历史迭代中分两次实现了连接状态显示，没有及时合并；每次状态变更要在两处分别 `updateConnectionDetailPanel` 和状态面板，容易漏掉一处 |
+| **修改方式** | 按奥卡姆剃刀原则合并：1. `src/index.html` 删除整块 `#connection-detail-panel`；主面板 `.status-panel` 改名为 `#smart-status-panel`，加入 `#encryption-badge` 和 `<details id="peer-fingerprint-details">` 子元素；2. `src/main.js` 新增 `updateSmartStatus(data)` 统一入口，删除 `updateConnectionDetailPanel/updateDetailLatency/toggleConnectionDetail`；3. `src/i18n.js` 删除冗余 key（detailTitle/detailLocal/detailPeer/detailEncryption/detailLatency），保留 `detailCertFingerprint`；4. `src/styles.css` 删除旧面板样式，新增 `.encryption-badge` 与 `.status-fingerprint-details` |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/smart-status-panel.test.ts`（7 用例：`#connection-detail-panel` 已删除、`#smart-status-panel` 存在、徽章存在、`updateSmartStatus` 导出、🔒/⚠️ 文案、details 包裹指纹） |
+| **关键教训** | 状态显示类 UI 必须有单一数据入口，重复实现既浪费心智又容易产生一致性 bug |
+
+---
+
+## Bug #025：src/main.js 与 index.html 中残留硬编码中文
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 尽管 v0.1.34 已经接入 i18n，切换到英文后仍有若干控件（未保存提示、错误气泡的默认文案、部分输入框 placeholder）显示中文 |
+| **根因** | 新增功能时偷懒直接写字面量（例如 `textContent = '重连中...'` 或 `<span>未保存</span>`），绕过了 `t()` 和 `data-i18n` |
+| **修改方式** | 新增 `__tests__/i18n-hardcode-guard.test.ts` 回归守卫：静态扫描 `src/main.js` 和 `src/index.html`，禁止出现汉字字符（白名单注释除外）；按报错逐条加 i18n key + 改用 `t(...)`/`data-i18n` |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/i18n-hardcode-guard.test.ts` |
+| **关键教训** | 依赖人工审查不可靠，必须有静态守卫；每次 PR 前跑 `npm test -- i18n-hardcode-guard` |
+
+---
+
+## Bug #026：设置页未保存红点缺乏语义提示
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 切换设置 tab 时看到某个 tab 标题右上角有小红点，但不知道代表什么；保存按钮也没有对应反馈 |
+| **根因** | `markDirty()` 只是给 tab 加了 `.has-dirty` CSS 类显示红点，没有 tooltip；保存按钮也没有脉冲动画提示「有待保存的修改」 |
+| **修改方式** | 1. `src/i18n.js` 新增 `tabDirtyTooltip`（zh: "此分类下有未保存的修改" / en: "Unsaved changes in this section"）；2. `src/settings-tabs.js` 的 `markDirty/clearDirty` 额外同步 button 的 `title` 属性；3. 抽出 `_syncSaveButtonDirtyClass()`，任一 tab dirty 时给 `#settings-save-btn` 加 `.btn-save-dirty`；4. `src/styles.css` 新增 `@keyframes save-pulse` 和 `.btn-save-dirty` 规则实现呼吸动画 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/settings-dirty-tooltip.test.ts`（4 用例：i18n key 存在、button.title 同步、`.btn-save-dirty` class 联动、`save-pulse` keyframes 存在） |
+| **关键教训** | UI 反馈必须明示语义；红点/徽章类纯视觉信号必须配合 tooltip 或动画传递含义 |

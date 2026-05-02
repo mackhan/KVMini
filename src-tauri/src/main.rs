@@ -944,6 +944,26 @@ fn set_locale(locale: String) -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.38".to_string(),
+            date: "2026-05-02".to_string(),
+            changes: vec![
+                "i18n 残留清扫：消除 src/main.js 与 src/index.html 中所有硬编码中文，新增「未保存修改」相关中英双字典 key".to_string(),
+                "设置页未保存红点改为有语义：hover 显示「此分类下有未保存的修改」tooltip，保存按钮同步脉冲动画提示".to_string(),
+                "新增 kvm-core::tls 模块：自签证书（rcgen）+ 真 SHA-256 指纹（sha2），原 DJB2 伪哈希替换为真实哈希".to_string(),
+                "证书生成/指纹计算下沉到 kvm-core，src-tauri 不再直接依赖 rcgen/sha2/hex".to_string(),
+                "连接状态面板去重：删除重复的「连接详情面板」，合并到主状态面板的加密徽章 + 指纹折叠区".to_string(),
+                "（诚实披露）当前 TLS 握手仅做协商位交换，应用层数据加密预计在 v0.1.39 启用；状态面板徽章 tooltip 已明确标注".to_string(),
+            ],
+            changes_en: vec![
+                "i18n sweep: eliminated all hard-coded Chinese in src/main.js and src/index.html; added paired zh/en keys for the unsaved-changes flow".to_string(),
+                "Settings page unsaved-dot is now semantic: hover shows 'Unsaved changes in this section' tooltip, save button pulses in sync".to_string(),
+                "New kvm-core::tls module: self-signed certificate (rcgen) + real SHA-256 fingerprint (sha2); replaced DJB2 pseudo-hash with real SHA-256".to_string(),
+                "Certificate generation / fingerprint computation moved into kvm-core; src-tauri no longer directly depends on rcgen/sha2/hex".to_string(),
+                "Connection status panel dedup: removed the duplicated 'connection detail panel' and merged it into the main panel as an encryption badge + collapsible fingerprint block".to_string(),
+                "(Honest disclosure) Current TLS handshake only exchanges a negotiation flag; real application-data encryption is planned for v0.1.39. The status-panel badge tooltip states this clearly".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.37".to_string(),
             date: "2026-05-01".to_string(),
             changes: vec![
