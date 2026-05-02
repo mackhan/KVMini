@@ -2293,9 +2293,12 @@ name = "kvm-core"
 version = "0.1.37"
 dependencies = [
  "bincode",
+ "hex",
  "log",
+ "rcgen",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
 ]

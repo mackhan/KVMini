@@ -13,3 +13,7 @@ tokio = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 bincode = { workspace = true }
+# v0.1.38 组 C：真 TLS 证书与指纹
+rcgen = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
