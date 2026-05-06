@@ -944,23 +944,39 @@ fn set_locale(locale: String) -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
-            version: "0.1.38".to_string(),
-            date: "2026-05-02".to_string(),
+            version: "0.1.39".to_string(),
+            date: "2026-05-06".to_string(),
             changes: vec![
-                "i18n 残留清扫：消除 src/main.js 与 src/index.html 中所有硬编码中文，新增「未保存修改」相关中英双字典 key".to_string(),
-                "设置页未保存红点改为有语义：hover 显示「此分类下有未保存的修改」tooltip，保存按钮同步脉冲动画提示".to_string(),
-                "新增 kvm-core::tls 模块：自签证书（rcgen）+ 真 SHA-256 指纹（sha2），原 DJB2 伪哈希替换为真实哈希".to_string(),
-                "证书生成/指纹计算下沉到 kvm-core，src-tauri 不再直接依赖 rcgen/sha2/hex".to_string(),
-                "连接状态面板去重：删除重复的「连接详情面板」，合并到主状态面板的加密徽章 + 指纹折叠区".to_string(),
-                "（诚实披露）当前 TLS 握手仅做协商位交换，应用层数据加密预计在 v0.1.39 启用；状态面板徽章 tooltip 已明确标注".to_string(),
+                "BUG-031 修复：macOS 已授予「辅助功能」但未授予「输入监控」时，横幅依然提示「需要辅助功能权限」导致用户误判——横幅改为按缺失权限类型显示差异化文案".to_string(),
+                "权限横幅新增「前往设置」按钮，按缺失权限一键跳转到对应的系统偏好设置页（辅助功能 / 输入监控）".to_string(),
+                "输入监控权限授权后在横幅文案中明确提示必须完全退出 KVMini（Cmd+Q）再重新打开，权限才会生效（CGPreflightListenEventAccess 进程内缓存限制）".to_string(),
+                "i18n 新增 4 条 key 并中英双语同步：permissionWarningText / permissionWarningInputMonitoringText / permissionWarningBtnAccessibility / permissionWarningBtnInputMonitoring".to_string(),
             ],
             changes_en: vec![
-                "i18n sweep: eliminated all hard-coded Chinese in src/main.js and src/index.html; added paired zh/en keys for the unsaved-changes flow".to_string(),
-                "Settings page unsaved-dot is now semantic: hover shows 'Unsaved changes in this section' tooltip, save button pulses in sync".to_string(),
-                "New kvm-core::tls module: self-signed certificate (rcgen) + real SHA-256 fingerprint (sha2); replaced DJB2 pseudo-hash with real SHA-256".to_string(),
-                "Certificate generation / fingerprint computation moved into kvm-core; src-tauri no longer directly depends on rcgen/sha2/hex".to_string(),
-                "Connection status panel dedup: removed the duplicated 'connection detail panel' and merged it into the main panel as an encryption badge + collapsible fingerprint block".to_string(),
-                "(Honest disclosure) Current TLS handshake only exchanges a negotiation flag; real application-data encryption is planned for v0.1.39. The status-panel badge tooltip states this clearly".to_string(),
+                "Fix BUG-031: on macOS with Accessibility granted but Input Monitoring denied, the banner still said \"Accessibility permission required\", misleading users — banner now renders distinct text per missing permission kind".to_string(),
+                "Permission banner now has an action button that jumps directly to the correct System Settings pane (Accessibility or Input Monitoring) based on the missing permission".to_string(),
+                "Input Monitoring banner explicitly tells users they must fully quit KVMini (Cmd+Q) and relaunch for the newly granted permission to take effect (process-cached CGPreflightListenEventAccess limitation)".to_string(),
+                "i18n: added 4 new keys in sync across zh/en: permissionWarningText / permissionWarningInputMonitoringText / permissionWarningBtnAccessibility / permissionWarningBtnInputMonitoring".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.38".to_string(),
+            date: "2026-05-06".to_string(),
+            changes: vec![
+                "BUG-020 修复：扫描到设备后点击「连接」无响应——前端错误调用不存在的 connect_to_device 命令，已统一改为 connect_to_peer，手动连接、历史记录、重连三路径同步修复".to_string(),
+                "BUG-021 修复：端口默认值混乱——清除 main.js/index.html/history.js 所有硬编码 8889，启动时从后端 get_settings 读取 tcp_port 填充 appState.defaults.tcpPort；tcp_port==0 回退到 23456 真源值；保存监听端口后连接对话框默认值立即反映新值".to_string(),
+                "BUG-022 修复：共享开启后两台电脑同时响应键鼠——macOS CGEventTap 由 ListenOnly 改为 Default，按 AtomicU8 控制状态决定吞/放事件；Windows Low-Level Hook 对称实现；SharingManager 接入 EdgeDetector，鼠标触达布局边缘自动切换控制权；BlockInput/UnblockInput 分支真实调用 InputBlocker".to_string(),
+                "设置页通用分页新增「键鼠切换」分区：边缘触发开关 + 灵敏度（像素）输入框，保存后立即生效；i18n 补齐 settings_kvm_section_title / settings_edge_trigger_enabled / settings_edge_threshold 等 key，中英双语同步".to_string(),
+                "save_settings 前端 payload 显式构造 snake_case 字段（edge_trigger / edge_threshold / switch_hotkey 等），使后端 AppConfig 正确反序列化，彻底告别历史 camelCase 被整体忽略的问题".to_string(),
+                "构建侧：轮换 updater minisign 公钥（新 key ID 6274F20D6F01A7A1），build.sh 为无密码签名增加 TAURI_SIGNING_PRIVATE_KEY_PASSWORD 空值兜底，解决 CI/非 TTY 环境 prompt 卡住".to_string(),
+            ],
+            changes_en: vec![
+                "Fix BUG-020: clicking Connect on a discovered device did nothing — the frontend was calling a non-existent connect_to_device command. Unified to connect_to_peer; manual connect, history reconnect and discover-list reconnect paths all fixed".to_string(),
+                "Fix BUG-021: port default chaos — removed all hard-coded 8889 from main.js / index.html / history.js; at startup the frontend reads tcp_port from get_settings into appState.defaults.tcpPort; tcp_port==0 falls back to 23456 (kvm-core source of truth); after saving listen port the connect dialog default reflects the new value immediately".to_string(),
+                "Fix BUG-022: both machines reacting to mouse/keyboard at the same time — switched macOS CGEventTap from ListenOnly to Default and swallow/pass events based on an AtomicU8 control state; symmetric Low-Level Hook implementation on Windows; SharingManager now drives EdgeDetector so the cursor hitting the configured layout edge auto-switches control; BlockInput/UnblockInput branches now actually call InputBlocker".to_string(),
+                "Settings: added a KVM Switching section under General — auto-edge-switch toggle + edge sensitivity (pixels) input, applied immediately on save; i18n adds settings_kvm_section_title / settings_edge_trigger_enabled / settings_edge_threshold etc., zh/en in sync".to_string(),
+                "Frontend save_settings now explicitly builds a snake_case payload (edge_trigger / edge_threshold / switch_hotkey …) so the Rust AppConfig deserializes correctly — the historical camelCase-gets-silently-ignored bug is finally gone".to_string(),
+                "Build: rotated updater minisign public key (new key id 6274F20D6F01A7A1); build.sh now exports an empty TAURI_SIGNING_PRIVATE_KEY_PASSWORD as a fallback for passwordless keys so CI / non-TTY environments no longer hang on a prompt".to_string(),
             ],
         },
         tauri_commerce::changelog::ChangelogEntry {

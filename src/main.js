@@ -166,6 +166,9 @@ async function initApp() {
         themeSelect: document.getElementById('theme-select'),
         // 剪贴板共享
         clipboardSync: document.getElementById('clipboard-sync'),
+        // KVM 键鼠切换（plan v0.1.38 BUG-022）
+        edgeTriggerToggle: document.getElementById('edge-trigger-toggle'),
+        edgeThresholdInput: document.getElementById('edge-threshold-input'),
         // TLS 加密
         enableTls: document.getElementById('enable-tls'),
         localTlsFingerprint: document.getElementById('local-tls-fingerprint'),
@@ -1251,6 +1254,22 @@ function loadSettingsToUI() {
     if (elements.clipboardSync) {
         elements.clipboardSync.checked = appState.settings.clipboardSync !== false;
     }
+    // 键鼠切换（plan v0.1.38 BUG-022）：兼容两种键名
+    //  - appState.settings.edgeTrigger / edgeThreshold（前端 camelCase）
+    //  - appState.settings.edge_trigger / edge_threshold（后端 snake_case）
+    if (elements.edgeTriggerToggle) {
+        const et = (appState.settings.edgeTrigger !== undefined)
+            ? appState.settings.edgeTrigger
+            : (appState.settings.edge_trigger !== undefined ? appState.settings.edge_trigger : true);
+        elements.edgeTriggerToggle.checked = et !== false;
+    }
+    if (elements.edgeThresholdInput) {
+        const threshold = (appState.settings.edgeThreshold !== undefined)
+            ? appState.settings.edgeThreshold
+            : (appState.settings.edge_threshold !== undefined ? appState.settings.edge_threshold : 5);
+        const clamped = Math.max(1, Math.min(50, parseInt(threshold, 10) || 5));
+        elements.edgeThresholdInput.value = String(clamped);
+    }
     // TLS 加密
     if (elements.enableTls) {
         elements.enableTls.checked = appState.settings.enableTls !== false;
@@ -1280,6 +1299,11 @@ async function saveSettings() {
         autoStart: elements.autoStart.checked,
         startMinimized: elements.startMinimized.checked,
         clipboardSync: elements.clipboardSync ? elements.clipboardSync.checked : true,
+        // 键鼠切换（plan v0.1.38 BUG-022）：camelCase 供前端消费
+        edgeTrigger: elements.edgeTriggerToggle ? elements.edgeTriggerToggle.checked : true,
+        edgeThreshold: elements.edgeThresholdInput
+            ? Math.max(1, Math.min(50, parseInt(elements.edgeThresholdInput.value, 10) || 5))
+            : 5,
         enableTls,
         language: elements.languageSelect ? elements.languageSelect.value : (appState.settings.language || 'zh'),
         theme: elements.themeSelect ? elements.themeSelect.value : (appState.settings.theme || 'auto'),
@@ -1309,7 +1333,22 @@ async function saveSettings() {
     // 如果 Tauri 可用，同步到后端
     if (invoke) {
         try {
-            await invoke('save_settings', { config: appState.settings });
+            // 后端 AppConfig 使用 snake_case 字段（kvm-core::config::KvmConfig 同名），
+            // 前端 appState.settings 是 camelCase，显式构造 snake_case payload 以便正确反序列化。
+            // 未纳入映射的字段 serde 默认值兜底（见 src-tauri/src/config.rs）。
+            const backendPayload = {
+                peer_ip: appState.settings.peerIp || '',
+                port: appState.defaults?.tcpPort || 23456,
+                switch_hotkey: appState.settings.hotkey || 'Ctrl+Alt+S',
+                edge_trigger: appState.settings.edgeTrigger !== false,
+                edge_threshold: Math.max(1, Math.min(50,
+                    parseInt(appState.settings.edgeThreshold, 10) || 5)),
+                clipboard_sync: appState.settings.clipboardSync !== false,
+                autostart: appState.settings.autoStart === true,
+                enable_tls: appState.settings.enableTls !== false,
+                auto_reconnect: appState.settings.autoReconnect !== false,
+            };
+            await invoke('save_settings', { config: backendPayload });
         } catch (e) {
             // 显示后端错误（如开机自启动注册失败）
             showError(window.i18n.t('errSettingsSavePrefix') + e);
@@ -1323,6 +1362,12 @@ async function saveSettings() {
             if (listenPort >= 1024 && listenPort <= 65535) {
                 try {
                     await window.Platform.setListenAddress(listenIp, listenPort);
+                    // plan v0.1.38：保存后同步更新 appState.defaults.tcpPort，
+                    // 让连接对话框、手动连接端口框默认值立即反映新值。
+                    appState.defaults = { ...(appState.defaults || {}), tcpPort: listenPort };
+                    if (elements.manualPortInput && !elements.manualPortInput.value) {
+                        elements.manualPortInput.value = listenPort;
+                    }
                 } catch (e) {
                     console.warn('保存监听配置失败:', e);
                 }
@@ -1487,9 +1532,17 @@ function applyI18n() {
     const noHistoryEl = document.querySelector('.no-history');
     if (noHistoryEl) noHistoryEl.textContent = t('noHistory');
 
-    // 更新权限警告文本
+    // 更新权限警告文本（BUG-031：按 data-i18n 动态 key 刷新，兼容 accessibility/input-monitoring 两种 kind）
     const permWarnText = document.querySelector('.permission-warning-text');
-    if (permWarnText) permWarnText.textContent = t('permissionWarningText');
+    if (permWarnText) {
+        const key = permWarnText.getAttribute('data-i18n') || 'permissionWarningText';
+        permWarnText.textContent = t(key);
+    }
+    const permWarnBtn = document.getElementById('permission-warning-btn');
+    if (permWarnBtn) {
+        const btnKey = permWarnBtn.getAttribute('data-i18n') || 'permissionWarningBtnAccessibility';
+        permWarnBtn.textContent = t(btnKey);
+    }
 
     // 更新语言选择器选项文本（确保选中项文本与当前语言一致）
     if (elements.languageSelect) {

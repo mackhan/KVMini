@@ -427,6 +427,29 @@ button, a, input, select, textarea, label, .toggle, .btn,
 .permission-warning-icon { font-size: 16px; flex-shrink: 0; }
 .permission-warning-text { flex: 1; line-height: 1.4; }
 
+/* BUG-031：权限横幅内联按钮 —— 一键打开对应的系统设置面板 */
+.permission-warning-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    background: rgba(255, 149, 0, 0.14);
+    border: 1px solid rgba(255, 149, 0, 0.35);
+    border-radius: 6px;
+    color: var(--color-warning);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+.permission-warning-btn:hover {
+    background: rgba(255, 149, 0, 0.22);
+    border-color: rgba(255, 149, 0, 0.5);
+}
+.permission-warning-btn:active {
+    transform: translateY(1px);
+}
+.permission-warning-btn.hidden { display: none; }
+
 /* ─── 控制按钮区 ───────────────────────────────────────────────────────────── */
 .controls {
     display: flex;

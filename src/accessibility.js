@@ -209,13 +209,13 @@ async function checkPermissionAfterConnect(elements, invoke) {
     try {
         const ax = await invoke('check_accessibility_permission');
         if (ax !== 'Granted') {
-            showPermissionWarning(elements);
+            showPermissionWarning(elements, 'accessibility');
             return;
         }
         try {
             const im = await invoke('check_input_monitoring_permission');
             if (im !== 'Granted' && im !== 'N/A') {
-                showPermissionWarning(elements);
+                showPermissionWarning(elements, 'input-monitoring');
                 return;
             }
         } catch {
@@ -227,9 +227,41 @@ async function checkPermissionAfterConnect(elements, invoke) {
     }
 }
 
-function showPermissionWarning(elements) {
+function showPermissionWarning(elements, kind = 'accessibility') {
+    const t = (window.i18n && window.i18n.t) ? window.i18n.t : (k) => k;
     if (elements?.permissionWarning) {
         elements.permissionWarning.classList.remove('hidden');
+        const textEl = elements.permissionWarning.querySelector('.permission-warning-text');
+        const btnEl = elements.permissionWarning.querySelector('.permission-warning-btn') ||
+                      document.getElementById('permission-warning-btn');
+        if (textEl) {
+            const textKey = kind === 'input-monitoring'
+                ? 'permissionWarningInputMonitoringText'
+                : 'permissionWarningText';
+            textEl.textContent = t(textKey);
+            textEl.setAttribute('data-i18n', textKey);
+        }
+        if (btnEl) {
+            const btnKey = kind === 'input-monitoring'
+                ? 'permissionWarningBtnInputMonitoring'
+                : 'permissionWarningBtnAccessibility';
+            btnEl.textContent = t(btnKey);
+            btnEl.setAttribute('data-i18n', btnKey);
+            btnEl.setAttribute('data-kind', kind);
+            btnEl.classList.remove('hidden');
+            // 幂等绑定：用 onclick 避免多次累积
+            const tauri = window.__TAURI__;
+            const invoke = tauri?.core?.invoke || tauri?.invoke || null;
+            btnEl.onclick = async () => {
+                if (!invoke) return;
+                const cmd = btnEl.getAttribute('data-kind') === 'input-monitoring'
+                    ? 'open_input_monitoring_settings'
+                    : 'open_accessibility_settings';
+                try { await invoke(cmd); } catch (e) {
+                    console.error('[Permission] 打开系统设置失败:', e);
+                }
+            };
+        }
     }
     if (elements?.startSharingBtn) {
         elements.startSharingBtn.disabled = true;
@@ -239,6 +271,8 @@ function showPermissionWarning(elements) {
 function hidePermissionWarning(elements) {
     if (elements?.permissionWarning) {
         elements.permissionWarning.classList.add('hidden');
+        const btnEl = elements.permissionWarning.querySelector('.permission-warning-btn');
+        if (btnEl) btnEl.classList.add('hidden');
     }
     if (elements?.startSharingBtn) {
         elements.startSharingBtn.disabled = false;

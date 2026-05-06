@@ -480,3 +480,59 @@
 | **出现次数** | 1 |
 | **测试用例** | `__tests__/settings-dirty-tooltip.test.ts`（4 用例：i18n key 存在、button.title 同步、`.btn-save-dirty` class 联动、`save-pulse` keyframes 存在） |
 | **关键教训** | UI 反馈必须明示语义；红点/徽章类纯视觉信号必须配合 tooltip 或动画传递含义 |
+
+---
+
+## Bug #028：扫描到设备点击「连接」没有任何响应（plan v0.1.38 BUG-020）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 在 v0.1.37 上，扫描到局域网内的另一台 KVMini 设备后，点「连接」按钮整个界面毫无反应，控制台只留下一句 `command not found: connect_to_device` |
+| **根因** | 前端 `connection.js` 和 `main.js` 共 4 处直接 `invoke('connect_to_device', { deviceId })`，但后端 Tauri 命令实际叫 `connect_to_peer`，且参数是 `{ peerIp, port }`。历史重构时命令名改了但前端漏改，discover / manual / history / reconnect 四条路径全被波及。扫描结果里带的是 `item.id`（格式 `name:ip:port`）而不是 IP，需要切分后再传。 |
+| **修改方式** | 1. `src/connection.js:148` 统一改为 `invoke('connect_to_peer', { peerIp, port })`；2. `src/main.js` 三处 `connect_to_device` 调用全部更换为 `window.Platform.connectByIp(ip, port)`（内部走 connect_to_peer）；3. 从 `deviceId` 中提取 IP（`parts[1]`），端口取 `appState.defaults.tcpPort`；4. `history.js / connection-detail-panel.js` 重连路径同步修正 |
+| **修改次数** | 1 |
+| **出现次数** | 1（v0.1.37 发版后被用户反馈） |
+| **测试用例** | `__tests__/connect-command.test.ts`（3 用例：前端源码不含 `connect_to_device`；所有 connect 调用使用 peerIp+port 参数；discover-item onClick 提取 IP 而非 deviceId） |
+| **关键教训** | 命令名重命名必须同时更新所有调用点，且有静态守卫（grep 禁止出现旧名）防止回归 |
+
+---
+
+## Bug #029：端口默认值混乱（8889 vs 23456）（plan v0.1.38 BUG-021）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 监听端口输入框默认显示 8889，手动连接端口输入框默认也是 8889，但 kvm-core 真源值是 23456；用户保存 23456 后下次打开对话框又弹回 8889；部分路径在 fallback 时又用 23456，整个默认端口体系自相矛盾 |
+| **根因** | 早期为了"快速可用"在 `main.js / index.html / history.js` 里写死了 `|| 8889` 和 `value="8889"`，共 8+ 处硬编码；后来 `KvmConfig::default().tcp_port` 改为 23456，但前端硬编码没清，导致"UI 默认值"和"后端真源"两套体系互相打架 |
+| **修改方式** | 1. 前端启动流程新增 `initializePortDefaults()`，从 `get_settings` 拉取 `tcp_port` 填入 `appState.defaults.tcpPort`（缺失/为 0 时 fallback 23456）；2. 所有 `|| 8889` 字面量一律改成 `appState.defaults?.tcpPort || 23456`；3. `index.html` 两处 `value="8889"` 删除，由 JS 启动后回填；4. 保存监听端口后同步更新 `appState.defaults.tcpPort`，连接对话框 / 手动连接输入框默认值立即反映新值；5. 新增 `save_settings` 前端 payload 显式构造 snake_case（含 `port`），使后端 AppConfig 能正确接收 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/port-defaults.test.ts`（UI 启动读 get_settings 填默认端口；HTML 不含硬编码 8889；tcp_port==0 时 fallback 23456） |
+| **关键教训** | 默认值必须有唯一真源（kvm-core），前端启动必须从后端拉取；字面量禁止写死端口号，统一从 `appState.defaults` 取 |
+
+---
+
+## Bug #030：开启「共享」后两台电脑同时响应键鼠（非真正 KVM）（plan v0.1.38 BUG-022）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 按「开始共享」后，本地键鼠输入会同时作用于两台电脑：对端能看到鼠标光标移动和键盘输入，但本地光标也在动、本地窗口也收到输入。等同于"广播"而不是"KVM 切换"。 |
+| **根因** | 两个独立问题叠加：① `MacInputCapture` 的 CGEventTap 使用了 `CGEventTapOptions::ListenOnly`，此模式下回调返回值被系统忽略，根本无法吞事件；② `SharingManager` 没有接入 `EdgeDetector`，鼠标触达屏幕边缘不会自动切换控制权（退化为"仅转发"）。此外 `StateEvent::BlockInput/UnblockInput` 分支是空 `{}`，从未调用 `InputBlocker`。 |
+| **修改方式** | 1. **输入屏蔽**：Mac 侧 `CGEventTapOptions::Default` + `Arc<AtomicU8>` 控制状态共享给回调线程，回调按状态返回 `Some(event)`（IDLE 放行）或 `None`（LocalControlling/RemoteControlling 吞掉）；`set_control_state(u8)` 暴露给 SharingManager；Windows Low-Level Hook 对称实现（`HOOK_CONTROL_STATE` thread_local + `should_swallow()`）；2. **边缘切换**：SharingManager 启动 capture 前构建 EdgeDetector（读 LayoutConfig + get_monitors_impl）；MouseMove 分支调用 `detector.detect(x, y)`，`EdgeDetectResult::Triggered` 时触发 `StateMachine::toggle_control` 并处理返回的 StateEvent 序列；3. **BlockInput 实现**：`handle_one` 中 BlockInput → `blocker.block_input()`, UnblockInput → `blocker.unblock_input()`；4. **状态镜像**：StateChanged 事件同步 capture.set_control_state + edge_detector.set_active，保证多线程状态一致 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/kvm-edge-switch.test.ts`（21 用例覆盖：CGEventTap 改 Default、AtomicU8 状态、set_control_state、Windows Hook、EdgeDetector 接入、BlockInput 非空实现、i18n 状态徽标 key、设置页 KVM 分区、snake_case payload）；Rust `sharing::tests::test_block_input_called_on_remote_controlling`、`input_capture::tests::test_idle_state_passes_event_through` |
+| **关键教训** | CGEventTap 的 `ListenOnly` vs `Default` 是 macOS 输入拦截的关键区分，文档写得并不显眼，只能靠源码注释和测试守护；跨线程状态共享在回调路径上必须用无锁原语（AtomicU8 + Relaxed），禁止 lock Mutex 以免阻塞实时输入流 |
+
+---
+
+## Bug #031：已授予辅助功能权限后横幅仍提示「需要辅助功能权限」且按钮不可点（v0.1.39 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | macOS 上用户在系统设置→隐私与安全性→「辅助功能」里已经打开 KVMini 的开关，但连接成功后的权限横幅仍显示"需要辅助功能权限才能开始键鼠共享，请先前往授权"，且「开始共享」按钮保持禁用状态，用户反复检查辅助功能开关也无法解决 |
+| **根因** | `checkPermissionAfterConnect` 同时校验 Accessibility + Input Monitoring 两种权限，任一 Denied 就调 `showPermissionWarning(elements)` 亮横幅，但 `permissionWarningText` 只写了"辅助功能"——当实际缺失的是「输入监控」时用户被完全误导。叠加两个次要问题：① 横幅没有「前往设置」按钮，用户只能按文案去找辅助功能开关（错误的那个）；② `CGPreflightListenEventAccess` 在进程内会缓存结果（`src-tauri/src/platform/macos/permission.rs:108` 已有注释），用户即使发现并授权了输入监控，不完全退出 KVMini 重启也永远 Denied |
+| **修改方式** | 1) `src/accessibility.js` 的 `showPermissionWarning(elements)` 签名扩展为 `(elements, kind='accessibility')`，按 kind 切换横幅文案和按钮 `data-kind`；`checkPermissionAfterConnect` 两条分支分别传 `'accessibility'` 和 `'input-monitoring'`；`hidePermissionWarning` 同步隐藏按钮；2) `src/i18n.js` 新增 4 条 key 并中英双语同步：`permissionWarningText`（仅辅助功能版本，措辞明确提到"辅助功能"）、`permissionWarningInputMonitoringText`（含"请完全退出 KVMini（Cmd+Q）再重新打开，权限才会生效"提示）、`permissionWarningBtnAccessibility`、`permissionWarningBtnInputMonitoring`；3) `src/index.html:165` 横幅块新增 `<button id="permission-warning-btn" data-kind="accessibility">`，由 JS 按 kind 切换 `data-kind` 和文案；4) 按钮 `onclick` 按 `data-kind` 路由到后端 `open_accessibility_settings` 或 `open_input_monitoring_settings`（后端零改动，复用已有命令） |
+| **修改次数** | 1 |
+| **出现次数** | 1（v0.1.38 发版后用户反馈） |
+| **测试用例** | `__tests__/permission-warning-kind.test.ts`（11 用例覆盖：zh/en 字典完整性 + 「输入监控」文案必须含"重启"/英文必须含"restart/relaunch" + kind=accessibility/input-monitoring 文案与按钮 data-kind 正确切换 + 不传 kind 默认 accessibility 向后兼容 + hidePermissionWarning 隐藏按钮 + 按钮点击按 kind 调对应 invoke 命令） |
+| **关键教训** | 混合多种权限时 UI 文案必须严格对应到具体缺失项，不能用"上位词"兜底；`CGPreflightListenEventAccess` 进程内缓存是物理事实，无法程序化刷新，只能把"必须重启"这一事实透明化告诉用户；按钮的"意图"应当写入 `data-kind` 等 HTML 属性而非隐式状态变量，这样 `onclick` 能通过读 DOM 稳定路由，避免闭包捕获过时值 |

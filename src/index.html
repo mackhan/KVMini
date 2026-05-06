@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.38">
+    <meta name="app-version" content="0.1.39">
     <title data-i18n="pageTitle">KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -164,7 +164,8 @@
         <!-- 连接成功后权限不足提示（仅 macOS 且权限未授予时显示） -->
         <div id="permission-warning" class="permission-warning hidden">
             <span class="permission-warning-icon">⚠️</span>
-            <span class="permission-warning-text" data-i18n="permissionWarningText">需要辅助功能权限才能开始键鼠共享，请先前往授权</span>
+            <span class="permission-warning-text" data-i18n="permissionWarningText">需要「辅助功能」权限才能开始键鼠共享，请点击右侧按钮前往系统设置授权</span>
+            <button id="permission-warning-btn" class="permission-warning-btn hidden" data-kind="accessibility" data-i18n="permissionWarningBtnAccessibility">前往辅助功能设置</button>
         </div>
 
         <!-- 控制按钮 -->
@@ -313,6 +314,24 @@
                                     </div>
                                     <p class="feature-hint" data-i18n="hotkeyHint">按下此快捷键可在本机和远端之间切换键鼠控制权</p>
                                 </div>
+                            </div>
+
+                            <!-- 键鼠切换（plan v0.1.38 BUG-022） -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settings_kvm_section_title">键鼠切换</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="settings_edge_trigger_enabled">鼠标触达边缘时自动切换:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="edge-trigger-toggle" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="settings-item">
+                                    <label data-i18n="settings_edge_threshold">边缘触发灵敏度（像素）:</label>
+                                    <input type="number" id="edge-threshold-input" class="settings-input-number"
+                                        min="1" max="50" value="5">
+                                </div>
+                                <p class="feature-hint" data-i18n="hintEdgeTrigger">关闭后仅能通过全局快捷键切换。建议保持开启以获得无缝跨屏体验。</p>
                             </div>
 
                             <!-- 连接偏好 -->

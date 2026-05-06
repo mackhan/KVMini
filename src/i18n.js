@@ -27,6 +27,11 @@ const MESSAGES = {
     controlStateLocal: '正在控制对方',
     controlStateRemote: '对方正在控制本机',
 
+    // 控制状态徽标（plan v0.1.38 BUG-022：与 controlState* 对齐的 snake_case 别名）
+    status_idle: '各自独立',
+    status_local_controlling: '正在控制对方',
+    status_remote_controlling: '对方正在控制本机',
+
     // 控制按钮
     btnScanDevices: '扫描设备',
     btnDisconnect: '断开连接',
@@ -75,8 +80,11 @@ const MESSAGES = {
     hintMouseEdge: '💡 提示：连接成功后，将鼠标移到屏幕右边缘即可切换到 Mac 控制模式',
     hintHotkey: '💡 按 Ctrl+Alt+Tab 切换回 Windows 本地控制',
 
-    // 权限警告
-    permissionWarningText: '需要辅助功能权限才能开始键鼠共享，请先前往授权',
+    // 权限警告（BUG-031 按权限类型分开）
+    permissionWarningText: '需要「辅助功能」权限才能开始键鼠共享，请点击右侧按钮前往系统设置授权',
+    permissionWarningInputMonitoringText: '需要「输入监控」权限才能开始键鼠共享。授权后请完全退出 KVMini（Cmd+Q）再重新打开，权限才会生效',
+    permissionWarningBtnAccessibility: '前往辅助功能设置',
+    permissionWarningBtnInputMonitoring: '前往输入监控设置',
 
     // 辅助功能权限遮罩
     overlayTitle: '需要辅助功能权限',
@@ -99,6 +107,12 @@ const MESSAGES = {
     placeholderHotkey: '点击此处录入快捷键',
     hotkeyPlaceholder: '点击此处录入快捷键（默认：Ctrl+Alt+S）',
     btnClearHotkey: '清除',
+
+    // 键鼠切换分区（plan v0.1.38 BUG-022）
+    settings_kvm_section_title: '键鼠切换',
+    settings_edge_trigger_enabled: '鼠标触达边缘时自动切换:',
+    settings_edge_threshold: '边缘触发灵敏度（像素）:',
+    hintEdgeTrigger: '关闭后仅能通过全局快捷键切换。建议保持开启以获得无缝跨屏体验。',
 
     settingsConnection: '连接偏好',
     titleConnectionPrefs: '连接偏好',
@@ -397,6 +411,11 @@ const MESSAGES = {
     controlStateLocal: 'Controlling Remote',
     controlStateRemote: 'Remote Controlling',
 
+    // Control state badge (plan v0.1.38 BUG-022: snake_case aliases aligned with controlState*)
+    status_idle: 'Independent',
+    status_local_controlling: 'Controlling Remote',
+    status_remote_controlling: 'Remote Controlling',
+
     // Control buttons
     btnScanDevices: 'Scan Devices',
     btnDisconnect: 'Disconnect',
@@ -445,8 +464,11 @@ const MESSAGES = {
     hintMouseEdge: '💡 Tip: After connecting, move the mouse to the right edge to switch to Mac control',
     hintHotkey: '💡 Press Ctrl+Alt+Tab to switch back to Windows local control',
 
-    // Permission warning
-    permissionWarningText: 'Accessibility permission is required to start sharing. Please authorize first.',
+    // Permission warning (BUG-031: distinguish permission kinds)
+    permissionWarningText: 'Accessibility permission is required to start sharing. Click the button on the right to open System Settings.',
+    permissionWarningInputMonitoringText: 'Input Monitoring permission is required to start sharing. After authorizing, please fully quit KVMini (Cmd+Q) and relaunch for the permission to take effect.',
+    permissionWarningBtnAccessibility: 'Open Accessibility Settings',
+    permissionWarningBtnInputMonitoring: 'Open Input Monitoring Settings',
 
     // Accessibility overlay
     overlayTitle: 'Accessibility Permission Required',
@@ -469,6 +491,12 @@ const MESSAGES = {
     placeholderHotkey: 'Click here to record hotkey',
     hotkeyPlaceholder: 'Click here to record hotkey (default: Ctrl+Alt+S)',
     btnClearHotkey: 'Clear',
+
+    // KVM switch section (plan v0.1.38 BUG-022)
+    settings_kvm_section_title: 'KVM Switching',
+    settings_edge_trigger_enabled: 'Auto-switch when cursor hits edge:',
+    settings_edge_threshold: 'Edge trigger sensitivity (pixels):',
+    hintEdgeTrigger: 'When disabled, only the global hotkey can switch control. Keep enabled for seamless cross-screen experience.',
 
     settingsConnection: 'Connection Preferences',
     titleConnectionPrefs: 'Connection Preferences',
