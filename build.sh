@@ -131,6 +131,10 @@ if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
     exit 1
 fi
 
+# 兜底：即使 updater key 无密码，也必须 export 该变量（即便为空字符串）
+# 否则 tauri-cli 在非 TTY 环境会尝试交互式 prompt 密码，导致 "Device not configured (os error 6)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+
 # 智能版本号管理：检测 tag，决定是否 bump
 TAG_EXISTS=false
 log_info "检查版本号..."
