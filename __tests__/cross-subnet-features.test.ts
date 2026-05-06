@@ -36,9 +36,12 @@ describe('手动连接 UI - HTML 结构', () => {
         expect(status!.classList.contains('hidden')).toBe(true);
     });
 
-    test('端口输入框默认值为 8889', () => {
+    test('端口输入框存在且类型为 number（默认值由 JS 启动时从 Platform.getSettings 填充）', () => {
         const portInput = document.getElementById('manual-port-input') as HTMLInputElement;
-        expect(portInput.value).toBe('8889');
+        expect(portInput).not.toBeNull();
+        expect(portInput.type).toBe('number');
+        // BUG-021：不再硬编码 8889；实际默认由 appState.defaults.tcpPort（23456）填充
+        expect(portInput.value).not.toBe('8889');
     });
 
     test('IP 输入框有合适的 placeholder', () => {
@@ -185,9 +188,12 @@ describe('设置面板 - 监听地址配置 UI', () => {
         expect(hasAllInterfaces).toBe(true);
     });
 
-    test('监听端口输入框默认值为 8889', () => {
+    test('监听端口输入框存在且类型为 number（默认值由 JS 启动时从 Platform.getSettings 填充）', () => {
         const portInput = document.getElementById('listen-port-input') as HTMLInputElement;
-        expect(portInput.value).toBe('8889');
+        expect(portInput).not.toBeNull();
+        expect(portInput.type).toBe('number');
+        // BUG-021：不再硬编码 8889
+        expect(portInput.value).not.toBe('8889');
     });
 
     test('监听端口输入框范围限制为 1024-65535', () => {

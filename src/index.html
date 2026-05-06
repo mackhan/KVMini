@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.30">
-    <title>KVMini - 跨平台键鼠共享</title>
+    <meta name="app-version" content="0.1.38">
+    <title data-i18n="pageTitle">KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
     <script>
@@ -50,29 +50,29 @@
     <div id="accessibility-overlay" class="accessibility-overlay hidden">
         <div class="accessibility-overlay-card">
             <div class="accessibility-overlay-icon">🔐</div>
-            <h2 class="accessibility-overlay-title">需要辅助功能权限</h2>
-            <p class="accessibility-overlay-desc">
+            <h2 class="accessibility-overlay-title" data-i18n="overlayTitle">需要辅助功能权限</h2>
+            <p class="accessibility-overlay-desc" data-i18n="overlayDesc">
                 KVMini 需要<strong>辅助功能（Accessibility）权限</strong>才能捕获和注入键盘鼠标事件。<br>
                 请在系统设置中授权后，应用将自动继续。
             </p>
             <div class="accessibility-overlay-steps">
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">1</span>
-                    <span>点击下方"前往授权"按钮</span>
+                    <span data-i18n="overlayStep1">点击下方"前往授权"按钮</span>
                 </div>
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">2</span>
-                    <span>在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
+                    <span data-i18n="overlayStep2">在系统设置中找到 <strong>KVMini</strong>，打开开关</span>
                 </div>
                 <div class="accessibility-step">
                     <span class="accessibility-step-num">3</span>
-                    <span>返回应用，权限授予后自动继续</span>
+                    <span data-i18n="overlayStep3">返回应用，权限授予后自动继续</span>
                 </div>
             </div>
-            <button id="open-accessibility-btn" class="btn btn-accessibility-overlay">
+            <button id="open-accessibility-btn" class="btn btn-accessibility-overlay" data-i18n="btnGoAuthorize">
                 前往授权 →
             </button>
-            <p class="accessibility-overlay-hint" id="accessibility-polling-hint">
+            <p class="accessibility-overlay-hint" id="accessibility-polling-hint" data-i18n="overlayPollingHint">
                 ⏳ 等待授权中，授权后将自动继续...
             </p>
         </div>
@@ -122,10 +122,12 @@
         </div>
 
         <!-- 状态面板 -->
-        <div class="status-panel">
+        <div class="status-panel" id="smart-status-panel">
             <div class="status-item">
                 <span class="status-label" data-i18n="labelConnectionStatus">连接状态:</span>
                 <span id="connection-status" class="status-disconnected" data-i18n="statusDisconnected">未连接</span>
+                <!-- v0.1.38 组 F：加密徽章，连接成功时显示 🔒/⚠️ -->
+                <span id="encryption-badge" class="encryption-badge" title=""></span>
             </div>
             <!-- 重连进度提示（重连中时显示） -->
             <div class="status-item" id="reconnect-status-row" style="display:none;">
@@ -146,51 +148,23 @@
             </div>
             <div class="status-item">
                 <span class="status-label" data-i18n="labelLocalIp">本机 IP:</span>
-                <span id="local-ip">获取中...</span>
+                <span id="local-ip" data-i18n="msgLocalIpLoading">获取中...</span>
             </div>
             <div class="status-item">
                 <span class="status-label" data-i18n="labelLatency">延迟:</span>
                 <span id="latency">-</span>
             </div>
-        </div>
-
-        <!-- 连接详情面板（连接成功后显示，默认隐藏） -->
-        <div id="connection-detail-panel" class="connection-detail-panel hidden">
-            <div class="detail-header" onclick="toggleConnectionDetail()">
-                <span class="detail-title" data-i18n="detailTitle">📡 连接详情</span>
-                <span class="detail-toggle-icon" id="detail-toggle-icon">▼</span>
-            </div>
-            <div class="detail-summary">
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailLocal">本机</span>
-                    <span id="detail-local-ip" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailPeer">对端</span>
-                    <span id="detail-peer-ip" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailEncryption">加密</span>
-                    <span id="detail-tls-status" class="detail-value">-</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailLatency">延迟</span>
-                    <span id="detail-latency" class="detail-value latency-normal">-</span>
-                </div>
-            </div>
-            <!-- 展开区域：完整证书指纹等 -->
-            <div id="detail-expanded" class="detail-expanded hidden">
-                <div class="detail-row">
-                    <span class="detail-label" data-i18n="detailCertFingerprint">证书指纹</span>
-                    <span id="detail-cert-fingerprint" class="detail-value detail-fingerprint">-</span>
-                </div>
-            </div>
+            <!-- v0.1.38 组 F：证书指纹折叠区（替代旧 #connection-detail-panel） -->
+            <details class="status-fingerprint-details" id="peer-fingerprint-details" hidden>
+                <summary data-i18n="detailCertFingerprint">证书指纹</summary>
+                <code id="detail-cert-fingerprint" class="detail-fingerprint">-</code>
+            </details>
         </div>
 
         <!-- 连接成功后权限不足提示（仅 macOS 且权限未授予时显示） -->
         <div id="permission-warning" class="permission-warning hidden">
             <span class="permission-warning-icon">⚠️</span>
-            <span class="permission-warning-text">需要辅助功能权限才能开始键鼠共享，请先前往授权</span>
+            <span class="permission-warning-text" data-i18n="permissionWarningText">需要辅助功能权限才能开始键鼠共享，请先前往授权</span>
         </div>
 
         <!-- 控制按钮 -->
@@ -222,7 +196,7 @@
                     <span data-i18n="scanningHint">正在扫描局域网设备...</span>
                 </div>
                 <div id="devices-list" class="devices-list">
-                    <div class="no-devices">点击"扫描设备"发现局域网内的设备</div>
+                    <div class="no-devices" data-i18n="noDevices">点击"扫描设备"发现局域网内的设备</div>
                 </div>
                 <!-- 手动连接区域（跨网段直连） -->
                 <div class="manual-connect-section">
@@ -233,8 +207,8 @@
                     <div class="manual-connect-form">
                         <input type="text" id="manual-ip-input" class="manual-ip-input" placeholder="请输入目标设备 IP 地址"
                             data-i18n-placeholder="manualIpPlaceholder" maxlength="15">
-                        <input type="number" id="manual-port-input" class="manual-port-input" placeholder="端口"
-                            value="8889" min="1024" max="65535">
+                        <input type="number" id="manual-port-input" class="manual-port-input" data-i18n-placeholder="placeholderManualPort" placeholder="端口"
+                            min="1024" max="65535">
                         <button id="manual-connect-btn" class="btn btn-manual-connect"
                             data-i18n="btnManualConnect">连接</button>
                     </div>
@@ -249,7 +223,7 @@
                     <button id="clear-history-btn" class="btn btn-text" data-i18n="btnClearHistory">清除</button>
                 </div>
                 <div id="history-list" class="history-list">
-                    <div class="no-history">暂无连接历史</div>
+                    <div class="no-history" data-i18n="noHistory">暂无连接历史</div>
                 </div>
             </div>
 
@@ -386,7 +360,7 @@
                                 <div class="settings-item">
                                     <label data-i18n="labelLanguage">语言:</label>
                                     <select id="language-select" class="settings-select">
-                                        <option value="zh">中文</option>
+                                        <option value="zh" data-i18n="optionZh">中文</option>
                                         <option value="en">English</option>
                                     </select>
                                 </div>
@@ -425,7 +399,7 @@
                                     <div class="monitor-list-header">
                                         <span data-i18n="labelMonitorList">显示器列表</span>
                                         <span id="monitor-count-badge" class="monitor-count-badge">1</span>
-                                        <button class="btn-icon" id="btn-refresh-monitors" title="刷新显示器"
+                                        <button class="btn-icon" id="btn-refresh-monitors" data-i18n-title="btnRefreshMonitors" title="刷新显示器"
                                             onclick="refreshMonitors()">↺</button>
                                     </div>
                                     <div id="monitor-list" class="monitor-list">
@@ -442,7 +416,7 @@
                                     </div>
                                     <div class="display-layout-hint" id="display-layout-hint">
                                         <span data-i18n="hintTriggerEdge">当前：鼠标超出</span>
-                                        <strong id="trigger-edge-text">右边缘</strong>
+                                        <strong id="trigger-edge-text" data-i18n="edgeRight">右边缘</strong>
                                         <span data-i18n="hintTriggerEdgeSuffix">时切换到远端</span>
                                     </div>
                                 </div>
@@ -462,17 +436,17 @@
                                 <!-- 网卡说明（详细解释多网卡场景） -->
                                 <div class="nic-description" id="nic-description">
                                     <span class="nic-description-icon">ℹ️</span>
-                                    <span>您的设备有多个网络接口（如 Wi-Fi、有线网、VPN 等），选择<strong>所有网卡</strong>可接受来自任意网络的连接；选择具体网卡可限制只接受该网络的连接。</span>
+                                    <span data-i18n="nicDescriptionHint">您的设备有多个网络接口（如 Wi-Fi、有线网、VPN 等），选择<strong>所有网卡</strong>可接受来自任意网络的连接；选择具体网卡可限制只接受该网络的连接。</span>
                                 </div>
                                 <!-- 网卡列表（动态填充，含类型图标和悬停详情） -->
                                 <div id="nic-list" class="nic-list"></div>
                                 <!-- 选定网卡断开警告 -->
                                 <div id="network-iface-warning" class="network-iface-warning hidden">
-                                    ⚠️ <span id="network-iface-warning-text">选定网卡已断开，请切换到其他网卡</span>
+                                    ⚠️ <span id="network-iface-warning-text" data-i18n="nicDisconnectedInlineText">选定网卡已断开，请切换到其他网卡</span>
                                 </div>
                                 <div class="settings-item">
                                     <label data-i18n="labelListenPort">监听端口:</label>
-                                    <input type="number" id="listen-port-input" class="settings-input-number" value="8889"
+                                    <input type="number" id="listen-port-input" class="settings-input-number"
                                         min="1024" max="65535" placeholder="1024-65535">
                                 </div>
                                 <div class="settings-item">
@@ -496,7 +470,7 @@
                                 <p class="feature-hint" data-i18n="hintEnableTls">开启后所有键鼠数据和剪贴板内容均加密传输，关闭后显示安全警告</p>
                                 <div class="settings-item" id="tls-fingerprint-row">
                                     <label data-i18n="labelLocalFingerprint">本机证书指纹:</label>
-                                    <span id="local-tls-fingerprint" class="tls-fingerprint-text">加载中...</span>
+                                    <span id="local-tls-fingerprint" class="tls-fingerprint-text" data-i18n="tlsFingerprintLoading">加载中...</span>
                                     <button class="btn btn-small" onclick="copyTlsFingerprint()"
                                         data-i18n="btnCopyFingerprint">复制</button>
                                 </div>
@@ -505,7 +479,7 @@
                                 <!-- 证书加载失败时显示 -->
                                 <div id="cert-error-row" class="cert-error-row hidden">
                                     <span class="cert-error-icon">❌</span>
-                                    <span id="cert-error-msg" class="cert-error-msg">证书加载失败</span>
+                                    <span id="cert-error-msg" class="cert-error-msg" data-i18n="certLoadFailed">证书加载失败</span>
                                     <button class="btn btn-small btn-danger" onclick="regenerateCert()"
                                         data-i18n="btnRegenerateCert">重新生成证书</button>
                                 </div>
@@ -549,6 +523,10 @@
                                     <button class="about-action-btn" id="about-changelog-btn">
                                         <span class="about-action-icon">📝</span>
                                         <span data-i18n="changelogTitle">更新日志</span>
+                                    </button>
+                                    <button class="about-action-btn" id="about-check-update-btn">
+                                        <span class="about-action-icon">🔄</span>
+                                        <span data-i18n="checkUpdate">检查更新</span>
                                     </button>
                                 </div>
                             </div>
@@ -594,9 +572,9 @@
     <!-- TLS 不一致警告横幅 -->
     <div id="tls-mismatch-banner" class="tls-mismatch-banner hidden">
         <span class="tls-mismatch-icon">⚠️</span>
-        <span id="tls-mismatch-msg" class="tls-mismatch-msg">TLS 配置不一致</span>
+        <span id="tls-mismatch-msg" class="tls-mismatch-msg" data-i18n="msgTlsMismatchDefault">TLS 配置不一致</span>
         <button id="tls-disable-retry-btn" class="btn btn-small" onclick="tlsDisableAndRetry()" data-i18n="btnTlsDisableRetry">关闭本机 TLS 重试</button>
-        <button id="tls-mismatch-close-btn" class="btn-icon" onclick="document.getElementById('tls-mismatch-banner').classList.add('hidden')" title="关闭">✕</button>
+        <button id="tls-mismatch-close-btn" class="btn-icon" onclick="document.getElementById('tls-mismatch-banner').classList.add('hidden')" data-i18n-title="btnClose" title="关闭">✕</button>
     </div>
 
     <!-- TLS 指纹确认对话框 -->

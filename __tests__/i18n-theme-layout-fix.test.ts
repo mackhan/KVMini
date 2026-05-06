@@ -53,9 +53,8 @@ describe('Bug #021: i18n 全量文本替换', () => {
             'pageTitle',
             // 设置弹窗标题
             'settingsTitle',
-            // 连接详情面板
-            'detailTitle', 'detailLocal', 'detailPeer', 'detailEncryption',
-            'detailLatency', 'detailCertFingerprint',
+            // 证书指纹折叠区（v0.1.38 组 F：detailTitle/detailLocal/detailPeer/detailEncryption/detailLatency 已删）
+            'detailCertFingerprint',
             // 重连进度
             'labelReconnectProgress', 'reconnectingText',
             // 授权界面（当前 IAP 版本）
@@ -92,15 +91,10 @@ describe('Bug #021: i18n 全量文本替换', () => {
                 <title>KVM Share - 跨平台键鼠共享</title>
                 <h1 data-i18n="appTitle">KVMini</h1>
                 <span data-i18n="labelConnectionStatus">连接状态:</span>
-                <!-- 连接详情面板 -->
-                <div id="connection-detail-panel">
-                    <span class="detail-title" data-i18n="detailTitle">📡 连接详情</span>
-                    <span class="detail-label" data-i18n="detailLocal">本机</span>
-                    <span class="detail-label" data-i18n="detailPeer">对端</span>
-                    <span class="detail-label" data-i18n="detailEncryption">加密</span>
-                    <span class="detail-label" data-i18n="detailLatency">延迟</span>
-                    <span class="detail-label" data-i18n="detailCertFingerprint">证书指纹</span>
-                </div>
+                <!-- v0.1.38 组 F：旧的 #connection-detail-panel 已删，仅保留折叠指纹 summary -->
+                <details id="peer-fingerprint-details">
+                    <summary data-i18n="detailCertFingerprint">证书指纹</summary>
+                </details>
                 <!-- 重连进度 -->
                 <span class="status-label" data-i18n="labelReconnectProgress">重连进度:</span>
                 <!-- 设置弹窗标题 -->
@@ -131,8 +125,7 @@ describe('Bug #021: i18n 全量文本替换', () => {
 
             // 验证关键元素已切换为英文
             expect(document.querySelector('[data-i18n="settingsTitle"]')?.textContent).not.toContain('设置');
-            expect(document.querySelector('[data-i18n="detailLocal"]')?.textContent).not.toContain('本机');
-            expect(document.querySelector('[data-i18n="detailPeer"]')?.textContent).not.toContain('对端');
+            expect(document.querySelector('[data-i18n="detailCertFingerprint"]')?.textContent).not.toContain('证书');
             expect(document.querySelector('[data-i18n="discardDialogTitle"]')?.textContent).not.toContain('未保存');
             expect(document.querySelector('[data-i18n="licenseGateTitle"]')?.textContent).not.toContain('激活');
         });
@@ -153,7 +146,7 @@ describe('Bug #021: i18n 全量文本替换', () => {
             });
 
             expect(document.querySelector('[data-i18n="settingsTitle"]')?.textContent).toBe('⚙ 设置');
-            expect(document.querySelector('[data-i18n="detailLocal"]')?.textContent).toBe('本机');
+            expect(document.querySelector('[data-i18n="detailCertFingerprint"]')?.textContent).toBe('证书指纹');
         });
     });
 });

@@ -167,19 +167,22 @@ describe('关于Tab多语言覆盖', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('分享功能多语言', () => {
-    test('main.js 分享文案根据语言选择中英文，不再写死中文（变量赋值后直接使用）', () => {
-        // 分享文案应该是根据 locale 动态选择的
-        expect(mainJs).toContain("locale === 'en'");
-        // 英文分享文案存在
-        expect(mainJs).toContain('Cross-platform keyboard & mouse sharing tool');
+    // BUG-021/plan v0.1.38：分享文案搬到 i18n.js 的 shareText key 下统一管理，
+    // main.js 只写 t('shareText')，不再出现 locale === 'en' 字面量和完整文案
+    const i18nJs = fs.readFileSync(path.join(__dirname, '../src/i18n.js'), 'utf-8');
+
+    test("main.js 分享调用统一走 i18n t('shareText')，不再在 JS 里写 locale 分支", () => {
+        expect(mainJs).toContain("t('shareText')");
+        // 旧的 `locale === 'en'` 分享分支已迁走
+        expect(mainJs).not.toMatch(/locale === 'en'[\s\S]{0,120}Cross-platform keyboard/);
     });
 
-    test('分享文案有英文版本', () => {
-        expect(mainJs).toContain('Cross-platform keyboard & mouse sharing tool');
+    test('i18n.js 分享文案有英文版本', () => {
+        expect(i18nJs).toContain('Cross-platform keyboard & mouse sharing tool');
     });
 
-    test('分享文案有中文版本', () => {
-        expect(mainJs).toContain('跨平台键鼠共享工具');
+    test('i18n.js 分享文案有中文版本', () => {
+        expect(i18nJs).toContain('跨平台键鼠共享工具');
     });
 
     test('分享成功提示使用 i18n.t 而非硬编码', () => {

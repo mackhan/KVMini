@@ -57,7 +57,14 @@ function markDirty(tabId) {
     if (btn) {
         btn.setAttribute('data-dirty', 'true');
         btn.classList.add('tab-dirty');
+        // B1: 红点 tooltip（双语，来自 i18n）
+        const tip = (window.i18n && typeof window.i18n.t === 'function')
+            ? window.i18n.t('tabDirtyTooltip')
+            : '此分类下有未保存的修改';
+        btn.title = tip;
     }
+    // B2: 任一 tab 变脏 → 顶部保存按钮加脉冲动画
+    _syncSaveButtonDirtyClass();
 }
 
 /**
@@ -70,7 +77,9 @@ function clearDirty(tabId) {
     if (btn) {
         btn.removeAttribute('data-dirty');
         btn.classList.remove('tab-dirty');
+        btn.removeAttribute('title');
     }
+    _syncSaveButtonDirtyClass();
 }
 
 /**
@@ -78,6 +87,21 @@ function clearDirty(tabId) {
  */
 function clearAllDirty() {
     SETTINGS_TABS.forEach(id => clearDirty(id));
+    // 显式再同步一次，确保 save 按钮动画被移除
+    _syncSaveButtonDirtyClass();
+}
+
+/**
+ * 根据 _dirtyTabs 状态，给顶部保存按钮加/去 .btn-save-dirty
+ */
+function _syncSaveButtonDirtyClass() {
+    const saveBtn = document.getElementById('settings-save-btn');
+    if (!saveBtn) return;
+    if (_dirtyTabs.size > 0) {
+        saveBtn.classList.add('btn-save-dirty');
+    } else {
+        saveBtn.classList.remove('btn-save-dirty');
+    }
 }
 
 /**

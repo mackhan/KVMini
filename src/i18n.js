@@ -31,6 +31,7 @@ const MESSAGES = {
     btnScanDevices: '扫描设备',
     btnDisconnect: '断开连接',
     btnStartSharing: '▶ 开始共享',
+    btnStopSharing: '■ 停止共享',
     btnSettings: '⚙ 设置',
     btnSwitchRole: '切换',
     btnSwitch: '切换',
@@ -67,6 +68,9 @@ const MESSAGES = {
     btnReconnect: '重连',
     manualIpLabel: '手动 IP',
 
+    // 设置页分页（dirty tooltip）
+    tabDirtyTooltip: '此分类下有未保存的修改',
+
     // 提示面板
     hintMouseEdge: '💡 提示：连接成功后，将鼠标移到屏幕右边缘即可切换到 Mac 控制模式',
     hintHotkey: '💡 按 Ctrl+Alt+Tab 切换回 Windows 本地控制',
@@ -77,6 +81,9 @@ const MESSAGES = {
     // 辅助功能权限遮罩
     overlayTitle: '需要辅助功能权限',
     overlayDesc: 'KVMini 需要辅助功能（Accessibility）权限才能捕获和注入键盘鼠标事件。\n请在系统设置中授权后，应用将自动继续。',
+    // 输入监控权限遮罩（BUG-027：macOS 除了辅助功能还需要输入监控权限）
+    overlayInputMonitoringTitle: '需要输入监控权限',
+    overlayInputMonitoringDesc: 'KVMini 还需要输入监控（Input Monitoring）权限才能接收键盘和鼠标事件。\n请在系统设置中授权后，应用将自动继续。',
     overlayStep1: '点击下方"前往授权"按钮',
     overlayStep2: '在系统设置中找到 KVMini，打开开关',
     overlayStep3: '返回应用，权限授予后自动继续',
@@ -233,11 +240,6 @@ const MESSAGES = {
     pageTitle: 'KVMini - 跨平台键鼠共享',
 
     // 连接详情面板
-    detailTitle: '📡 连接详情',
-    detailLocal: '本机',
-    detailPeer: '对端',
-    detailEncryption: '加密',
-    detailLatency: '延迟',
     detailCertFingerprint: '证书指纹',
 
     // 重连进度
@@ -287,6 +289,12 @@ const MESSAGES = {
     diagTitle: '🔍 网络诊断结果',
     diagSuggestion: '💡 建议：检查上述标记 ⚠️ 的项目，确保对端已运行 KVMini',
     diagAllPass: '✅ 网络配置正常，请确认对端已启动 KVMini 并在同一子网',
+    vpnInterferenceTip: '⚠️ 检测到 VPN 网卡（{names}），可能劫持默认路由导致局域网广播失败。建议临时断开 VPN 后重新扫描。',
+    firewallBlockTipMacos: '🛡️ macOS 防火墙可能拦截 KVMini。可执行：sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
+    firewallBlockTipWindows: '🛡️ Windows 防火墙可能拦截 KVMini。请在「Windows Defender 防火墙 > 允许的应用」中放行 KVMini。',
+    sharingStarted: '共享已启动，正在控制对端',
+    sharingStopped: '共享已停止',
+    shareToggleFailed: '切换共享状态失败，请检查辅助功能权限或连接状态',
 
     // 分页导航
     tabGeneral: '通用',
@@ -317,6 +325,54 @@ const MESSAGES = {
     changelogEmpty: '暂无更新日志',
     changelogLoadFailed: '更新日志加载失败，请稍后重试。',
     feedbackFailed: '反馈功能暂时不可用',
+
+    // 自动更新
+    checkUpdate: '检查更新',
+    checkingUpdate: '检查中...',
+    updateAvailable: '发现新版本 v{version}',
+    updateAvailableTitle: '🎉 发现新版本',
+    updateAvailableDesc: '新版本 v{version} 已发布，是否立即更新？',
+    updateDownloading: '正在下载更新...',
+    updateInstalling: '正在安装更新...',
+    updateReady: '更新已就绪，重启后生效',
+    updateFailed: '更新失败，请稍后重试',
+    updateFailedDetail: '更新失败: {err}',
+    noUpdateAvailable: '已是最新版本 🎉',
+    updateNow: '立即更新',
+    updateLater: '稍后再说',
+    updateRestart: '重启应用',
+
+    // BUG-021/plan v0.1.38：i18n 残留清扫新增 key
+    errTauriNotReady: 'Tauri 环境未就绪，请重启应用',
+    errTauriInitFailed: 'Tauri 环境初始化失败，请重启应用',
+    msgDisconnectManual: '已手动断开连接',
+    errDisconnectPrefix: '断开连接错误: ',
+    errReconnectFailPrefix: '重新连接失败: ',
+    msgReconnectFailRetrying: '重连失败，仍在后台尝试...',
+    msgTlsMismatchDefault: 'TLS 配置不一致，请检查双端设置',
+    msgConnectionLostDefault: '连接已断开',
+    msgReconnectSuccessDefault: '重连成功',
+    errSettingsSavePrefix: '设置保存失败: ',
+    errHotkeyRegisterPrefix: '快捷键注册失败: ',
+    errDisableTlsRetryPrefix: '关闭 TLS 重试失败：',
+    peerAddressPrefix: '对端地址：',
+    labelLocalIpShort: '本机IP:',
+    latencyTipHigh: '网络延迟较高，可能影响使用体验',
+    latencyTipCritical: '网络延迟过高，使用体验可能受到严重影响',
+    tlsBadgeOn: '🔒 TLS 加密',
+    tlsBadgeOff: '⚠️ 未加密',
+    notifyDisconnectedManualRetry: '连接已断开，请手动重连',
+    scanningSubnetTip: '正在扫描...（UDP广播 + 子网扫描）',
+    msgConnectedToIp: '已连接到 {ip}',
+    monitorRemoteDisconnected: '远端设备（未连接）',
+    monitorTooltipTemplate: '{w}×{h} | DPI: {dpi}% | 偏移: ({x}, {y})',
+    certRegenSuccess: '证书已重新生成',
+    certRegenFailed: '证书重新生成失败',
+    shareText: 'KVMini - 跨平台键鼠共享工具，让多台电脑共享一套键鼠！https://kvmini.app',
+    nicDescriptionHint: '您的设备有多个网络接口（如 Wi-Fi、有线网、VPN 等），选择<strong>所有网卡</strong>可接受来自任意网络的连接；选择具体网卡可限制只接受该网络的连接。',
+    nicDisconnectedInlineText: '选定网卡已断开，请切换到其他网卡',
+    tlsFingerprintLoading: '加载中...',
+    certLoadFailed: '证书加载失败',
   },
 
   en: {
@@ -345,6 +401,7 @@ const MESSAGES = {
     btnScanDevices: 'Scan Devices',
     btnDisconnect: 'Disconnect',
     btnStartSharing: '▶ Start Sharing',
+    btnStopSharing: '■ Stop Sharing',
     btnSettings: '⚙ Settings',
     btnSwitchRole: 'Switch',
     btnSwitch: 'Switch',
@@ -381,6 +438,9 @@ const MESSAGES = {
     btnReconnect: 'Reconnect',
     manualIpLabel: 'Manual IP',
 
+    // Settings tabs (dirty tooltip)
+    tabDirtyTooltip: 'Unsaved changes in this section',
+
     // Hint panel
     hintMouseEdge: '💡 Tip: After connecting, move the mouse to the right edge to switch to Mac control',
     hintHotkey: '💡 Press Ctrl+Alt+Tab to switch back to Windows local control',
@@ -391,6 +451,9 @@ const MESSAGES = {
     // Accessibility overlay
     overlayTitle: 'Accessibility Permission Required',
     overlayDesc: 'KVMini needs Accessibility permission to capture and inject keyboard/mouse events.\nPlease authorize in System Settings and the app will continue automatically.',
+    // Input Monitoring overlay (BUG-027: macOS needs BOTH Accessibility and Input Monitoring)
+    overlayInputMonitoringTitle: 'Input Monitoring Permission Required',
+    overlayInputMonitoringDesc: 'KVMini also needs Input Monitoring permission to receive keyboard and mouse events.\nPlease authorize in System Settings and the app will continue automatically.',
     overlayStep1: 'Click the "Authorize" button below',
     overlayStep2: 'Find KVMini in System Settings and enable it',
     overlayStep3: 'Return to the app, it will continue automatically after authorization',
@@ -547,11 +610,6 @@ const MESSAGES = {
     pageTitle: 'KVMini - Cross-platform KVM Sharing',
 
     // Connection detail panel
-    detailTitle: '📡 Connection Details',
-    detailLocal: 'Local',
-    detailPeer: 'Peer',
-    detailEncryption: 'Encryption',
-    detailLatency: 'Latency',
     detailCertFingerprint: 'Certificate Fingerprint',
 
     // Reconnect progress
@@ -601,6 +659,12 @@ const MESSAGES = {
     diagTitle: '🔍 Network Diagnostic Results',
     diagSuggestion: '💡 Suggestion: Check the ⚠️ items above and make sure the remote is running KVMini',
     diagAllPass: '✅ Network configuration looks good. Please confirm the remote has KVMini running on the same subnet.',
+    vpnInterferenceTip: '⚠️ VPN interface(s) detected ({names}). VPN may hijack the default route and break LAN broadcast. Try temporarily disconnecting the VPN, then rescan.',
+    firewallBlockTipMacos: '🛡️ macOS firewall may be blocking KVMini. Run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
+    firewallBlockTipWindows: '🛡️ Windows firewall may be blocking KVMini. Allow KVMini in "Windows Defender Firewall > Allowed apps".',
+    sharingStarted: 'Sharing started, you are now controlling the remote machine',
+    sharingStopped: 'Sharing stopped',
+    shareToggleFailed: 'Failed to toggle sharing. Check accessibility permission or connection status.',
 
     // Tab navigation
     tabGeneral: 'General',
@@ -631,6 +695,54 @@ const MESSAGES = {
     changelogEmpty: 'No changelog available',
     changelogLoadFailed: 'Failed to load changelog. Please try again later.',
     feedbackFailed: 'Feedback is temporarily unavailable',
+
+    // Auto Update
+    checkUpdate: 'Check for Updates',
+    checkingUpdate: 'Checking...',
+    updateAvailable: 'New version v{version} available',
+    updateAvailableTitle: '🎉 Update Available',
+    updateAvailableDesc: 'Version v{version} is available. Update now?',
+    updateDownloading: 'Downloading update...',
+    updateInstalling: 'Installing update...',
+    updateReady: 'Update ready, restart to apply',
+    updateFailed: 'Update failed, please try again later',
+    updateFailedDetail: 'Update failed: {err}',
+    noUpdateAvailable: 'You are up to date 🎉',
+    updateNow: 'Update Now',
+    updateLater: 'Later',
+    updateRestart: 'Restart App',
+
+    // BUG-021/plan v0.1.38: i18n residual cleanup
+    errTauriNotReady: 'Tauri runtime is not ready, please restart the app',
+    errTauriInitFailed: 'Tauri runtime initialization failed, please restart the app',
+    msgDisconnectManual: 'Disconnected manually',
+    errDisconnectPrefix: 'Disconnect error: ',
+    errReconnectFailPrefix: 'Reconnect failed: ',
+    msgReconnectFailRetrying: 'Reconnect failed, still retrying in background...',
+    msgTlsMismatchDefault: 'TLS configuration mismatch, please check both sides',
+    msgConnectionLostDefault: 'Connection lost',
+    msgReconnectSuccessDefault: 'Reconnected',
+    errSettingsSavePrefix: 'Failed to save settings: ',
+    errHotkeyRegisterPrefix: 'Hotkey registration failed: ',
+    errDisableTlsRetryPrefix: 'Failed to disable TLS and retry: ',
+    peerAddressPrefix: 'Peer address: ',
+    labelLocalIpShort: 'Local IP:',
+    latencyTipHigh: 'Network latency is high, may affect user experience',
+    latencyTipCritical: 'Network latency is very high, experience may be severely impacted',
+    tlsBadgeOn: '🔒 TLS compatibility mode (data not yet encrypted; real TLS encryption coming in v0.1.39)',
+    tlsBadgeOff: '⚠️ Unencrypted (neither side negotiated TLS)',
+    notifyDisconnectedManualRetry: 'Connection lost, please reconnect manually',
+    scanningSubnetTip: 'Scanning... (UDP broadcast + subnet scan)',
+    msgConnectedToIp: 'Connected to {ip}',
+    monitorRemoteDisconnected: 'Remote device (not connected)',
+    monitorTooltipTemplate: '{w}×{h} | DPI: {dpi}% | Offset: ({x}, {y})',
+    certRegenSuccess: 'Certificate regenerated',
+    certRegenFailed: 'Failed to regenerate certificate',
+    shareText: 'KVMini - Cross-platform keyboard & mouse sharing tool, share one set of keyboard & mouse across multiple computers! https://kvmini.app',
+    nicDescriptionHint: 'Your device has multiple network interfaces (Wi-Fi, Ethernet, VPN, etc.). Select <strong>All Interfaces</strong> to accept connections from any network, or pick a specific interface to restrict connections to that network only.',
+    nicDisconnectedInlineText: 'Selected network interface is disconnected. Please switch to another.',
+    tlsFingerprintLoading: 'Loading...',
+    certLoadFailed: 'Failed to load certificate',
   },};
 
 /** 当前语言，默认中文 */

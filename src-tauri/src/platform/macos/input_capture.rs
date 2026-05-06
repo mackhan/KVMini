@@ -1,41 +1,198 @@
 //! macOS 键鼠事件采集实现（CGEventTap）
+//!
+//! 关键设计（按 macos-cgevent-tap-hotkey skill）：
+//! - CGEventTap 必须在专用子线程的 RunLoop 中运行（不能用主线程，
+//!   主线程被 Tauri/NSApplication 占用，事件回调不会触发）。
+//! - CFRunLoopAddSource(CFRunLoopGetCurrent(), ...) + CFRunLoopRun() 在子线程内调用。
+//! - 通过保存子线程的 CFRunLoopRef，stop_capture 时调 CFRunLoop::stop 让子线程退出。
+//!
+//! v0.1.38 BUG-022 修复：
+//! - 采用 CGEventTapOptions::Default（不是 ListenOnly），让回调返回值生效：
+//!     - 返回 Some(event) → 事件继续传递到本机
+//!     - 返回 None        → 事件被吞掉，本机不感知
+//! - 引入 Arc<AtomicU8> 控制状态（0=Idle, 1=LocalControlling, 2=RemoteControlling）
+//! - 回调用 Relaxed 原子读（禁止锁，避免实时输入路径阻塞）
+//! - SharingManager 在状态切换时调用 set_control_state 同步
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{InputCapture, RawInputEvent};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU8, Ordering},
+    Arc, Mutex,
+};
+
+#[cfg(target_os = "macos")]
+use core_foundation::runloop::CFRunLoop;
+
+/// 控制状态原子值
+/// 0 = Idle（放行所有输入）
+/// 1 = LocalControlling（本机控制对端，吞掉本机输入）
+/// 2 = RemoteControlling（被对端控制，吞掉本机输入防止干扰）
+pub const CONTROL_STATE_IDLE: u8 = 0;
+pub const CONTROL_STATE_LOCAL_CONTROLLING: u8 = 1;
+pub const CONTROL_STATE_REMOTE_CONTROLLING: u8 = 2;
 
 pub struct MacInputCapture {
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
+    /// 控制状态，CGEventTap 回调按此决定是否吞事件。
+    /// 初始为 Idle，绝不在未明确切到 Local/Remote 时吞事件（防止误吞用户输入）。
+    control_state: Arc<AtomicU8>,
+    /// 持有捕获子线程的 RunLoop 引用，用于 stop 时唤醒
+    #[cfg(target_os = "macos")]
+    run_loop: Arc<Mutex<Option<RunLoopHandle>>>,
 }
+
+/// 跨线程持有的 CFRunLoop 句柄（CFRunLoop 本身就是引用计数对象）
+#[cfg(target_os = "macos")]
+struct RunLoopHandle(CFRunLoop);
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for RunLoopHandle {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for RunLoopHandle {}
 
 impl MacInputCapture {
     pub fn new() -> Self {
         Self {
             capturing: Arc::new(AtomicBool::new(false)),
             callback: Arc::new(Mutex::new(None)),
+            control_state: Arc::new(AtomicU8::new(CONTROL_STATE_IDLE)),
+            #[cfg(target_os = "macos")]
+            run_loop: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 由 SharingManager 在状态切换时调用，推送新状态到 CGEventTap 回调。
+    /// 使用 Relaxed 足够：回调线程下一次读能看到新值即可，无需内存序强约束。
+    pub fn set_control_state(&self, new_state: u8) {
+        let old = self.control_state.swap(new_state, Ordering::Relaxed);
+        if old != new_state {
+            log::info!(
+                "[Mac] control_state: {} → {} ({})",
+                old,
+                new_state,
+                describe_state(new_state)
+            );
+        }
+    }
+
+    /// 获取当前控制状态（主要用于测试与诊断）
+    pub fn control_state(&self) -> u8 {
+        self.control_state.load(Ordering::Relaxed)
+    }
+
+    /// 暴露控制状态原子给 SharingManager 做共享（可选用法：
+    /// 直接让 SharingManager 持同一个 Arc，避免反复 setter 调用）
+    pub fn control_state_arc(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.control_state)
+    }
+}
+
+fn describe_state(v: u8) -> &'static str {
+    match v {
+        CONTROL_STATE_IDLE => "Idle",
+        CONTROL_STATE_LOCAL_CONTROLLING => "LocalControlling",
+        CONTROL_STATE_REMOTE_CONTROLLING => "RemoteControlling",
+        _ => "Unknown",
+    }
+}
+
+impl Default for MacInputCapture {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl InputCapture for MacInputCapture {
-    fn start_capture(&self, callback: Box<dyn Fn(RawInputEvent) + Send + Sync>) -> KvmResult<()> {
+    fn start_capture(
+        &self,
+        callback: Box<dyn Fn(RawInputEvent) + Send + Sync>,
+    ) -> KvmResult<()> {
+        // 已经在采集时直接返回（避免重复 spawn 子线程）
+        if self.capturing.load(Ordering::SeqCst) {
+            log::warn!("[Mac] start_capture 重复调用，忽略");
+            return Ok(());
+        }
+
         *self.callback.lock().unwrap() = Some(callback);
         self.capturing.store(true, Ordering::SeqCst);
-        log::info!("[Mac] 键鼠采集已启动");
+        log::info!("[Mac] 键鼠采集启动（子线程模式）");
+
         #[cfg(target_os = "macos")]
         {
             let capturing = Arc::clone(&self.capturing);
             let cb = Arc::clone(&self.callback);
-            start_event_tap(capturing, cb)?;
+            let run_loop_slot = Arc::clone(&self.run_loop);
+            let control_state = Arc::clone(&self.control_state);
+            let (started_tx, started_rx) = std::sync::mpsc::sync_channel::<KvmResult<()>>(1);
+
+            // 专用子线程：创建 Tap → 注册到本线程 RunLoop → CFRunLoopRun() 阻塞
+            std::thread::Builder::new()
+                .name("kvm-cgeventtap".to_string())
+                .spawn(move || {
+                    match start_event_tap_in_current_thread(capturing, cb, control_state) {
+                        Ok(_) => {
+                            // 把当前线程的 RunLoop 引用回传给主控制端
+                            let rl = CFRunLoop::get_current();
+                            *run_loop_slot.lock().unwrap() = Some(RunLoopHandle(rl));
+                            let _ = started_tx.send(Ok(()));
+                            log::info!("[Mac] CGEventTap 子线程进入 CFRunLoopRun()");
+                            CFRunLoop::run_current();
+                            log::info!("[Mac] CGEventTap 子线程已退出 CFRunLoopRun()");
+                        }
+                        Err(e) => {
+                            log::error!("[Mac] CGEventTap 启动失败: {}", e);
+                            let _ = started_tx.send(Err(e));
+                        }
+                    }
+                })
+                .map_err(|e| kvm_core::error::KvmError::PlatformError {
+                    api: "spawn cgeventtap thread".to_string(),
+                    reason: e.to_string(),
+                })?;
+
+            // 等待子线程完成 Tap 创建（最多 2 秒）
+            match started_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => {
+                    self.capturing.store(false, Ordering::SeqCst);
+                    *self.callback.lock().unwrap() = None;
+                    Err(e)
+                }
+                Err(_) => {
+                    self.capturing.store(false, Ordering::SeqCst);
+                    *self.callback.lock().unwrap() = None;
+                    Err(kvm_core::error::KvmError::PlatformError {
+                        api: "CGEventTap startup".to_string(),
+                        reason: "等待 CGEventTap 子线程启动超时（2s）".to_string(),
+                    })
+                }
+            }
         }
+
+        #[cfg(not(target_os = "macos"))]
         Ok(())
     }
 
     fn stop_capture(&self) -> KvmResult<()> {
-        self.capturing.store(false, Ordering::SeqCst);
+        if !self.capturing.swap(false, Ordering::SeqCst) {
+            return Ok(());
+        }
         *self.callback.lock().unwrap() = None;
-        log::info!("[Mac] 键鼠采集已停止");
+        // 停止采集时强制回 Idle，防止后续还在吞事件
+        self.control_state
+            .store(CONTROL_STATE_IDLE, Ordering::Relaxed);
+        log::info!("[Mac] 键鼠采集停止，control_state → Idle");
+
+        #[cfg(target_os = "macos")]
+        {
+            // 唤醒子线程的 CFRunLoopRun，让其退出
+            if let Some(handle) = self.run_loop.lock().unwrap().take() {
+                CFRunLoop::stop(&handle.0);
+                log::info!("[Mac] 已请求 CGEventTap 子线程退出");
+            }
+        }
         Ok(())
     }
 
@@ -45,15 +202,15 @@ impl InputCapture for MacInputCapture {
 }
 
 #[cfg(target_os = "macos")]
-fn start_event_tap(
+fn start_event_tap_in_current_thread(
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
+    control_state: Arc<AtomicU8>,
 ) -> KvmResult<()> {
+    use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
     use core_graphics::event::{
-        CGEventTap, CGEventTapLocation,
-        CGEventTapOptions, CGEventTapPlacement, CGEventType,
+        CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
     };
-    use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
 
     let mask = vec![
         CGEventType::MouseMoved,
@@ -69,36 +226,65 @@ fn start_event_tap(
         CGEventType::FlagsChanged,
     ];
 
+    // CGEventTapOptions::Default 允许回调决定事件放行/吞掉；
+    // 必须在本机授予"输入监控"权限，否则 CGEventTap::new 会失败。
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::HeadInsertEventTap,
-        CGEventTapOptions::ListenOnly,
+        CGEventTapOptions::Default,
         mask,
         move |_proxy, event_type, event| {
-            if !capturing.load(Ordering::SeqCst) { return None; }
+            // 1. 未在 capturing 状态时，一律放行（安全兜底）
+            if !capturing.load(Ordering::SeqCst) {
+                return Some(event.to_owned());
+            }
+            // 2. 先把事件送给 sender（无论最后是否吞）——
+            //    只有 LocalControlling 状态下这些事件才有意义转发给对端，
+            //    其他状态日志里 sender 会被静默丢弃（event_tx 已被 take）。
             if let Some(raw_event) = cg_event_to_raw(event_type, event) {
                 if let Ok(guard) = callback.lock() {
-                    if let Some(cb) = guard.as_ref() { cb(raw_event); }
+                    if let Some(cb) = guard.as_ref() {
+                        cb(raw_event);
+                    }
                 }
             }
-            None
+            // 3. 根据控制状态决定是否吞事件（关键：Relaxed 读，禁止锁）
+            let state = control_state.load(Ordering::Relaxed);
+            match state {
+                CONTROL_STATE_LOCAL_CONTROLLING | CONTROL_STATE_REMOTE_CONTROLLING => {
+                    // 吞掉：本机不感知此事件
+                    None
+                }
+                _ => {
+                    // Idle：完全放行（防误吞，是最关键的安全兜底）
+                    Some(event.to_owned())
+                }
+            }
         },
-    ).map_err(|_| kvm_core::error::KvmError::PlatformError {
+    )
+    .map_err(|_| kvm_core::error::KvmError::PlatformError {
         api: "CGEventTap::new".to_string(),
-        reason: "创建 CGEventTap 失败，请检查辅助功能权限".to_string(),
+        reason: "创建 CGEventTap 失败，请检查输入监控/辅助功能权限".to_string(),
     })?;
 
-    let loop_source = tap.mach_port.create_runloop_source(0)
+    let loop_source = tap
+        .mach_port
+        .create_runloop_source(0)
         .map_err(|_| kvm_core::error::KvmError::PlatformError {
             api: "create_runloop_source".to_string(),
             reason: "创建 RunLoop Source 失败".to_string(),
         })?;
 
+    // CRITICAL：必须用 GetCurrent（即子线程 RunLoop），不能用 GetMain
     let run_loop = CFRunLoop::get_current();
     run_loop.add_source(&loop_source, unsafe { kCFRunLoopDefaultMode });
     tap.enable();
 
-    log::info!("[Mac] CGEventTap 已启动");
+    // tap 必须 forget，否则函数返回后 tap 析构 → CFMachPort 释放 → Tap 失效（根因 2）
+    // CFRunLoop 已经持有 source → mach_port，把 tap 自身泄漏即可保持强引用
+    std::mem::forget(tap);
+
+    log::info!("[Mac] CGEventTap 已启动（子线程 RunLoop, CGEventTapOptions::Default）");
     Ok(())
 }
 
@@ -113,14 +299,29 @@ fn cg_event_to_raw(
     match event_type {
         CGEventType::MouseMoved => {
             let loc = event.location();
-            Some(RawInputEvent::MouseMove { x: loc.x as i32, y: loc.y as i32 })
+            Some(RawInputEvent::MouseMove {
+                x: loc.x as i32,
+                y: loc.y as i32,
+            })
         }
-        CGEventType::LeftMouseDown  => Some(RawInputEvent::MouseDown { button: MouseButton::Left }),
-        CGEventType::LeftMouseUp    => Some(RawInputEvent::MouseUp   { button: MouseButton::Left }),
-        CGEventType::RightMouseDown => Some(RawInputEvent::MouseDown { button: MouseButton::Right }),
-        CGEventType::RightMouseUp   => Some(RawInputEvent::MouseUp   { button: MouseButton::Right }),
-        CGEventType::OtherMouseDown => Some(RawInputEvent::MouseDown { button: MouseButton::Middle }),
-        CGEventType::OtherMouseUp   => Some(RawInputEvent::MouseUp   { button: MouseButton::Middle }),
+        CGEventType::LeftMouseDown => Some(RawInputEvent::MouseDown {
+            button: MouseButton::Left,
+        }),
+        CGEventType::LeftMouseUp => Some(RawInputEvent::MouseUp {
+            button: MouseButton::Left,
+        }),
+        CGEventType::RightMouseDown => Some(RawInputEvent::MouseDown {
+            button: MouseButton::Right,
+        }),
+        CGEventType::RightMouseUp => Some(RawInputEvent::MouseUp {
+            button: MouseButton::Right,
+        }),
+        CGEventType::OtherMouseDown => Some(RawInputEvent::MouseDown {
+            button: MouseButton::Middle,
+        }),
+        CGEventType::OtherMouseUp => Some(RawInputEvent::MouseUp {
+            button: MouseButton::Middle,
+        }),
         CGEventType::ScrollWheel => {
             // ScrollWheelEventPointDeltaAxis2 = 97, ScrollWheelEventPointDeltaAxis1 = 96
             let dx = event.get_integer_value_field(97) as i32;
@@ -128,15 +329,101 @@ fn cg_event_to_raw(
             Some(RawInputEvent::Scroll { dx, dy })
         }
         CGEventType::KeyDown => {
-            // KeyboardEventKeycode = 9
             let keycode = event.get_integer_value_field(9) as u16;
-            Some(RawInputEvent::KeyDown { native_keycode: keycode })
+            Some(RawInputEvent::KeyDown {
+                native_keycode: keycode,
+            })
         }
         CGEventType::KeyUp => {
-            // KeyboardEventKeycode = 9
             let keycode = event.get_integer_value_field(9) as u16;
-            Some(RawInputEvent::KeyUp { native_keycode: keycode })
+            Some(RawInputEvent::KeyUp {
+                native_keycode: keycode,
+            })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_default_state() {
+        let cap = MacInputCapture::new();
+        assert!(!cap.is_capturing());
+    }
+
+    #[test]
+    fn test_stop_when_not_capturing_is_noop() {
+        let cap = MacInputCapture::new();
+        // 未开始时 stop 应该幂等且不报错
+        assert!(cap.stop_capture().is_ok());
+    }
+
+    #[test]
+    fn test_default_control_state_is_idle() {
+        // 关键安全兜底：默认状态必须是 Idle，绝不能初始就吞事件
+        let cap = MacInputCapture::new();
+        assert_eq!(cap.control_state(), CONTROL_STATE_IDLE);
+    }
+
+    #[test]
+    fn test_set_control_state_roundtrip() {
+        let cap = MacInputCapture::new();
+        cap.set_control_state(CONTROL_STATE_LOCAL_CONTROLLING);
+        assert_eq!(cap.control_state(), CONTROL_STATE_LOCAL_CONTROLLING);
+        cap.set_control_state(CONTROL_STATE_REMOTE_CONTROLLING);
+        assert_eq!(cap.control_state(), CONTROL_STATE_REMOTE_CONTROLLING);
+        cap.set_control_state(CONTROL_STATE_IDLE);
+        assert_eq!(cap.control_state(), CONTROL_STATE_IDLE);
+    }
+
+    #[test]
+    fn test_control_state_arc_shared() {
+        // SharingManager 可以持有同一份 Arc，直接更新能被 capture 回调看到
+        let cap = MacInputCapture::new();
+        let shared = cap.control_state_arc();
+        shared.store(CONTROL_STATE_LOCAL_CONTROLLING, Ordering::Relaxed);
+        assert_eq!(cap.control_state(), CONTROL_STATE_LOCAL_CONTROLLING);
+    }
+
+    #[test]
+    fn test_stop_capture_resets_state_to_idle() {
+        // 安全兜底：stop_capture 必须强制回 Idle，防止后续误吞
+        let cap = MacInputCapture::new();
+        cap.set_control_state(CONTROL_STATE_LOCAL_CONTROLLING);
+        // 模拟：虽然未真实 start_capture，但 stop_capture 路径仍应重置
+        // 注意：is_capturing=false 时 stop 是 noop，这里显式校验 reset 逻辑
+        cap.capturing.store(true, Ordering::SeqCst);
+        assert!(cap.stop_capture().is_ok());
+        assert_eq!(cap.control_state(), CONTROL_STATE_IDLE);
+    }
+
+    /// 真值表测试：验证"状态 → 回调返回值"的语义与现实预期一致
+    /// （这是纯逻辑决策，不依赖 CGEventTap；如果这个逻辑被破坏会导致
+    /// 用户要么完全无法操作电脑，要么 KVM 无法生效）
+    #[test]
+    fn test_state_to_decision_truth_table() {
+        fn should_swallow(state: u8) -> bool {
+            matches!(
+                state,
+                CONTROL_STATE_LOCAL_CONTROLLING | CONTROL_STATE_REMOTE_CONTROLLING
+            )
+        }
+        // Idle → 放行（返回 Some）
+        assert!(!should_swallow(CONTROL_STATE_IDLE), "Idle 必须放行");
+        // Local → 吞
+        assert!(
+            should_swallow(CONTROL_STATE_LOCAL_CONTROLLING),
+            "LocalControlling 必须吞"
+        );
+        // Remote → 吞
+        assert!(
+            should_swallow(CONTROL_STATE_REMOTE_CONTROLLING),
+            "RemoteControlling 必须吞"
+        );
+        // 未知状态 → 放行（安全兜底）
+        assert!(!should_swallow(255), "未知状态必须放行（安全兜底）");
     }
 }

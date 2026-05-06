@@ -18,15 +18,15 @@ tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 tokio = { version = "1.0", features = ["full"] }
 lazy_static = "1.4"
 dirs = "5.0"
 log = "0.4"
 env_logger = "0.11"
 if-addrs = "0.13"
-rcgen = "0.13"
-sha2 = "0.10"
-hex = "0.4"
+# 注：rcgen/sha2/hex 已收敛到 kvm-core::tls（v0.1.38 组 C-5），src-tauri 不再直接依赖
 # tauri-commerce SDK - 直接下载版（开发阶段，不含 iap）
 # tauri-commerce = { git = "https://github.com/mackhan/tauri-commerce", rev = "b8da74f", default-features = false, features = ["trial", "i18n", "permissions", "feedback", "review", "autostart", "changelog", "privacy", "log"] }
 # App Store 版（启用 IAP 内购功能）：

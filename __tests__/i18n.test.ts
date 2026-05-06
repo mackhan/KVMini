@@ -221,5 +221,40 @@ describe('i18n 多语言模块', () => {
         expect(value).not.toBe('');
       });
     });
+
+    // BUG-020: VPN/防火墙诊断提示 keys 必须中英双语完整
+    it('Bug 3 诊断提示 keys 必须在 zh+en 都存在', () => {
+      const requiredKeys = [
+        'vpnInterferenceTip',
+        'firewallBlockTipMacos',
+        'firewallBlockTipWindows',
+      ];
+      for (const key of requiredKeys) {
+        expect(MESSAGES.zh[key]).toBeDefined();
+        expect(MESSAGES.zh[key]).not.toBe('');
+        expect(MESSAGES.en[key]).toBeDefined();
+        expect(MESSAGES.en[key]).not.toBe('');
+        // 中英文不应一致（防止只复制了一份）
+        expect(MESSAGES.zh[key]).not.toBe(MESSAGES.en[key]);
+      }
+    });
+
+    // BUG-019: 开始/停止共享相关 keys 必须中英双语完整
+    it('Bug 2 共享按钮 keys 必须在 zh+en 都存在', () => {
+      const requiredKeys = [
+        'btnStartSharing',
+        'btnStopSharing',
+        'sharingStarted',
+        'sharingStopped',
+        'shareToggleFailed',
+      ];
+      for (const key of requiredKeys) {
+        expect(MESSAGES.zh[key]).toBeDefined();
+        expect(MESSAGES.zh[key]).not.toBe('');
+        expect(MESSAGES.en[key]).toBeDefined();
+        expect(MESSAGES.en[key]).not.toBe('');
+        expect(MESSAGES.zh[key]).not.toBe(MESSAGES.en[key]);
+      }
+    });
   });
 });

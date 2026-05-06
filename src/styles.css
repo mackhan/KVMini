@@ -275,7 +275,7 @@ body {
 /* 所有可交互元素排除拖动 */
 button, a, input, select, textarea, label, .toggle, .btn,
 .settings-tab-btn, .about-action-btn, .device-item,
-.history-item, .connect-device-btn, .detail-header {
+.history-item, .connect-device-btn {
     -webkit-app-region: no-drag;
 }
 
@@ -355,85 +355,47 @@ button, a, input, select, textarea, label, .toggle, .btn,
     50% { opacity: 0.5; }
 }
 
-/* ─── 连接详情面板 ─────────────────────────────────────────────────────────── */
-.connection-detail-panel {
-    background: var(--bg-card);
-    border: 1px solid var(--panel-border);
-    border-radius: 10px;
-    margin-bottom: 10px;
+/* ─── 连接状态面板：加密徽章 + 证书指纹折叠区（v0.1.38 组 F） ───────────────── */
+
+/* 加密徽章（连接状态行尾） */
+.encryption-badge {
+    display: inline-block;
+    margin-left: 6px;
     font-size: 12px;
-    overflow: hidden;
-    box-shadow: var(--shadow-card);
-    flex-shrink: 0;
+    line-height: 1;
+    cursor: help;
+    vertical-align: middle;
+}
+.encryption-badge.hidden { display: none; }
+.encryption-badge--warn {
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.4));
 }
 
-.connection-detail-panel.hidden { display: none; }
-
-.detail-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 14px;
+/* 证书指纹折叠区（原 #connection-detail-panel 简化为 <details>） */
+.status-fingerprint-details {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.status-fingerprint-details summary {
     cursor: pointer;
-    background: var(--item-bg);
-    border-bottom: 1px solid var(--border-color);
     user-select: none;
-}
-
-.detail-header:hover { background: var(--item-bg-hover); }
-
-.detail-title {
-    font-weight: 600;
+    padding: 2px 0;
     color: var(--text-secondary);
-    font-size: 12px;
 }
-
-.detail-toggle-icon {
-    color: var(--text-muted);
-    font-size: 10px;
-}
-
-.detail-summary {
-    padding: 8px 14px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px 16px;
-}
-
-.detail-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.detail-label {
-    color: var(--text-muted);
-    font-size: 11px;
-    min-width: 28px;
-    flex-shrink: 0;
-}
-
-.detail-value {
-    color: var(--text-primary);
-    font-family: 'SF Mono', 'Menlo', monospace;
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.detail-expanded {
-    padding: 8px 14px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-card);
-}
-
-.detail-expanded.hidden { display: none; }
-
+.status-fingerprint-details summary:hover { color: var(--text-primary); }
 .detail-fingerprint {
+    display: block;
+    margin-top: 4px;
+    padding: 6px 8px;
+    font-family: 'SF Mono', 'Menlo', monospace;
     font-size: 10px;
     word-break: break-all;
     white-space: normal;
+    background: var(--item-bg);
+    border-radius: 4px;
+    color: var(--text-primary);
 }
 
 /* 延迟颜色 */
@@ -1141,6 +1103,18 @@ button, a, input, select, textarea, label, .toggle, .btn,
     height: 6px;
     background: var(--color-danger);
     border-radius: 50%;
+}
+
+/* B2: 顶部保存按钮脉冲动画（有任一分页未保存时） */
+@keyframes save-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.btn-save-dirty {
+    animation: save-pulse 1.6s ease-out infinite;
+    position: relative;
 }
 
 /* 右侧内容区 */

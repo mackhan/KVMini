@@ -104,6 +104,21 @@ impl std::fmt::Display for ConnectionState {
 
 // ── 握手信息 ────────────────────────────────────────────────────────────────
 
+/// 握手 wire payload（实际通过 KvmFrame::Handshake/HandshakeAck 的 screen_info 字段传输）
+///
+/// 设计要点：
+/// - 在不破坏二进制兼容的前提下，复用 `screen_info: Vec<u8>` 字段承载 JSON。
+/// - 旧版本客户端 wire 上只有 `VirtualDesktop` 的 JSON，没有 tls_enabled。
+/// - `#[serde(default)]` 让旧 JSON 反序列化时 tls_enabled 默认为 false。
+/// - `parse_payload()` 还提供向后回退：解析失败时按旧 VirtualDesktop 格式再试一次。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct HandshakePayload {
+    #[serde(default)]
+    pub desktop: VirtualDesktop,
+    #[serde(default)]
+    pub tls_enabled: bool,
+}
+
 /// 握手信息（连接建立时交换）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandshakeInfo {
@@ -141,13 +156,54 @@ impl HandshakeInfo {
     }
 
     /// 序列化为字节（用于握手帧的 screen_info 字段）
+    ///
+    /// 新格式：序列化整个 HandshakePayload（含 tls_enabled）。
+    /// 旧客户端反序列化为 VirtualDesktop 时，只看到 desktop/tls_enabled 两个 key，
+    /// 因为 VirtualDesktop 的 serde 是 deny_unknown_fields=false（默认），多余字段会被忽略，
+    /// 但因 wire 格式实际是 `{"desktop":{...},"tls_enabled":bool}`，旧版按 VirtualDesktop 解析会失败。
+    /// 旧版客户端的兼容靠 parse_screen_info 的 unwrap_or_else 退化到空 desktop——
+    /// 这是可接受的：旧版本本来就不传 desktop 数据。
     pub fn screen_info_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(&self.screen_info).unwrap_or_default()
+        let payload = HandshakePayload {
+            desktop: self.screen_info.clone(),
+            tls_enabled: self.tls_enabled,
+        };
+        serde_json::to_vec(&payload).unwrap_or_default()
     }
 
-    /// 从字节反序列化屏幕信息
+    /// 从字节反序列化屏幕信息（仅 desktop，向后兼容旧调用方）
     pub fn parse_screen_info(bytes: &[u8]) -> Option<VirtualDesktop> {
-        serde_json::from_slice(bytes).ok()
+        let (desktop, _) = Self::parse_payload(bytes);
+        if desktop.total_width == 0 && desktop.total_height == 0 && bytes.is_empty() {
+            None
+        } else {
+            Some(desktop)
+        }
+    }
+
+    /// 解析握手 wire payload，向后兼容旧格式
+    ///
+    /// 解析顺序：
+    /// 1. 优先按新版 HandshakePayload 解析
+    /// 2. 失败则按旧版 VirtualDesktop 解析（tls_enabled 默认 false）
+    /// 3. 都失败返回默认 desktop + false
+    pub fn parse_payload(bytes: &[u8]) -> (VirtualDesktop, bool) {
+        // 新版优先
+        if let Ok(payload) = serde_json::from_slice::<HandshakePayload>(bytes) {
+            // HandshakePayload 反序列化对完全空的 JSON 也成功（全用 default），
+            // 必须验证 desktop 字段是否真的存在；简单办法：检查原 bytes 是否含 "desktop"
+            if bytes.windows(b"desktop".len()).any(|w| w == b"desktop")
+                || bytes.windows(b"tls_enabled".len()).any(|w| w == b"tls_enabled")
+            {
+                return (payload.desktop, payload.tls_enabled);
+            }
+        }
+        // 旧版回退
+        if let Ok(desktop) = serde_json::from_slice::<VirtualDesktop>(bytes) {
+            return (desktop, false);
+        }
+        // 全部失败
+        (VirtualDesktop::from_monitors(vec![]), false)
     }
 }
 
@@ -407,7 +463,9 @@ impl ConnectionManager {
     }
 
     /// 启动 TCP 监听（对等模型：等待对方连接）
-    pub async fn start_listening(&self) -> KvmResult<SocketAddr> {
+    ///
+    /// `local_info` 提供本端握手信息，用于在 HandshakeAck 中携带本机 TLS 状态等元数据。
+    pub async fn start_listening(&self, local_info: HandshakeInfo) -> KvmResult<SocketAddr> {
         let addr = format!("0.0.0.0:{}", self.tcp_port);
         let listener = TcpListener::bind(&addr).await?;
         let actual_addr = listener.local_addr()?;
@@ -436,6 +494,7 @@ impl ConnectionManager {
                                 handle_stream(
                                     stream, &event_tx, &state, &write_tx,
                                     &last_heartbeat, false,
+                                    &local_info,
                                 ).await;
                                 *state.lock().await = ConnectionState::Disconnected;
                                 let _ = event_tx.send(NetworkEvent::ConnectionStateChanged(
@@ -511,9 +570,12 @@ impl ConnectionManager {
                         remote_version: version,
                     });
                 }
-                let desktop = HandshakeInfo::parse_screen_info(&screen_info)
-                    .unwrap_or_else(|| VirtualDesktop::from_monitors(vec![]));
-                HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }
+                let (desktop, tls_enabled) = HandshakeInfo::parse_payload(&screen_info);
+                log::info!(
+                    "[Handshake] 主动方收到 HandshakeAck: peer_platform={:?}, peer_tls={}",
+                    platform, tls_enabled
+                );
+                HandshakeInfo { version, platform, screen_info: desktop, tls_enabled }
             }
             other => {
                 return Err(KvmError::HandshakeFailed {
@@ -569,6 +631,24 @@ impl ConnectionManager {
         ));
     }
 
+    /// 发送 Ping 帧（用于测量延迟）
+    ///
+    /// 返回 Ok(()) 表示帧已入队；连接不存在时返回 Err。
+    pub async fn send_ping(&self) -> KvmResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let frame = crate::protocol::KvmFrame::Ping { timestamp_ms: now };
+        let guard = self.write_tx.lock().await;
+        if let Some(tx) = guard.as_ref() {
+            tx.send(frame).await.map_err(|_| crate::error::KvmError::Disconnected)?;
+            Ok(())
+        } else {
+            Err(crate::error::KvmError::Disconnected)
+        }
+    }
+
     /// 停止所有网络活动
     pub fn stop(&self) {
         self.stop.notify_waiters();
@@ -617,6 +697,8 @@ impl ConnectionManager {
 }
 
 /// 处理已建立的 TCP 流（被动接受连接时使用）
+///
+/// `local_info` 用于构造 HandshakeAck 中携带的本端 wire payload（含 TLS 状态）。
 async fn handle_stream(
     stream: TcpStream,
     event_tx: &broadcast::Sender<NetworkEvent>,
@@ -624,6 +706,7 @@ async fn handle_stream(
     write_tx_slot: &Arc<Mutex<Option<mpsc::Sender<KvmFrame>>>>,
     last_heartbeat: &Arc<Mutex<Instant>>,
     _is_initiator: bool,
+    local_info: &HandshakeInfo,
 ) {
     stream.set_nodelay(true).ok();
 
@@ -649,18 +732,19 @@ async fn handle_stream(
                 log::debug!("[TCP] 收到探测握手，回复 HandshakeAck 后断开");
                 let ack = KvmFrame::HandshakeAck {
                     version: PROTOCOL_VERSION,
-                    platform: Platform::Unknown,
+                    platform: local_info.platform,
                     screen_info: vec![],
                 };
                 let _ = protocol::write_frame_async(&mut writer, &ack).await;
                 return; // 不进入 Connected 状态
             }
 
-            // 正常握手：启动 write_task，发 HandshakeAck
+            // 正常握手：HandshakeAck 必须携带本端 wire payload（含 TLS 状态），
+            // 让主动方能正确读出本端 tls_enabled，否则会触发 BUG-018 误报。
             let ack = KvmFrame::HandshakeAck {
                 version: PROTOCOL_VERSION,
-                platform: Platform::Unknown,
-                screen_info: vec![],
+                platform: local_info.platform,
+                screen_info: local_info.screen_info_bytes(),
             };
 
             let (tx, rx) = mpsc::channel::<KvmFrame>(64);
@@ -671,9 +755,20 @@ async fn handle_stream(
             // SAFETY: writer 在探测分支已 return，此处独占所有权
             ConnectionManager::start_write_task(writer, rx);
 
-            let desktop = HandshakeInfo::parse_screen_info(&screen_info)
-                .unwrap_or_else(|| VirtualDesktop::from_monitors(vec![]));
-            (HandshakeInfo { version, platform, screen_info: desktop, tls_enabled: false }, tx)
+            let (desktop, peer_tls) = HandshakeInfo::parse_payload(&screen_info);
+            log::info!(
+                "[Handshake] 被动方收到 Handshake: peer_platform={:?}, peer_tls={}, local_tls={}",
+                platform, peer_tls, local_info.tls_enabled
+            );
+            (
+                HandshakeInfo {
+                    version,
+                    platform,
+                    screen_info: desktop,
+                    tls_enabled: peer_tls,
+                },
+                tx,
+            )
         }
         _ => {
             let _ = event_tx.send(NetworkEvent::Error("握手失败".to_string()));
@@ -813,6 +908,56 @@ mod tests {
         assert_eq!(parsed.total_height, desktop.total_height);
     }
 
+    // ── Bug 1（BUG-018）: 握手 TLS 状态正确互传 TDD ──────────────────────────
+
+    #[test]
+    fn test_handshake_payload_carries_tls_enabled() {
+        // 期望：screen_info_bytes 序列化的内容能被 parse_payload 还原出 tls_enabled
+        let info = HandshakeInfo::new_with_tls(
+            Platform::MacOS,
+            VirtualDesktop::from_monitors(vec![]),
+            true, // ← TLS 开启
+        );
+        let bytes = info.screen_info_bytes();
+        let (_, tls_enabled) = HandshakeInfo::parse_payload(&bytes);
+        assert!(tls_enabled, "wire payload 必须携带 tls_enabled=true");
+    }
+
+    #[test]
+    fn test_handshake_payload_tls_false_roundtrip() {
+        let info = HandshakeInfo::new_with_tls(
+            Platform::Windows,
+            VirtualDesktop::from_monitors(vec![]),
+            false,
+        );
+        let bytes = info.screen_info_bytes();
+        let (_, tls_enabled) = HandshakeInfo::parse_payload(&bytes);
+        assert!(!tls_enabled);
+    }
+
+    #[test]
+    fn test_handshake_payload_legacy_compat_old_format() {
+        // 旧版客户端只发 VirtualDesktop JSON，不含 tls_enabled 字段
+        // 新 parse_payload 必须能优雅回退，tls_enabled 默认 false
+        use crate::platform::MonitorInfo;
+        let legacy_desktop = VirtualDesktop::from_monitors(vec![MonitorInfo {
+            id: 0, width: 1920, height: 1080, dpi_scale: 1.0,
+            offset_x: 0, offset_y: 0, is_primary: true,
+        }]);
+        let legacy_bytes = serde_json::to_vec(&legacy_desktop).unwrap();
+        let (desktop, tls_enabled) = HandshakeInfo::parse_payload(&legacy_bytes);
+        assert_eq!(desktop.total_width, legacy_desktop.total_width);
+        assert!(!tls_enabled, "旧格式 wire 默认 tls_enabled=false");
+    }
+
+    #[test]
+    fn test_handshake_payload_garbage_returns_default() {
+        // 完全无法解析的字节，返回默认 desktop + false
+        let garbage = b"not a valid json";
+        let (_desktop, tls_enabled) = HandshakeInfo::parse_payload(garbage);
+        assert!(!tls_enabled);
+    }
+
     #[tokio::test]
     async fn test_connection_manager_creation() {
         let (mgr, _rx) = ConnectionManager::new(0);
@@ -831,7 +976,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_tcp_listen_and_connect() {
         let (mgr, mut rx) = ConnectionManager::new(0);
-        let addr = mgr.start_listening().await.unwrap();
+        let local_info = HandshakeInfo::new_with_tls(
+            Platform::MacOS,
+            VirtualDesktop::from_monitors(vec![]),
+            false,
+        );
+        let addr = mgr.start_listening(local_info).await.unwrap();
 
         // 在 Windows 上，0.0.0.0 不能直接连接，需要用 127.0.0.1
         let connect_addr = SocketAddr::new(

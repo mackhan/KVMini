@@ -29,7 +29,7 @@ pub struct MonitorInfo {
 }
 
 /// 虚拟桌面信息（所有显示器的包围盒）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VirtualDesktop {
     /// 虚拟桌面总宽度
     pub total_width: i32,

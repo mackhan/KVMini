@@ -9,6 +9,24 @@
 
 'use strict';
 
+// ─── 功能开关（v0.1.37） ──────────────────────────────────────────────────────
+
+/**
+ * 授权检查总开关
+ *   true  = 屏蔽商业化 UI，所有用户视为已购买（默认）
+ *   false = 启用真实试用/购买检查
+ * 后端 Commerce/IAP 初始化和 Keychain 记录不受此开关影响；已购用户数据安全。
+ * 测试中可用 window.__LICENSE_GATE_BYPASS__ 临时覆盖。
+ */
+const LICENSE_GATE_BYPASS = true;
+
+function _isBypassed() {
+    if (typeof window !== 'undefined' && window.__LICENSE_GATE_BYPASS__ !== undefined) {
+        return window.__LICENSE_GATE_BYPASS__ === true;
+    }
+    return LICENSE_GATE_BYPASS;
+}
+
 // ─── 常量 ─────────────────────────────────────────────────────────────────────
 
 const LICENSE_STATUS = {
@@ -41,6 +59,13 @@ function _getInvoke() {
  * @returns {Promise<{licensed: boolean, status: string, message?: string}>}
  */
 async function checkLicenseStatus() {
+    // 屏蔽模式：直接返回 licensed，不调用 SDK，不影响后端 Commerce/IAP 初始化
+    if (_isBypassed()) {
+        _currentStatus = LICENSE_STATUS.LICENSED;
+        _notifyStatusChange(true);
+        return { licensed: true, status: LICENSE_STATUS.LICENSED };
+    }
+
     const invoke = _getInvoke();
     try {
         if (invoke) {

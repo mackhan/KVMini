@@ -137,24 +137,28 @@ async function handleReconnect(elements, invoke) {
 
 /**
  * 连接到特定设备（自动发现）
+ * BUG-020 修复：后端命令名是 connect_to_peer，参数为 peerIp + port。
+ * deviceId 本身是自动发现设备唯一 id，但连接必须走 IP，所以此函数
+ * 会从 appState.devices 找回 device.ip。
  * @param {string} deviceId
- * @param {object} appState - 应用状态
+ * @param {object} appState - 应用状态（必须包含 devices 与 defaults.tcpPort）
  * @param {Function} invoke - Tauri invoke 函数
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function connectToDevice(deviceId, appState, invoke) {
     if (!invoke) { return { success: false, error: 'Tauri 环境未就绪' }; }
     try {
-        const result = await invoke('connect_to_device', { deviceId });
-        if (result.success) {
-            appState.connected = true;
-            appState.connectionType = result.connectionType;
-            appState.currentDevice = deviceId;
-            return { success: true };
-        } else {
-            const errMsg = result.error || result.errorMessage || '连接失败';
-            return { success: false, error: errMsg };
+        const device = (appState?.devices || []).find(d => d.id === deviceId);
+        const peerIp = device?.ip;
+        if (!peerIp) {
+            return { success: false, error: 'device ip missing' };
         }
+        const port = appState?.defaults?.tcpPort || 23456;
+        await invoke('connect_to_peer', { peerIp, port });
+        appState.connected = true;
+        appState.connectionType = device?.connectionType || 'Network';
+        appState.currentDevice = deviceId;
+        return { success: true };
     } catch (error) {
         return { success: false, error: String(error) };
     }
