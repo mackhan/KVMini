@@ -166,6 +166,9 @@ async function initApp() {
         themeSelect: document.getElementById('theme-select'),
         // 剪贴板共享
         clipboardSync: document.getElementById('clipboard-sync'),
+        // KVM 键鼠切换（plan v0.1.38 BUG-022）
+        edgeTriggerToggle: document.getElementById('edge-trigger-toggle'),
+        edgeThresholdInput: document.getElementById('edge-threshold-input'),
         // TLS 加密
         enableTls: document.getElementById('enable-tls'),
         localTlsFingerprint: document.getElementById('local-tls-fingerprint'),
@@ -211,6 +214,10 @@ async function initApp() {
         document.body.classList.add(isWindows ? 'platform-windows' : 'platform-macos');
         if (elements.hintPanel) {
             elements.hintPanel.style.display = isWindows ? '' : 'none';
+        }
+        // v0.1.41: Windows 管理员权限检测
+        if (isWindows && invoke) {
+            checkWinAdminPermission();
         }
     }
 
@@ -358,7 +365,9 @@ function setupEventListeners() {
             updateControlStateUI(state);
             updateSharingButtonForState(state);
             const { t } = window.i18n;
-            if (state === 'LocalControlling') {
+            if (state === 'Armed') {
+                showSuccess(t('sharingArmed'));
+            } else if (state === 'LocalControlling') {
                 showSuccess(t('sharingStarted'));
             } else if (state === 'Idle') {
                 showSuccess(t('sharingStopped'));
@@ -385,6 +394,8 @@ function setupEventListeners() {
             const peerIp = payload.peer_ip || null;
             const message = payload.message || '';
             const attempt = payload.attempt || null;
+            const localTls = !!payload.local_tls;
+            const remoteTls = !!payload.remote_tls;
 
             if (eventType === 'listening') {
                 // 监听已启动，等待对端连接
@@ -392,6 +403,7 @@ function setupEventListeners() {
 
             } else if (eventType === 'connected') {
                 // 连接成功
+                console.log('[KVMini] connected 事件: localTls=', localTls, 'remoteTls=', remoteTls, 'tls_mismatch=', payload.tls_mismatch, 'payload=', JSON.stringify(payload));
                 appState.connected = true;
                 appState.connectionType = 'TCP';
                 setConnectionStatus('connected');
@@ -403,6 +415,13 @@ function setupEventListeners() {
                 updateConnectionButtons(true);
                 // 更新智能状态面板（v0.1.38 组 F）
                 updateSmartStatus({ connected: true, peer_ip: peerIp });
+                // 连接成功后检查权限状态，更新权限横幅
+                checkPermissionAfterConnect();
+                // 更新 TLS 状态面板：只有当 payload 包含有效 TLS 信息时才更新
+                // （被动连接时事件循环的 connected 不携带 TLS 信息，等 peer_info 事件）
+                if (localTls || remoteTls || payload.tls_mismatch) {
+                    updateTlsStatusDisplay(localTls, remoteTls);
+                }
 
             } else if (eventType === 'reconnect_success') {
                 // 重连成功
@@ -417,6 +436,10 @@ function setupEventListeners() {
                 updateConnectionButtons(true);
                 // 更新智能状态面板
                 updateSmartStatus({ connected: true, peer_ip: peerIp });
+                // 更新 TLS 状态：同样只有包含有效信息时才更新
+                if (localTls || remoteTls || payload.tls_mismatch) {
+                    updateTlsStatusDisplay(localTls, remoteTls);
+                }
 
             } else if (eventType === 'disconnected') {
                 // 连接断开
@@ -431,13 +454,17 @@ function setupEventListeners() {
                 updateConnectionButtons(false);
                 // 清空智能状态面板（徽章/指纹）
                 updateSmartStatus({ connected: false });
+                // 重置 TLS 状态
+                updateTlsStatusDisplay(false, false, true);
 
             } else if (eventType === 'reconnecting') {
-                // 重连中
-                appState.connected = false;
+                // 重连中（BUG-032 根因修复 v0.1.40）：
+                // 不修改 appState.connected ——TCP socket 仍可能活着，仅心跳波动而已
+                // 只有 'disconnected' 事件才是真正断开
+                // 这样 updateConnectionButtons 读 appState.connected 仍为 true，按钮保持"断开"
                 setConnectionStatus('connecting');
                 showReconnectStatus(message, attempt);
-                updateConnectionButtons(false);
+                updateConnectionButtons();
 
             } else if (eventType === 'tls_mismatch') {
                 // TLS 配置不一致：一端开了一端没开
@@ -454,7 +481,39 @@ function setupEventListeners() {
                     indicator.textContent = '⚠️ TLS';
                     indicator.className = 'tls-warning-indicator';
                 }
+                // 更新 TLS 状态面板
+                updateTlsStatusDisplay(localTls, remoteTls);
                 console.warn('[TLS] 不一致：', message);
+
+            } else if (eventType === 'peer_info') {
+                // 对端握手信息（被动连接时通过此事件获取 TLS 状态）
+                console.log('[KVMini] peer_info 事件: localTls=', localTls, 'remoteTls=', remoteTls, 'tls_mismatch=', payload.tls_mismatch);
+                updateTlsStatusDisplay(localTls, remoteTls);
+                console.log('[KVMini] 对端信息:', message, 'TLS: local=', localTls, 'remote=', remoteTls);
+
+                // 被动连接时，如果 TLS 不一致也显示横幅警告
+                if (payload.tls_mismatch) {
+                    const banner = document.getElementById('tls-mismatch-banner');
+                    const msgEl = document.getElementById('tls-mismatch-msg');
+                    if (banner && msgEl) {
+                        // 根据本机/对端 TLS 状态生成文案
+                        const { t } = window.i18n;
+                        let mismatchMsg;
+                        if (localTls && !remoteTls) {
+                            mismatchMsg = t('msgTlsMismatchLocalOnly');
+                        } else {
+                            mismatchMsg = t('msgTlsMismatchRemoteOnly');
+                        }
+                        msgEl.textContent = mismatchMsg || message;
+                        banner.classList.remove('hidden');
+                    }
+                    const indicator = document.getElementById('tls-status-indicator');
+                    if (indicator) {
+                        indicator.classList.remove('hidden');
+                        indicator.textContent = '⚠️ TLS';
+                        indicator.className = 'tls-warning-indicator';
+                    }
+                }
 
             } else if (eventType === 'error') {
                 // 连接错误（不影响重连循环）
@@ -492,15 +551,21 @@ function setupEventListeners() {
 // 加载并显示本机 IP
 async function loadLocalIp() {
     if (!elements.localIp) return;
+    // 先显示加载中文案
+    elements.localIp.textContent = window.i18n.t('msgLocalIpLoading');
     try {
         const ips = await window.Platform.getLocalIp();
         if (ips && ips.length > 0) {
             elements.localIp.textContent = ips.join(' / ');
+            // 成功加载后标记为动态内容，防止 applyI18n() 覆盖 IP 地址
+            elements.localIp.setAttribute('data-i18n-dynamic', 'true');
         } else {
             elements.localIp.textContent = window.i18n.t('msgLocalIpFailed');
+            elements.localIp.removeAttribute('data-i18n-dynamic');
         }
     } catch (e) {
         elements.localIp.textContent = window.i18n.t('msgLocalIpFailed');
+        elements.localIp.removeAttribute('data-i18n-dynamic');
     }
 }
 
@@ -529,26 +594,72 @@ async function handleDisconnect() {
 }
 
 // 处理手动重新连接
+// BUG-033: 之前调用不存在的 reconnect_to_peer 命令（后端没有注册），
+// 改为复用 connect_to_peer 逻辑，从 appState 或连接历史获取上次连接的 IP
 async function handleReconnect() {
     if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
+    const { t } = window.i18n;
     try {
+        // 获取上次连接的 IP：优先从连接详情面板、appState、或连接历史
+        let peerIp = '';
+        let port = appState.defaults?.tcpPort || 23456;
+
+        // 1. 从当前 appState 获取（如果之前连接过，connectedDevice 有值）
+        if (elements.connectedDevice && elements.connectedDevice.textContent && elements.connectedDevice.textContent !== '-') {
+            peerIp = elements.connectedDevice.textContent.trim();
+        }
+
+        // 2. 回退：从连接历史获取最后一条记录
+        if (!peerIp) {
+            try {
+                const hist = await window.Platform.getConnectionHistory();
+                if (hist && hist.length > 0) {
+                    peerIp = hist[0].ip;
+                    port = hist[0].port || port;
+                }
+            } catch (e) {
+                console.warn('[Reconnect] 读取连接历史失败:', e);
+            }
+        }
+
+        if (!peerIp) {
+            showError(t('errReconnectNoTarget') || t('errReconnectFailPrefix') + 'No previous connection found');
+            return;
+        }
+
         setConnectionStatus('connecting');
-        showReconnectStatus(window.i18n.t('statusConnecting'));
+        showReconnectStatus(t('statusConnecting'));
         updateConnectionButtons(false);
-        await invoke('reconnect_to_peer').catch(() => {});
+
+        const result = await window.Platform.connectByIp(peerIp, port);
+        if (result && (result.success || result.connected)) {
+            // 连接成功会通过 connection-status 事件通知
+            console.log('[Reconnect] 重连调用成功:', peerIp);
+        } else {
+            setConnectionStatus('disconnected');
+            const errMsg = result?.errorMessage || result?.error_message || t('statusDisconnected');
+            showError(t('errReconnectFailPrefix') + errMsg);
+            updateConnectionButtons(false);
+        }
     } catch (error) {
-        showError(window.i18n.t('errReconnectFailPrefix') + error);
+        setConnectionStatus('disconnected');
+        showError(t('errReconnectFailPrefix') + (error instanceof Error ? error.message : String(error)));
+        updateConnectionButtons(false);
     }
 }
 
 // 更新断开/重连按钮显示状态
+// BUG-032 修复：以 appState.connected 为单一真相源
+// 不再依赖外部传入的 connected 参数（心跳波动可能触发 reconnecting 事件导致误传 false）
 function updateConnectionButtons(connected) {
+    // 以 appState.connected 为准，忽略参数 connected（保留参数签名兼容旧调用点）
+    const isConnected = appState.connected;
     if (elements.disconnectBtn) {
-        elements.disconnectBtn.disabled = !connected;
-        elements.disconnectBtn.classList.toggle('hidden', !connected);
+        elements.disconnectBtn.disabled = !isConnected;
+        elements.disconnectBtn.classList.toggle('hidden', !isConnected);
     }
     if (elements.reconnectBtn) {
-        elements.reconnectBtn.classList.toggle('hidden', connected);
+        elements.reconnectBtn.classList.toggle('hidden', isConnected);
     }
 }
 
@@ -1177,10 +1288,22 @@ async function tlsDisableAndRetry() {
         // 1. 关闭本机 TLS 开关
         if (elements.enableTls) elements.enableTls.checked = false;
 
-        // 2. 保存设置（enable_tls = false）
-        const newConfig = { ...appState.settings, enable_tls: false };
-        await invoke('save_settings', { config: newConfig });
-        appState.settings = newConfig;
+        // 2. 保存设置（enable_tls = false）— 同步 camelCase 和 snake_case
+        appState.settings.enableTls = false;
+        appState.settings.enable_tls = false;
+        const backendPayload = {
+            peer_ip: appState.settings.peer_ip || appState.settings.peerIp || '',
+            port: appState.settings.port || appState.defaults?.tcpPort || 23456,
+            switch_hotkey: appState.settings.hotkey || appState.settings.switch_hotkey || 'Ctrl+Alt+S',
+            edge_trigger: appState.settings.edgeTrigger !== false,
+            edge_threshold: parseInt(appState.settings.edgeThreshold || appState.settings.edge_threshold, 10) || 5,
+            clipboard_sync: appState.settings.clipboardSync !== false,
+            autostart: appState.settings.autoStart === true,
+            enable_tls: false,
+            auto_reconnect: appState.settings.autoReconnect !== false,
+        };
+        await invoke('save_settings', { config: backendPayload });
+        localStorage.setItem('kvm_settings', JSON.stringify(appState.settings));
 
         // 3. 隐藏 banner 和警告图标
         const banner = document.getElementById('tls-mismatch-banner');
@@ -1251,9 +1374,28 @@ function loadSettingsToUI() {
     if (elements.clipboardSync) {
         elements.clipboardSync.checked = appState.settings.clipboardSync !== false;
     }
-    // TLS 加密
+    // 键鼠切换（plan v0.1.38 BUG-022）：兼容两种键名
+    //  - appState.settings.edgeTrigger / edgeThreshold（前端 camelCase）
+    //  - appState.settings.edge_trigger / edge_threshold（后端 snake_case）
+    if (elements.edgeTriggerToggle) {
+        const et = (appState.settings.edgeTrigger !== undefined)
+            ? appState.settings.edgeTrigger
+            : (appState.settings.edge_trigger !== undefined ? appState.settings.edge_trigger : true);
+        elements.edgeTriggerToggle.checked = et !== false;
+    }
+    if (elements.edgeThresholdInput) {
+        const threshold = (appState.settings.edgeThreshold !== undefined)
+            ? appState.settings.edgeThreshold
+            : (appState.settings.edge_threshold !== undefined ? appState.settings.edge_threshold : 5);
+        const clamped = Math.max(1, Math.min(50, parseInt(threshold, 10) || 5));
+        elements.edgeThresholdInput.value = String(clamped);
+    }
+    // TLS 加密（兼容 camelCase/snake_case，后端配置为准）
     if (elements.enableTls) {
-        elements.enableTls.checked = appState.settings.enableTls !== false;
+        const tlsVal = (appState.settings.enableTls !== undefined)
+            ? appState.settings.enableTls
+            : (appState.settings.enable_tls !== undefined ? appState.settings.enable_tls : true);
+        elements.enableTls.checked = tlsVal !== false;
     }
     // 外观设置
     if (elements.languageSelect) {
@@ -1280,6 +1422,11 @@ async function saveSettings() {
         autoStart: elements.autoStart.checked,
         startMinimized: elements.startMinimized.checked,
         clipboardSync: elements.clipboardSync ? elements.clipboardSync.checked : true,
+        // 键鼠切换（plan v0.1.38 BUG-022）：camelCase 供前端消费
+        edgeTrigger: elements.edgeTriggerToggle ? elements.edgeTriggerToggle.checked : true,
+        edgeThreshold: elements.edgeThresholdInput
+            ? Math.max(1, Math.min(50, parseInt(elements.edgeThresholdInput.value, 10) || 5))
+            : 5,
         enableTls,
         language: elements.languageSelect ? elements.languageSelect.value : (appState.settings.language || 'zh'),
         theme: elements.themeSelect ? elements.themeSelect.value : (appState.settings.theme || 'auto'),
@@ -1309,7 +1456,22 @@ async function saveSettings() {
     // 如果 Tauri 可用，同步到后端
     if (invoke) {
         try {
-            await invoke('save_settings', { config: appState.settings });
+            // 后端 AppConfig 使用 snake_case 字段（kvm-core::config::KvmConfig 同名），
+            // 前端 appState.settings 是 camelCase，显式构造 snake_case payload 以便正确反序列化。
+            // 未纳入映射的字段 serde 默认值兜底（见 src-tauri/src/config.rs）。
+            const backendPayload = {
+                peer_ip: appState.settings.peerIp || '',
+                port: appState.defaults?.tcpPort || 23456,
+                switch_hotkey: appState.settings.hotkey || 'Ctrl+Alt+S',
+                edge_trigger: appState.settings.edgeTrigger !== false,
+                edge_threshold: Math.max(1, Math.min(50,
+                    parseInt(appState.settings.edgeThreshold, 10) || 5)),
+                clipboard_sync: appState.settings.clipboardSync !== false,
+                autostart: appState.settings.autoStart === true,
+                enable_tls: appState.settings.enableTls !== false,
+                auto_reconnect: appState.settings.autoReconnect !== false,
+            };
+            await invoke('save_settings', { config: backendPayload });
         } catch (e) {
             // 显示后端错误（如开机自启动注册失败）
             showError(window.i18n.t('errSettingsSavePrefix') + e);
@@ -1323,6 +1485,12 @@ async function saveSettings() {
             if (listenPort >= 1024 && listenPort <= 65535) {
                 try {
                     await window.Platform.setListenAddress(listenIp, listenPort);
+                    // plan v0.1.38：保存后同步更新 appState.defaults.tcpPort，
+                    // 让连接对话框、手动连接端口框默认值立即反映新值。
+                    appState.defaults = { ...(appState.defaults || {}), tcpPort: listenPort };
+                    if (elements.manualPortInput && !elements.manualPortInput.value) {
+                        elements.manualPortInput.value = listenPort;
+                    }
                 } catch (e) {
                     console.warn('保存监听配置失败:', e);
                 }
@@ -1384,6 +1552,20 @@ async function loadBackendDefaults() {
         } else {
             console.warn('[KVMini] 后端返回端口无效，使用默认 23456:', settings?.port);
         }
+        // ▶ BUG-FIX: 从后端同步 enable_tls 到前端，防止 localStorage 与后端配置不一致
+        // 后端配置文件是唯一真相源（snake_case），同步到前端 appState（camelCase + snake_case）
+        if (settings && typeof settings.enable_tls === 'boolean') {
+            const backendTls = settings.enable_tls;
+            appState.settings.enableTls = backendTls;
+            appState.settings.enable_tls = backendTls;
+            console.log('[KVMini] 从后端同步 TLS 状态: enable_tls =', backendTls);
+            // 同步更新 UI 开关（如果已渲染）
+            if (elements.enableTls) {
+                elements.enableTls.checked = backendTls;
+            }
+            // 同步 localStorage
+            localStorage.setItem('kvm_settings', JSON.stringify(appState.settings));
+        }
     } catch (e) {
         console.warn('[KVMini] get_settings 失败，使用默认端口 23456:', e);
     }
@@ -1396,6 +1578,7 @@ async function loadBackendDefaults() {
         elements.listenPortInput.value = port;
     }
     console.log('[KVMini] appState.defaults.tcpPort =', port);
+    console.log('[KVMini] loadBackendDefaults 完成: appState.settings.enableTls =', appState.settings.enableTls, 'appState.settings.enable_tls =', appState.settings.enable_tls);
 }
 
 // ─── 外观（语言 + 主题）初始化 ───────────────────────────────────────────
@@ -1441,7 +1624,9 @@ function applyI18n() {
     const { t } = window.i18n;
 
     // 批量替换带 data-i18n 属性的元素
+    // 跳过 data-i18n-dynamic="true" 的元素（其文案由 JS 动态设置，如 IP 地址）
     document.querySelectorAll('[data-i18n]').forEach(el => {
+        if (el.getAttribute('data-i18n-dynamic') === 'true') return;
         const key = el.getAttribute('data-i18n');
         el.textContent = t(key);
     });
@@ -1487,9 +1672,17 @@ function applyI18n() {
     const noHistoryEl = document.querySelector('.no-history');
     if (noHistoryEl) noHistoryEl.textContent = t('noHistory');
 
-    // 更新权限警告文本
+    // 更新权限警告文本（BUG-031：按 data-i18n 动态 key 刷新，兼容 accessibility/input-monitoring 两种 kind）
     const permWarnText = document.querySelector('.permission-warning-text');
-    if (permWarnText) permWarnText.textContent = t('permissionWarningText');
+    if (permWarnText) {
+        const key = permWarnText.getAttribute('data-i18n') || 'permissionWarningText';
+        permWarnText.textContent = t(key);
+    }
+    const permWarnBtn = document.getElementById('permission-warning-btn');
+    if (permWarnBtn) {
+        const btnKey = permWarnBtn.getAttribute('data-i18n') || 'permissionWarningBtnAccessibility';
+        permWarnBtn.textContent = t(btnKey);
+    }
 
     // 更新语言选择器选项文本（确保选中项文本与当前语言一致）
     if (elements.languageSelect) {
@@ -1857,9 +2050,39 @@ function updateSmartStatus(data) {
             fpEl.textContent = payload.cert_fingerprint;
             fpDetails.hidden = false;
         } else {
-            fpEl.textContent = '-';
-            fpDetails.hidden = true;
         }
+    }
+}
+
+/**
+ * 更新 TLS 状态面板显示
+ * @param {boolean} localTls - 本机是否开启 TLS
+ * @param {boolean} remoteTls - 对端是否开启 TLS
+ * @param {boolean} [disconnected=false] - 是否已断开连接（重置为 '-'）
+ */
+function updateTlsStatusDisplay(localTls, remoteTls, disconnected = false) {
+    const el = document.getElementById('tls-status');
+    if (!el) return;
+    const { t } = window.i18n;
+
+    if (disconnected) {
+        el.textContent = t('tlsStatusDisconnected');
+        el.className = '';
+        return;
+    }
+
+    if (localTls && remoteTls) {
+        el.textContent = t('tlsStatusBothOn');
+        el.className = 'tls-status-ok';
+    } else if (localTls && !remoteTls) {
+        el.textContent = t('tlsStatusLocalOnly');
+        el.className = 'tls-status-warn';
+    } else if (!localTls && remoteTls) {
+        el.textContent = t('tlsStatusRemoteOnly');
+        el.className = 'tls-status-warn';
+    } else {
+        el.textContent = t('tlsStatusBothOff');
+        el.className = 'tls-status-warn';
     }
 }
 
@@ -1980,7 +2203,10 @@ function updateControlStateUI(state) {
     const el = elements.controlState;
     if (!el) return;
     const { t } = window.i18n;
-    if (state === 'LocalControlling') {
+    if (state === 'Armed') {
+        el.textContent = t('controlStateArmed');
+        el.className = 'control-state-armed';
+    } else if (state === 'LocalControlling') {
         el.textContent = t('controlStateLocal');
         el.className = 'control-state-local';
     } else if (state === 'RemoteControlling') {
@@ -1997,7 +2223,10 @@ function updateSharingButtonForState(state) {
     const btn = elements.startSharingBtn;
     if (!btn) return;
     const { t } = window.i18n;
-    if (state === 'LocalControlling') {
+    if (state === 'Armed') {
+        btn.setAttribute('data-i18n', 'btnArmedWaiting');
+        btn.textContent = t('btnArmedWaiting');
+    } else if (state === 'LocalControlling') {
         btn.setAttribute('data-i18n', 'btnStopSharing');
         btn.textContent = t('btnStopSharing');
     } else {
@@ -2484,6 +2713,56 @@ function hidePermissionWarning() {
     }
 }
 
+/**
+ * v0.1.41: Windows 管理员权限检测
+ * 若未以管理员身份运行，在页面顶部显示提示横幅
+ */
+async function checkWinAdminPermission() {
+    if (!invoke) return;
+    try {
+        const result = await invoke('check_admin_permission');
+        if (result && result.admin_required) {
+            showWinAdminBanner();
+        }
+    } catch (e) {
+        console.warn('[KVMini] check_admin_permission failed:', e);
+    }
+}
+
+/**
+ * 显示 Windows 管理员权限横幅
+ */
+function showWinAdminBanner() {
+    const { t } = window.i18n;
+    // 复用现有的 permission-warning 元素，或创建新的
+    let banner = document.getElementById('win-admin-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'win-admin-banner';
+        banner.className = 'permission-warning';
+        banner.innerHTML = `
+            <span class="permission-warning-text" data-i18n="winAdminBannerText">${t('winAdminBannerText')}</span>
+            <button id="win-admin-elevate-btn" class="permission-warning-btn" data-i18n="winAdminBtnElevate">${t('winAdminBtnElevate')}</button>
+        `;
+        // 插入到 main content 顶部
+        const mainContent = document.querySelector('.main-content') || document.body;
+        mainContent.insertBefore(banner, mainContent.firstChild);
+
+        // 绑定按钮事件
+        const btn = document.getElementById('win-admin-elevate-btn');
+        if (btn) {
+            btn.addEventListener('click', async () => {
+                try {
+                    await invoke('request_admin_elevation');
+                } catch (e) {
+                    console.error('[KVMini] request_admin_elevation failed:', e);
+                }
+            });
+        }
+    }
+    banner.classList.remove('hidden');
+}
+
 // ─── 自动更新 ─────────────────────────────────────────────────────────────────
 
 /** 缓存的更新信息（供 install 时使用） */
@@ -2909,4 +3188,17 @@ if (window.LicenseModule) {
     window.LicenseModule.initLicense().catch(e => {
         console.warn('[License] 授权模块初始化失败:', e);
     });
+}
+
+// ── Node/Jest 测试环境导出（浏览器下 module 不存在，此块被忽略） ────────────
+// v0.1.40: 为 bug-032 / sharing-armed 单元测试暴露纯 UI 函数
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        updateConnectionButtons,
+        updateControlStateUI,
+        updateSharingButtonForState,
+        // 测试可通过这两个 setter 注入 mock 的 appState / elements
+        __setAppState: (s) => { appState = s; },
+        __setElements: (e) => { elements = e; },
+    };
 }

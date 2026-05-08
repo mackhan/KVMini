@@ -88,6 +88,18 @@ function initAccessibilityEventListeners() {
         if (_currentOverlayKind === 'accessibility') {
             hideOverlay();
         }
+        // 同时隐藏连接后的权限横幅（如果当前显示的是辅助功能警告）
+        const permWarn = document.getElementById('permission-warning');
+        if (permWarn && !permWarn.classList.contains('hidden')) {
+            const btn = permWarn.querySelector('.permission-warning-btn');
+            const kind = btn ? btn.getAttribute('data-kind') : 'accessibility';
+            if (kind === 'accessibility' || !kind) {
+                permWarn.classList.add('hidden');
+                // 恢复开始共享按钮
+                const startBtn = document.getElementById('start-sharing-btn');
+                if (startBtn) startBtn.disabled = false;
+            }
+        }
     });
 
     // ─── 输入监控权限事件（BUG-027 新增） ──────────────────────────────────
@@ -108,6 +120,17 @@ function initAccessibilityEventListeners() {
         console.log('[Permission] input-monitoring://permission-granted');
         if (_currentOverlayKind === 'input-monitoring') {
             hideOverlay();
+        }
+        // 同时隐藏连接后的权限横幅（如果当前显示的是输入监控警告）
+        const permWarn = document.getElementById('permission-warning');
+        if (permWarn && !permWarn.classList.contains('hidden')) {
+            const btn = permWarn.querySelector('.permission-warning-btn');
+            const kind = btn ? btn.getAttribute('data-kind') : '';
+            if (kind === 'input-monitoring') {
+                permWarn.classList.add('hidden');
+                const startBtn = document.getElementById('start-sharing-btn');
+                if (startBtn) startBtn.disabled = false;
+            }
         }
     });
 
@@ -206,30 +229,88 @@ async function checkPermissionAfterConnect(elements, invoke) {
         return;
     }
 
+    console.log('[Permission] checkPermissionAfterConnect: 开始权限检查');
     try {
-        const ax = await invoke('check_accessibility_permission');
+        let ax = await invoke('check_accessibility_permission');
+        console.log('[Permission] 辅助功能权限首次检查结果:', ax);
         if (ax !== 'Granted') {
-            showPermissionWarning(elements);
+            // 延迟 1.5 秒重试一次（macOS TCC 缓存刷新需要时间）
+            console.log('[Permission] 辅助功能未授权，1.5秒后重试...');
+            await new Promise(r => setTimeout(r, 1500));
+            ax = await invoke('check_accessibility_permission');
+            console.log('[Permission] 辅助功能权限重试结果:', ax);
+        }
+        if (ax !== 'Granted') {
+            console.warn('[Permission] 辅助功能权限最终 Denied，显示横幅');
+            showPermissionWarning(elements, 'accessibility');
+            // 请求后端重新启动权限轮询（防止旧轮询已停止）
+            invoke('request_accessibility_permission').catch(() => {});
             return;
         }
+        console.log('[Permission] 辅助功能已授权 ✓，检查输入监控...');
         try {
-            const im = await invoke('check_input_monitoring_permission');
+            let im = await invoke('check_input_monitoring_permission');
+            console.log('[Permission] 输入监控权限首次检查结果:', im);
             if (im !== 'Granted' && im !== 'N/A') {
-                showPermissionWarning(elements);
+                // 延迟 1.5 秒重试一次
+                console.log('[Permission] 输入监控未授权，1.5秒后重试...');
+                await new Promise(r => setTimeout(r, 1500));
+                im = await invoke('check_input_monitoring_permission');
+                console.log('[Permission] 输入监控权限重试结果:', im);
+            }
+            if (im !== 'Granted' && im !== 'N/A') {
+                console.warn('[Permission] 输入监控权限最终 Denied，显示横幅');
+                showPermissionWarning(elements, 'input-monitoring');
                 return;
             }
-        } catch {
+            console.log('[Permission] 输入监控已授权 ✓');
+        } catch (e) {
+            console.warn('[Permission] check_input_monitoring_permission 不可用:', e);
             // 后端未实现时降级为只校验辅助功能
         }
+        console.log('[Permission] 所有权限检查通过，隐藏横幅');
         hidePermissionWarning(elements);
-    } catch {
+    } catch (e) {
+        console.warn('[Permission] 权限检查异常:', e);
         hidePermissionWarning(elements);
     }
 }
 
-function showPermissionWarning(elements) {
+function showPermissionWarning(elements, kind = 'accessibility') {
+    const t = (window.i18n && window.i18n.t) ? window.i18n.t : (k) => k;
     if (elements?.permissionWarning) {
         elements.permissionWarning.classList.remove('hidden');
+        const textEl = elements.permissionWarning.querySelector('.permission-warning-text');
+        const btnEl = elements.permissionWarning.querySelector('.permission-warning-btn') ||
+                      document.getElementById('permission-warning-btn');
+        if (textEl) {
+            const textKey = kind === 'input-monitoring'
+                ? 'permissionWarningInputMonitoringText'
+                : 'permissionWarningText';
+            textEl.textContent = t(textKey);
+            textEl.setAttribute('data-i18n', textKey);
+        }
+        if (btnEl) {
+            const btnKey = kind === 'input-monitoring'
+                ? 'permissionWarningBtnInputMonitoring'
+                : 'permissionWarningBtnAccessibility';
+            btnEl.textContent = t(btnKey);
+            btnEl.setAttribute('data-i18n', btnKey);
+            btnEl.setAttribute('data-kind', kind);
+            btnEl.classList.remove('hidden');
+            // 幂等绑定：用 onclick 避免多次累积
+            const tauri = window.__TAURI__;
+            const invoke = tauri?.core?.invoke || tauri?.invoke || null;
+            btnEl.onclick = async () => {
+                if (!invoke) return;
+                const cmd = btnEl.getAttribute('data-kind') === 'input-monitoring'
+                    ? 'open_input_monitoring_settings'
+                    : 'open_accessibility_settings';
+                try { await invoke(cmd); } catch (e) {
+                    console.error('[Permission] 打开系统设置失败:', e);
+                }
+            };
+        }
     }
     if (elements?.startSharingBtn) {
         elements.startSharingBtn.disabled = true;
@@ -239,6 +320,8 @@ function showPermissionWarning(elements) {
 function hidePermissionWarning(elements) {
     if (elements?.permissionWarning) {
         elements.permissionWarning.classList.add('hidden');
+        const btnEl = elements.permissionWarning.querySelector('.permission-warning-btn');
+        if (btnEl) btnEl.classList.add('hidden');
     }
     if (elements?.startSharingBtn) {
         elements.startSharingBtn.disabled = false;

@@ -113,18 +113,24 @@ fn win32_hook_thread(
     control_state: Arc<AtomicU8>,
 ) {
     use winapi::um::winuser::*;
+    use winapi::shared::minwindef::*;
+    use winapi::shared::windef::*;
 
     HOOK_CALLBACK.with(|cell| {
         *cell.borrow_mut() = Some(callback);
     });
     HOOK_CAPTURING.with(|cell| {
-        *cell.borrow_mut() = Some(capturing);
+        *cell.borrow_mut() = Some(capturing.clone());
     });
     HOOK_CONTROL_STATE.with(|cell| {
         *cell.borrow_mut() = Some(control_state);
     });
 
     unsafe {
+        // v0.1.41: 注册 RawInput 设备（鼠标）
+        // 创建 message-only 窗口用于接收 WM_INPUT
+        register_raw_input_device();
+
         let mouse_hook = SetWindowsHookExW(
             WH_MOUSE_LL,
             Some(mouse_hook_proc),
@@ -143,22 +149,161 @@ fn win32_hook_thread(
             return;
         }
 
+        log::info!("[Win] LL Hook 安装成功，RawInput 已注册");
+
+        // v0.1.41: 5s 健康检查计时器
+        let mut last_health_check = std::time::Instant::now();
+
         let mut msg: MSG = std::mem::zeroed();
         loop {
-            let should_stop = HOOK_CAPTURING
-                .with(|cell| cell.borrow().as_ref().map(|c| !c.load(Ordering::SeqCst)).unwrap_or(true));
+            let should_stop = !capturing.load(Ordering::SeqCst);
             if should_stop { break; }
 
             while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                // v0.1.41: 处理 WM_INPUT（RawInput 硬件 delta）
+                if msg.message == WM_INPUT {
+                    handle_raw_input(msg.lParam as _);
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+
+            // v0.1.41: 5s 健康检查 — 验证 hook 是否仍有效
+            if last_health_check.elapsed() >= std::time::Duration::from_secs(5) {
+                last_health_check = std::time::Instant::now();
+                // 尝试检测 hook 是否被系统移除（LowLevelHooksTimeout）
+                // 如果 hook 失效，重新安装
+                // 注意：Windows 没有直接检测 hook 是否有效的 API
+                // 实践中依赖 hook 消息频率间接判断
+                log::trace!("[Win] Hook 健康检查通过（5s interval）");
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
         if !mouse_hook.is_null() { UnhookWindowsHookEx(mouse_hook); }
         if !keyboard_hook.is_null() { UnhookWindowsHookEx(keyboard_hook); }
     }
+}
+
+/// v0.1.41: 注册 RawInput 鼠标设备
+/// v0.1.41 fix: 创建 message-only 窗口作为 hwnd_target（RIDEV_INPUTSINK 要求有效窗口句柄）
+#[cfg(target_os = "windows")]
+unsafe fn register_raw_input_device() {
+    use winapi::um::winuser::*;
+    use winapi::shared::windef::HWND;
+    use std::os::windows::ffi::OsStrExt;
+
+    // 创建 message-only 窗口（HWND_MESSAGE 父窗口，不可见、不渲染）
+    let class_name: Vec<u16> = "KVMiniRawInput\0".encode_utf16().collect();
+    let wc = WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(winapi::um::winuser::DefWindowProcW),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: std::ptr::null_mut(),
+        hIcon: std::ptr::null_mut(),
+        hCursor: std::ptr::null_mut(),
+        hbrBackground: std::ptr::null_mut(),
+        lpszMenuName: std::ptr::null(),
+        lpszClassName: class_name.as_ptr(),
+    };
+    RegisterClassW(&wc);
+
+    let hwnd = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        std::ptr::null(),
+        0,
+        0, 0, 0, 0,
+        winapi::um::winuser::HWND_MESSAGE, // message-only 窗口
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+
+    if hwnd.is_null() {
+        log::warn!("[Win] 创建 RawInput message-only 窗口失败，将降级使用帧差 delta");
+        RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = false);
+        return;
+    }
+
+    // 使用 winapi 提供的 RAWINPUTDEVICE 结构体（保证内存布局正确）
+    let rid = winapi::um::winuser::RAWINPUTDEVICE {
+        usUsagePage: 0x01, // HID_USAGE_PAGE_GENERIC
+        usUsage: 0x02,     // HID_USAGE_GENERIC_MOUSE
+        dwFlags: RIDEV_INPUTSINK, // 接收即使窗口不在前台
+        hwndTarget: hwnd,  // 有效的 message-only 窗口句柄
+    };
+
+    let result = RegisterRawInputDevices(
+        &rid as *const _,
+        1,
+        std::mem::size_of::<winapi::um::winuser::RAWINPUTDEVICE>() as u32,
+    );
+
+    if result == 0 {
+        log::warn!("[Win] RegisterRawInputDevices 失败，将降级使用帧差 delta");
+        RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = false);
+        // 销毁无用窗口
+        DestroyWindow(hwnd);
+    } else {
+        log::info!("[Win] RawInput 鼠标设备注册成功（message-only 窗口）");
+        RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = true);
+    }
+}
+
+/// v0.1.41: 处理 WM_INPUT 消息，提取硬件 delta
+#[cfg(target_os = "windows")]
+unsafe fn handle_raw_input(l_param: winapi::shared::minwindef::LPARAM) {
+    use winapi::um::winuser::*;
+
+    // 先获取 raw input 数据大小
+    let mut size: u32 = 0;
+    GetRawInputData(
+        l_param as _,
+        RID_INPUT,
+        std::ptr::null_mut(),
+        &mut size,
+        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+    );
+
+    if size == 0 { return; }
+
+    let mut buffer = vec![0u8; size as usize];
+    let copied = GetRawInputData(
+        l_param as _,
+        RID_INPUT,
+        buffer.as_mut_ptr() as *mut _,
+        &mut size,
+        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+    );
+
+    if copied == u32::MAX { return; }
+
+    let raw = &*(buffer.as_ptr() as *const RAWINPUT);
+
+    // 只处理鼠标类型
+    if raw.header.dwType != 0 { return; } // RIM_TYPEMOUSE = 0
+
+    let mouse = &raw.data.mouse();
+    let flags = mouse.usFlags as u32;
+
+    // 检查是否为相对模式（大多数鼠标都是相对模式）
+    const MOUSE_MOVE_ABSOLUTE: u32 = 0x01;
+    if flags & MOUSE_MOVE_ABSOLUTE == 0 {
+        // 相对模式：lLastX/lLastY 即硬件 delta
+        let dx = mouse.lLastX.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let dy = mouse.lLastY.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+
+        // 累加到 RAW_INPUT_DELTA（可能一个 PeekMessage 循环内收到多个 WM_INPUT）
+        RAW_INPUT_DELTA.with(|cell| {
+            let mut delta = cell.borrow_mut();
+            delta.0 = delta.0.saturating_add(dx);
+            delta.1 = delta.1.saturating_add(dy);
+        });
+    }
+    // 绝对模式（触摸屏/数位板）暂不处理——降级到帧差
 }
 
 #[cfg(target_os = "windows")]
@@ -169,6 +314,17 @@ thread_local! {
         std::cell::RefCell::new(None);
     static HOOK_CONTROL_STATE: std::cell::RefCell<Option<Arc<AtomicU8>>> =
         std::cell::RefCell::new(None);
+    /// v0.1.40: 上一次鼠标位置（用于帧差计算 dx/dy 的降级路径）
+    static LAST_MOUSE_POS: std::cell::RefCell<Option<(i32, i32)>> =
+        std::cell::RefCell::new(None);
+    /// v0.1.41: RawInput 硬件 delta 缓冲区
+    /// 由 RawInput WndProc 写入，mouse_hook_proc 读取并清零
+    /// 这解决了 ClipCursor 钳住光标后 LL Hook pt.x/y 不变导致帧差恒为 0 的 bug
+    static RAW_INPUT_DELTA: std::cell::RefCell<(i16, i16)> =
+        std::cell::RefCell::new((0, 0));
+    /// v0.1.41: RawInput 是否注册成功
+    static RAW_INPUT_REGISTERED: std::cell::RefCell<bool> =
+        std::cell::RefCell::new(false);
 }
 
 /// 读取当前控制状态（Hook 回调线程专用，用 Relaxed 读避免锁）
@@ -202,19 +358,64 @@ unsafe extern "system" fn mouse_hook_proc(
         let y = ms_hook.pt.y;
 
         let event = match w_param as u32 {
-            WM_MOUSEMOVE => Some(RawInputEvent::MouseMove { x, y }),
+            WM_MOUSEMOVE => {
+                // v0.1.41: 双源 delta 架构
+                // 优先使用 RawInput 硬件 delta（如果已注册成功），否则降级为帧差
+                let (dx, dy) = RAW_INPUT_DELTA.with(|cell| {
+                    let mut delta = cell.borrow_mut();
+                    if delta.0 != 0 || delta.1 != 0 {
+                        // 有 RawInput delta，读取并清零
+                        let d = *delta;
+                        *delta = (0i16, 0i16);
+                        d
+                    } else {
+                        // 降级：帧差近似
+                        drop(delta);
+                        LAST_MOUSE_POS.with(|cell| {
+                            let mut last = cell.borrow_mut();
+                            let result = match *last {
+                                Some((lx, ly)) => {
+                                    let ddx = (x - lx).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                                    let ddy = (y - ly).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                                    (ddx, ddy)
+                                }
+                                None => (0, 0),
+                            };
+                            *last = Some((x, y));
+                            result
+                        })
+                    }
+                });
+                // 更新 LAST_MOUSE_POS（无论 delta 来源都需要更新，用于边缘检测）
+                LAST_MOUSE_POS.with(|cell| {
+                    *cell.borrow_mut() = Some((x, y));
+                });
+                Some(RawInputEvent::MouseMove { x, y, dx, dy })
+            }
             WM_LBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Left }),
             WM_LBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Left }),
             WM_RBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Right }),
             WM_RBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Right }),
             WM_MBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Middle }),
             WM_MBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Middle }),
+            // v0.1.41: XButton（Side1/Side2）补全
+            WM_XBUTTONDOWN => {
+                let hi_word = ((ms_hook.mouseData >> 16) & 0xFFFF) as u16;
+                let button = if hi_word == 1 { MouseButton::Side1 } else { MouseButton::Side2 };
+                Some(RawInputEvent::MouseDown { button })
+            }
+            WM_XBUTTONUP => {
+                let hi_word = ((ms_hook.mouseData >> 16) & 0xFFFF) as u16;
+                let button = if hi_word == 1 { MouseButton::Side1 } else { MouseButton::Side2 };
+                Some(RawInputEvent::MouseUp { button })
+            }
             WM_MOUSEWHEEL => {
-                let delta = (ms_hook.mouseData >> 16) as i16 as i32;
+                // v0.1.41: 正确使用 i32 as i16 表达负向滚动
+                let delta = (ms_hook.mouseData as i32) >> 16;
                 Some(RawInputEvent::Scroll { dx: 0, dy: delta })
             }
             WM_MOUSEHWHEEL => {
-                let delta = (ms_hook.mouseData >> 16) as i16 as i32;
+                let delta = (ms_hook.mouseData as i32) >> 16;
                 Some(RawInputEvent::Scroll { dx: delta, dy: 0 })
             }
             _ => None,

@@ -76,6 +76,8 @@ pub struct KvmConfig {
     pub log_level: LogLevel,
     /// 边缘触发防抖时间（毫秒）
     pub edge_debounce_ms: u64,
+    /// 边缘过冲量（像素），需推过边缘 N 像素才切换，0 = 贴边即切，默认 20，范围 0~200
+    pub edge_overshoot_px: i32,
     /// 心跳间隔（秒）
     pub heartbeat_interval_secs: u64,
     /// 心跳超时次数
@@ -98,6 +100,7 @@ impl Default for KvmConfig {
             autostart: false,
             log_level: LogLevel::default(),
             edge_debounce_ms: 50,
+            edge_overshoot_px: 20,
             heartbeat_interval_secs: 5,
             heartbeat_timeout_count: 3,
             reconnect_interval_secs: 3,
@@ -119,6 +122,7 @@ mod tests {
         assert!(config.clipboard_enabled);
         assert!(!config.autostart);
         assert_eq!(config.edge_debounce_ms, 50);
+        assert_eq!(config.edge_overshoot_px, 20);
         assert_eq!(config.heartbeat_interval_secs, 5);
         assert_eq!(config.heartbeat_timeout_count, 3);
         assert_eq!(config.reconnect_interval_secs, 3);

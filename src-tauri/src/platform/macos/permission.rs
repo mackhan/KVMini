@@ -33,7 +33,13 @@ impl std::fmt::Display for AccessibilityStatus {
 pub fn check_accessibility() -> AccessibilityStatus {
     #[cfg(target_os = "macos")]
     {
-        if is_trusted(false) { AccessibilityStatus::Granted } else { AccessibilityStatus::Denied }
+        let result = is_trusted(false);
+        log::debug!(
+            "[Mac] AXIsProcessTrustedWithOptions(prompt=false) = {}, pid={}",
+            result,
+            std::process::id()
+        );
+        if result { AccessibilityStatus::Granted } else { AccessibilityStatus::Denied }
     }
     #[cfg(not(target_os = "macos"))]
     { AccessibilityStatus::Unknown }

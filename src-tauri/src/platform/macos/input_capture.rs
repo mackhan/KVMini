@@ -202,17 +202,27 @@ impl InputCapture for MacInputCapture {
 }
 
 #[cfg(target_os = "macos")]
+use core_foundation::base::TCFType;
+
+// FFI: CGEventTapEnable 用于 re-enable 被系统自动 disable 的 tap
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGEventTapEnable(tap: core_foundation::mach_port::CFMachPortRef, enable: bool);
+}
+
 fn start_event_tap_in_current_thread(
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     control_state: Arc<AtomicU8>,
 ) -> KvmResult<()> {
+    // 克隆 capturing 给守护线程使用（退出条件）
+    let capturing_for_guard = Arc::clone(&capturing);
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
     use core_graphics::event::{
         CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
     };
 
-    let mask = vec![
+    let mut mask = vec![
         CGEventType::MouseMoved,
         CGEventType::LeftMouseDown,
         CGEventType::LeftMouseUp,
@@ -224,7 +234,20 @@ fn start_event_tap_in_current_thread(
         CGEventType::KeyDown,
         CGEventType::KeyUp,
         CGEventType::FlagsChanged,
+        // v0.1.41: 手势屏蔽 — 避免 LocalControlling 时触发 Mission Control/Launchpad/Pinch
+        CGEventType::LeftMouseDragged,
+        CGEventType::RightMouseDragged,
+        CGEventType::OtherMouseDragged,
     ];
+
+    // v0.1.41: 额外的手势事件类型（core-graphics CGEventType 枚举不含这些）
+    // 通过 transmute 注入 raw event type 值到 mask 列表
+    // kCGEventGesture = 29, NSEventTypeMagnify/Pinch = 30, NSEventTypeSwipe = 31
+    unsafe {
+        mask.push(std::mem::transmute::<u32, CGEventType>(29)); // kCGEventGesture
+        mask.push(std::mem::transmute::<u32, CGEventType>(30)); // Magnify/Pinch
+        mask.push(std::mem::transmute::<u32, CGEventType>(31)); // Swipe
+    }
 
     // CGEventTapOptions::Default 允许回调决定事件放行/吞掉；
     // 必须在本机授予"输入监控"权限，否则 CGEventTap::new 会失败。
@@ -234,10 +257,24 @@ fn start_event_tap_in_current_thread(
         CGEventTapOptions::Default,
         mask,
         move |_proxy, event_type, event| {
+            // BUG-030: 检测 tap 被系统超时禁用，立即 re-enable
+            // macOS 会在回调返回 None 过于频繁/耗时过长时自动 disable tap
+            // CGEventType 没有实现 PartialEq，用 raw 值比较
+            // TapDisabledByTimeout = 0xFFFFFFFE, TapDisabledByUserInput = 0xFFFFFFFF
+            let event_type_raw = unsafe { std::mem::transmute::<_, u32>(event_type) };
+            if event_type_raw == 0xFFFFFFFE || event_type_raw == 0xFFFFFFFF {
+                log::warn!("[Mac] CGEventTap 被系统禁用（type={:#X}），守护线程将自动 re-enable", event_type_raw);
+                return Some(event.to_owned());
+            }
+
             // 1. 未在 capturing 状态时，一律放行（安全兜底）
             if !capturing.load(Ordering::SeqCst) {
                 return Some(event.to_owned());
             }
+
+            // 读取控制状态（提前到这里，用于日志和决策）
+            let state = control_state.load(Ordering::Relaxed);
+
             // 2. 先把事件送给 sender（无论最后是否吞）——
             //    只有 LocalControlling 状态下这些事件才有意义转发给对端，
             //    其他状态日志里 sender 会被静默丢弃（event_tx 已被 take）。
@@ -248,15 +285,21 @@ fn start_event_tap_in_current_thread(
                     }
                 }
             }
-            // 3. 根据控制状态决定是否吞事件（关键：Relaxed 读，禁止锁）
-            let state = control_state.load(Ordering::Relaxed);
+
+            // 3. 根据控制状态决定是否吞事件
             match state {
                 CONTROL_STATE_LOCAL_CONTROLLING | CONTROL_STATE_REMOTE_CONTROLLING => {
                     // 吞掉：本机不感知此事件
+                    // 用 static 变量限频日志，只打一次
+                    use std::sync::atomic::AtomicBool;
+                    static LOGGED_FIRST_SWALLOW: AtomicBool = AtomicBool::new(false);
+                    if !LOGGED_FIRST_SWALLOW.swap(true, Ordering::Relaxed) {
+                        log::info!("[Mac] 首次吞掉本机输入事件（state={}）", state);
+                    }
                     None
                 }
                 _ => {
-                    // Idle：完全放行（防误吞，是最关键的安全兜底）
+                    // Idle/Armed：完全放行（防误吞，是最关键的安全兜底）
                     Some(event.to_owned())
                 }
             }
@@ -275,6 +318,10 @@ fn start_event_tap_in_current_thread(
             reason: "创建 RunLoop Source 失败".to_string(),
         })?;
 
+    // 保存 mach_port 的 raw 指针用于 re-enable（在 tap 被 forget 后仍可用）
+    // 保存 mach_port 的 raw 指针（as usize）用于守护线程 re-enable
+    let mach_port_raw = tap.mach_port.as_concrete_TypeRef() as usize;
+
     // CRITICAL：必须用 GetCurrent（即子线程 RunLoop），不能用 GetMain
     let run_loop = CFRunLoop::get_current();
     run_loop.add_source(&loop_source, unsafe { kCFRunLoopDefaultMode });
@@ -284,7 +331,28 @@ fn start_event_tap_in_current_thread(
     // CFRunLoop 已经持有 source → mach_port，把 tap 自身泄漏即可保持强引用
     std::mem::forget(tap);
 
-    log::info!("[Mac] CGEventTap 已启动（子线程 RunLoop, CGEventTapOptions::Default）");
+    // BUG-030: 启动一个定时器，每 5 秒检测并 re-enable tap（防止被系统 disable 后无法恢复）
+    // 这是因为 TapDisabledByTimeout 事件有时不会被回调收到（tap 已经 disabled 了）
+    // v0.1.41 fix: 守护线程在 capturing=false 时退出，避免 stop_capture 后线程泄漏和潜在 UAF
+    std::thread::Builder::new()
+        .name("kvm-tap-guard".to_string())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                // 退出条件：capture 已停止
+                if !capturing_for_guard.load(Ordering::SeqCst) {
+                    log::info!("[Mac] tap 守护线程检测到 capturing=false，正常退出");
+                    break;
+                }
+                unsafe {
+                    let port_ref = mach_port_raw as core_foundation::mach_port::CFMachPortRef;
+                    CGEventTapEnable(port_ref, true);
+                }
+            }
+        })
+        .ok();
+
+    log::info!("[Mac] CGEventTap 已启动（子线程 RunLoop, CGEventTapOptions::Default, 含自动 re-enable 守护）");
     Ok(())
 }
 
@@ -299,9 +367,16 @@ fn cg_event_to_raw(
     match event_type {
         CGEventType::MouseMoved => {
             let loc = event.location();
+            // v0.1.40: 读取硬件 delta（CGEventField 93/94 = kCGMouseEventDeltaX/Y）
+            // 绕过 grab 后 event.location() 冻结的问题（根本修复远端鼠标不动 bug）
+            use core_graphics::event::EventField;
+            let dx = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X) as i16;
+            let dy = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y) as i16;
             Some(RawInputEvent::MouseMove {
                 x: loc.x as i32,
                 y: loc.y as i32,
+                dx,
+                dy,
             })
         }
         CGEventType::LeftMouseDown => Some(RawInputEvent::MouseDown {

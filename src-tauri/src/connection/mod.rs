@@ -230,17 +230,24 @@ impl KvmConnectionManager {
                                         NetworkEvent::FrameReceived(frame) => {
                                             use kvm_core::protocol::KvmFrame::*;
                                             match frame {
-                                                MouseMove { .. }
+                                                MouseMoveDelta { .. }
                                                 | MouseButton { .. }
                                                 | MouseScroll { .. }
                                                 | KeyEvent { .. } => {
-                                                    sm.inject_remote_frame(frame).await;
+                                                    sm.inject_remote_frame(frame, &app_for_sharing).await;
                                                 }
-                                                SwitchControl { .. } => {
-                                                    sm.on_remote_switch_control(&app_for_sharing).await;
+                                                SwitchControl { edge, pos_ratio } => {
+                                                    sm.on_remote_switch_control(
+                                                        &app_for_sharing,
+                                                        *edge,
+                                                        *pos_ratio,
+                                                    ).await;
                                                 }
                                                 SwitchControlAck => {
                                                     sm.on_remote_switch_ack(&app_for_sharing).await;
+                                                }
+                                                SwitchBackControl => {
+                                                    sm.on_remote_switch_back(&app_for_sharing).await;
                                                 }
                                                 _ => {}
                                             }
@@ -320,6 +327,10 @@ pub fn network_event_to_connection_event(
 ) -> Option<ConnectionEvent> {
     match event {
         NetworkEvent::ConnectionStateChanged(state) => {
+            // 注意：Connected 状态在主动连接时由 connect_to_peer 的 spawn 块
+            // 手动发送（带有完整 TLS 信息），事件循环中的 Connected 也会到此处。
+            // 为避免重复/覆盖，事件循环的 Connected 仍然发出（供断开→连接等场景），
+            // 但 TLS 信息以 peer_info 事件为准。
             Some(ConnectionEvent::from_state(state, ip_opt))
         }
         NetworkEvent::Error(msg) => {
@@ -327,6 +338,8 @@ pub fn network_event_to_connection_event(
         }
         NetworkEvent::PeerHandshake(info) => {
             let platform_str = format!("{:?}", info.platform);
+            let local_tls = crate::config::load_config().enable_tls;
+            let remote_tls = info.tls_enabled;
             Some(ConnectionEvent {
                 event_type: "peer_info".to_string(),
                 connected: true,
@@ -334,9 +347,9 @@ pub fn network_event_to_connection_event(
                 message: format!("对端平台: {}", platform_str),
                 attempt: None,
                 guide: None,
-                tls_mismatch: false,
-                local_tls: false,
-                remote_tls: false,
+                tls_mismatch: local_tls != remote_tls,
+                local_tls,
+                remote_tls,
             })
         }
         NetworkEvent::LatencyUpdated(ms) => {
@@ -402,6 +415,7 @@ pub async fn connect_to_peer(
 
     // 读取本机 TLS 配置
     let local_tls = crate::config::load_config().enable_tls;
+    log::info!("[连接] 读取本机 TLS 配置: enable_tls={}, 配置文件路径: {:?}", local_tls, crate::config::config_path());
 
     let inner = Arc::clone(&mgr.inner);
     let ip_clone = ip.clone();
@@ -413,6 +427,20 @@ pub async fn connect_to_peer(
                 log::info!("[连接] 已连接到 {}", ip_clone);
                 // 检测 TLS 状态：从对端握手信息中读取 tls_enabled
                 let remote_tls = peer_info.tls_enabled;
+
+                // 发送带有 TLS 状态的 connected 事件（始终发送，前端据此更新 TLS 面板）
+                let _ = app_clone.emit("connection-status", ConnectionEvent {
+                    event_type: "connected".to_string(),
+                    connected: true,
+                    peer_ip: Some(ip_clone.clone()),
+                    message: format!("已连接到 {}", ip_clone),
+                    attempt: None,
+                    guide: None,
+                    tls_mismatch: local_tls != remote_tls,
+                    local_tls,
+                    remote_tls,
+                });
+
                 if local_tls != remote_tls {
                     log::warn!(
                         "[TLS] 不一致：本机 tls={}, 对端 tls={}",
