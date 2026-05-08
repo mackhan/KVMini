@@ -536,3 +536,31 @@
 | **出现次数** | 1（v0.1.38 发版后用户反馈） |
 | **测试用例** | `__tests__/permission-warning-kind.test.ts`（11 用例覆盖：zh/en 字典完整性 + 「输入监控」文案必须含"重启"/英文必须含"restart/relaunch" + kind=accessibility/input-monitoring 文案与按钮 data-kind 正确切换 + 不传 kind 默认 accessibility 向后兼容 + hidePermissionWarning 隐藏按钮 + 按钮点击按 kind 调对应 invoke 命令） |
 | **关键教训** | 混合多种权限时 UI 文案必须严格对应到具体缺失项，不能用"上位词"兜底；`CGPreflightListenEventAccess` 进程内缓存是物理事实，无法程序化刷新，只能把"必须重启"这一事实透明化告诉用户；按钮的"意图"应当写入 `data-kind` 等 HTML 属性而非隐式状态变量，这样 `onclick` 能通过读 DOM 稳定路由，避免闭包捕获过时值 |
+
+---
+
+## Bug #032：已连接状态下按钮误显示「重连」（v0.1.40 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 连接成功后按钮正确显示"断开连接"，但过几秒后自动变成显示"重连"按钮，用户以为连接已断开，但实际仍处于已连接状态 |
+| **根因** | `src/main.js` L454-459 的 `reconnecting` 事件处理器无条件执行 `appState.connected = false` 并调用 `updateConnectionButtons(false)`。而心跳波动（网络瞬间延迟）会触发后端 emit `reconnecting` 事件，即使连接实际并未断开。`updateConnectionButtons(connected)` 直接信任外部传入的 `connected` 参数，没有二次校验 `appState.connected` 的真实状态 |
+| **修改方式** | **两层修复（v0.1.40 review 后升级）**：① `updateConnectionButtons` 函数内部改为读取 `appState.connected` 作为单一真相源（single source of truth），忽略外部传入的 `connected` 参数（参数签名保留以兼容现有调用点）；② **根因修复**：`reconnecting` 事件分支不再写 `appState.connected = false`——TCP socket 仍可能存活，仅心跳波动而已；只有真正收到 `disconnected` 事件才置 false。这样确保 reconnecting 心跳波动时按钮文案完全稳定 |
+| **修改次数** | 2（首次修在显示层；review 后追加根因层修复） |
+| **出现次数** | 1（v0.1.39 使用中发现） |
+| **测试用例** | `__tests__/bug-032-reconnect-button.test.js`（4 用例覆盖：appState.connected=true 时传 false 按钮不变 / appState=false 正确切换 / 多次 reconnecting 后按钮稳定 / 真正断连后切换） |
+| **关键教训** | **根因优于表象**：第一次只修了"按钮渲染层"是错的——心跳波动会让 `appState.connected` 自身被污染成 false，按钮依然会闪。真正的修复必须让 reconnecting 事件**不修改连接真源**。教训：UI 状态应该由单一真相源驱动，且这个真相源**不能被瞬态事件污染** |
+
+---
+
+## Bug #033：进入「控制远端」后远端鼠标完全不动（v0.1.40 致命修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 本机从 Armed 切换到 LocalControlling（本机鼠标被屏蔽、光标隐藏）后，远端鼠标原地不动；松开后本机鼠标能动但同时也能控制远端（两端同时响应，BUG-022 的反向表现） |
+| **根因** | `src-tauri/src/platform/macos/input_capture.rs::cg_event_to_raw` 对 `MouseMoved` 事件用 `event.location()` 读取鼠标位置，传入 `RawInputEvent::MouseMove { x, y }` 绝对屏幕坐标。但 `grab()` 调用 `CGAssociateMouseAndMouseCursorPosition(0)` 后，**物理鼠标与屏幕光标位置解耦**——`event.location()` 返回冻结在 grab 瞬间的同一个坐标，永远不变。远端收到的 `MouseMove{x,y}` 是同一个点，`CGWarpMouseCursorPosition` 自然原地不动。竞品（Synergy/Barrier/ShareMouse/Logitech Flow）全部用硬件 delta 而非绝对坐标 |
+| **修改方式** | 1) macOS 采集改用 `CGEvent::get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X/Y)` 读硬件位移 delta；2) 协议破坏性升级 `KvmFrame::MouseMove{x,y}` → `MouseMoveDelta{dx:i16,dy:i16}`（opcode 0x33，4 字节 payload），不留绝对坐标兜底，双端必须同时 v0.1.40；3) 新增 `kvm-core/src/remote_cursor.rs::RemoteCursorState` 维护远端虚拟光标位置，`on_delta` 累加 + clamp 屏幕 + 反向边缘检测 + `CGWarpMouseCursorPosition` 落点；4) Windows 侧 WH_MOUSE_LL 用帧差 `dx = x - last_x` 近似硬件 delta；5) `SharingManager.inject_remote_frame` 单独分支处理 MouseMoveDelta，调 `RemoteCursorState::on_delta`，贴反向边缘阈值触发后发 `SwitchBackControl` 回切 Idle |
+| **修改次数** | 1 |
+| **出现次数** | 1（v0.1.38 + BUG-022 修复后引入，v0.1.40 彻底修复） |
+| **测试用例** | `kvm-core/src/remote_cursor.rs` 16 个测试：on_enter 4 方向 / on_delta 累加 / clamp 4 方向 / 反向边缘 4 方向 / i32 溢出防护 / 入态贴边不立即触发 / 离开重置计数；`kvm-core/src/protocol.rs` 5 个 MouseMoveDelta 编解码测试 |
+| **关键教训** | 1) 采集端"位置"与"位移"是两个独立的物理量，在光标被 grab/disassociate 的场景下**只有 delta 是可信的**；2) 竞品已用 20+ 年验证的方案不要自创兜底——delta 模式就是 delta 模式，任何"绝对坐标兜底"都是冗余且错误；3) 协议升级时 TCP 可靠传输 + 无累积误差的 i16 delta 比 i32 绝对坐标更紧凑；4) 远端虚拟光标必须是本端（被控方）的**单一 owner**，避免跨进程同步 |

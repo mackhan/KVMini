@@ -690,6 +690,7 @@ fn check_accessibility_permission() -> String {
     #[cfg(target_os = "macos")]
     {
         let status = platform::macos::permission::check_accessibility();
+        log::info!("[Mac] check_accessibility_permission 被调用，结果: {:?}", status);
         return status.to_string();
     }
     #[cfg(not(target_os = "macos"))]
@@ -697,10 +698,20 @@ fn check_accessibility_permission() -> String {
 }
 
 /// 请求 macOS 辅助功能权限（弹出系统对话框）
+/// 如果请求后仍为 Denied，启动轮询直到授权
 #[tauri::command]
-fn request_accessibility_permission() -> Result<(), String> {
+fn request_accessibility_permission(app_handle: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    { platform::macos::permission::request_accessibility().map_err(|e| e.to_string())?; }
+    {
+        platform::macos::permission::request_accessibility().map_err(|e| e.to_string())?;
+        // 请求后若仍未授权，启动轮询（覆盖启动时轮询已结束的情况）
+        let status = platform::macos::permission::check_accessibility();
+        if status != platform::macos::permission::AccessibilityStatus::Granted {
+            start_accessibility_polling(app_handle);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app_handle;
     Ok(())
 }
 
@@ -939,10 +950,95 @@ fn set_locale(locale: String) -> Result<(), String> {
     Ok(())
 }
 
+/// v0.1.41: 检查 Windows 管理员权限（Mac 端始终返回 true）
+#[tauri::command]
+fn check_admin_permission() -> serde_json::Value {
+    #[cfg(target_os = "windows")]
+    {
+        let provider = crate::platform::windows::permission::WinPermissionProvider::new();
+        use kvm_core::platform::PermissionProvider;
+        let status = provider.permission_status();
+        serde_json::json!({
+            "elevated": status.elevated,
+            "admin_required": status.admin_required
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        serde_json::json!({
+            "elevated": true,
+            "admin_required": false
+        })
+    }
+}
+
+/// v0.1.41: 请求提权（Windows 以管理员身份重启）
+#[tauri::command]
+fn request_admin_elevation() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let provider = crate::platform::windows::permission::WinPermissionProvider::new();
+        use kvm_core::platform::PermissionProvider;
+        provider.request_elevation().map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(())
+    }
+}
+
 /// 获取更新日志（KVMini 实际版本历史）
 #[tauri::command]
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.41".to_string(),
+            date: "2026-05-08".to_string(),
+            changes: vec![
+                "Mac 端修复「失焦后键鼠屏蔽失效」：新增 FocusKeeper 模块，进入控制模式时创建透明窗口 + 200ms 自动激活循环，确保 CGAssociate 永不被系统重置".to_string(),
+                "Mac 端手势屏蔽：LocalControlling 时吞掉所有高级手势（三指/四指滑动、Pinch、Rotate），避免触发 Mission Control / Launchpad".to_string(),
+                "Win 端 RawInput 硬件 delta：解决 ClipCursor 钳住光标后 LL Hook dx/dy 恒为 0 的致命 bug，远端鼠标终于能动了".to_string(),
+                "Win 端 XButton（侧键）支持：补全 Side1/Side2 按钮的采集和注入".to_string(),
+                "Win 端滚轮修复：正确使用 i32 有符号右移表达负向滚动".to_string(),
+                "Win 端 UAC 权限检测：新增权限横幅，提示用户以管理员身份运行以获得完整 Hook 功能".to_string(),
+                "Win 端 Hook 5s 健康检查：应对 LowLevelHooksTimeout 静默移除问题".to_string(),
+                "跨平台 FocusKeeper + PermissionProvider trait 抽象，Win 端空实现/Mac 端完整实现，互不影响".to_string(),
+            ],
+            changes_en: vec![
+                "Mac: Fix 'input blocking lost on focus change' — new FocusKeeper module creates a 1×1 transparent window + 200ms auto-activate loop to keep CGAssociate from being reset".to_string(),
+                "Mac: Gesture blocking in LocalControlling — swallows trackpad gestures (swipe/pinch/rotate) to prevent Mission Control / Launchpad triggers".to_string(),
+                "Win: RawInput hardware delta — solves critical bug where ClipCursor clamping caused LL Hook dx/dy = 0, remote mouse frozen".to_string(),
+                "Win: XButton (side button) support — Side1/Side2 capture and injection added".to_string(),
+                "Win: Scroll fix — correct signed i32 shift for negative scroll direction".to_string(),
+                "Win: UAC permission detection — new banner prompts user to run as admin for full Hook functionality".to_string(),
+                "Win: Hook 5s health check — guards against silent LowLevelHooksTimeout removal".to_string(),
+                "Cross-platform FocusKeeper + PermissionProvider trait abstraction, Windows no-op / Mac full implementation, safely isolated".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.40".to_string(),
+            date: "2026-05-07".to_string(),
+            changes: vec![
+                "BUG-033 致命修复：本机进入「控制远端」后远端鼠标不动——根因是 grab() 调用 CGAssociateMouseAndMouseCursorPosition(0) 后 event.location() 冻结；改为读取 CGEvent 硬件 delta 字段（kCGMouseEventDeltaX/DeltaY），参考 Synergy/Barrier 竞品方案".to_string(),
+                "协议破坏性升级：KvmFrame::MouseMove{x,y} → MouseMoveDelta{dx,dy}，双端必须同时升级到 v0.1.40".to_string(),
+                "新增远端虚拟光标 RemoteCursorState：累加 delta + 屏幕 clamp + 反向边缘检测，贴反向边缘 N 次自动回切".to_string(),
+                "核心改造：新增 Armed 中间态（4 状态机），「开始共享」变为激活边缘检测，鼠标推到屏幕边缘才真正切换控制权".to_string(),
+                "边缘过冲量防误触：需推过边缘 N 像素才触发，默认 20px，用户可配置 0~200".to_string(),
+                "Y 坐标镜像映射：切换时保留鼠标 Y 位置比例，光标按比例落到远端对应位置".to_string(),
+                "双通道回切：Ctrl+Alt+S 快捷键 + 远端反向边缘检测（新增 SwitchBackControl 协议帧）".to_string(),
+                "BUG-032 修复：连接状态下 reconnecting 事件不再导致按钮误显示「重连」（改为以 appState.connected 单一真源判断）".to_string(),
+            ],
+            changes_en: vec![
+                "Critical BUG-033 fix: Remote mouse frozen in 'Control Remote' mode - root cause: event.location() freezes after grab() disassociates cursor; switched to CGEvent hardware delta (kCGMouseEventDeltaX/DeltaY), following Synergy/Barrier design".to_string(),
+                "Breaking protocol upgrade: KvmFrame::MouseMove{x,y} -> MouseMoveDelta{dx,dy}. Both sides must upgrade to v0.1.40".to_string(),
+                "New RemoteCursorState: accumulates delta + clamps + reverse edge detection; auto-sends SwitchBackControl after N consecutive hits".to_string(),
+                "Core overhaul: Armed intermediate state (4-state machine). 'Start Sharing' activates edge detection; real transfer happens on edge hit".to_string(),
+                "Edge overshoot: N pixels past edge (default 20, configurable 0~200)".to_string(),
+                "Y-coordinate mirror mapping preserves ratio across sides".to_string(),
+                "Dual-channel return: Ctrl+Alt+S hotkey + remote reverse edge detection (new SwitchBackControl frame)".to_string(),
+                "Fix BUG-032: reconnecting events no longer flip disconnect button when still connected".to_string(),
+            ],
+        },
         tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.39".to_string(),
             date: "2026-05-06".to_string(),
@@ -1613,6 +1709,9 @@ async fn main() {
             // 键鼠共享（Bug 2 / BUG-019）
             sharing::toggle_sharing,
             sharing::get_control_state,
+            // v0.1.41: Windows 权限检测
+            check_admin_permission,
+            request_admin_elevation,
         ])
         // 托管连接管理器状态
         .manage(connection::KvmConnectionManager::new())

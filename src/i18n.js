@@ -18,17 +18,25 @@ const MESSAGES = {
     labelConnectionType: '连接方式:',
     labelLocalIp: '本机 IP:',
     labelLatency: '延迟:',
+    labelTlsStatus: 'TLS 状态:',
+    tlsStatusBothOn: '🔒 双端加密',
+    tlsStatusLocalOnly: '⚠️ 仅本机开启',
+    tlsStatusRemoteOnly: '⚠️ 仅对端开启',
+    tlsStatusBothOff: '⚠️ 未加密',
+    tlsStatusDisconnected: '-',
     roleServer: '被控端',
     roleClient: '主控端',
     statusConnected: '已连接',
     statusConnecting: '连接中...',
     statusDisconnected: '未连接',
     controlStateIdle: '各自独立',
+    controlStateArmed: '已激活·待边缘切换',
     controlStateLocal: '正在控制对方',
     controlStateRemote: '对方正在控制本机',
 
     // 控制状态徽标（plan v0.1.38 BUG-022：与 controlState* 对齐的 snake_case 别名）
     status_idle: '各自独立',
+    status_armed: '已激活·待边缘切换',
     status_local_controlling: '正在控制对方',
     status_remote_controlling: '对方正在控制本机',
 
@@ -37,6 +45,7 @@ const MESSAGES = {
     btnDisconnect: '断开连接',
     btnStartSharing: '▶ 开始共享',
     btnStopSharing: '■ 停止共享',
+    btnArmedWaiting: '⏳ 待切换',
     btnSettings: '⚙ 设置',
     btnSwitchRole: '切换',
     btnSwitch: '切换',
@@ -81,7 +90,7 @@ const MESSAGES = {
     hintHotkey: '💡 按 Ctrl+Alt+Tab 切换回 Windows 本地控制',
 
     // 权限警告（BUG-031 按权限类型分开）
-    permissionWarningText: '需要「辅助功能」权限才能开始键鼠共享，请点击右侧按钮前往系统设置授权',
+    permissionWarningText: '需要「辅助功能」权限才能开始键鼠共享。如果已授权仍提示，请在系统设置中先用"-"删除 KVMini 再用"+"重新添加',
     permissionWarningInputMonitoringText: '需要「输入监控」权限才能开始键鼠共享。授权后请完全退出 KVMini（Cmd+Q）再重新打开，权限才会生效',
     permissionWarningBtnAccessibility: '前往辅助功能设置',
     permissionWarningBtnInputMonitoring: '前往输入监控设置',
@@ -306,6 +315,7 @@ const MESSAGES = {
     vpnInterferenceTip: '⚠️ 检测到 VPN 网卡（{names}），可能劫持默认路由导致局域网广播失败。建议临时断开 VPN 后重新扫描。',
     firewallBlockTipMacos: '🛡️ macOS 防火墙可能拦截 KVMini。可执行：sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
     firewallBlockTipWindows: '🛡️ Windows 防火墙可能拦截 KVMini。请在「Windows Defender 防火墙 > 允许的应用」中放行 KVMini。',
+    sharingArmed: '已激活边缘检测，鼠标推到屏幕边缘即可切换控制',
     sharingStarted: '共享已启动，正在控制对端',
     sharingStopped: '共享已停止',
     shareToggleFailed: '切换共享状态失败，请检查辅助功能权限或连接状态',
@@ -362,8 +372,11 @@ const MESSAGES = {
     msgDisconnectManual: '已手动断开连接',
     errDisconnectPrefix: '断开连接错误: ',
     errReconnectFailPrefix: '重新连接失败: ',
+    errReconnectNoTarget: '无法重连：未找到上次连接的设备，请手动连接',
     msgReconnectFailRetrying: '重连失败，仍在后台尝试...',
     msgTlsMismatchDefault: 'TLS 配置不一致，请检查双端设置',
+    msgTlsMismatchLocalOnly: '本机已开启 TLS 加密，但对端未开启，连接可能失败。请关闭本机 TLS 或通知对端开启。',
+    msgTlsMismatchRemoteOnly: '对端已开启 TLS 加密，但本机未开启，连接可能失败。请开启本机 TLS 或通知对端关闭。',
     msgConnectionLostDefault: '连接已断开',
     msgReconnectSuccessDefault: '重连成功',
     errSettingsSavePrefix: '设置保存失败: ',
@@ -387,6 +400,13 @@ const MESSAGES = {
     nicDisconnectedInlineText: '选定网卡已断开，请切换到其他网卡',
     tlsFingerprintLoading: '加载中...',
     certLoadFailed: '证书加载失败',
+    // v0.1.41: Windows 管理员权限
+    winAdminRequired: '需要管理员权限',
+    winAdminBannerText: '当前以普通用户运行，键鼠 Hook 可能受限。建议以管理员身份重新启动。',
+    winAdminBtnElevate: '以管理员身份重启',
+    // v0.1.41: FocusKeeper 状态
+    focusKeeperActive: '焦点保持已启动',
+    focusKeeperStopped: '焦点保持已停止',
   },
 
   en: {
@@ -402,17 +422,25 @@ const MESSAGES = {
     labelConnectionType: 'Connection:',
     labelLocalIp: 'Local IP:',
     labelLatency: 'Latency:',
+    labelTlsStatus: 'TLS Status:',
+    tlsStatusBothOn: '🔒 Both Encrypted',
+    tlsStatusLocalOnly: '⚠️ Local Only',
+    tlsStatusRemoteOnly: '⚠️ Remote Only',
+    tlsStatusBothOff: '⚠️ Unencrypted',
+    tlsStatusDisconnected: '-',
     roleServer: 'Server',
     roleClient: 'Client',
     statusConnected: 'Connected',
     statusConnecting: 'Connecting...',
     statusDisconnected: 'Disconnected',
     controlStateIdle: 'Independent',
+    controlStateArmed: 'Armed · Waiting for edge',
     controlStateLocal: 'Controlling Remote',
     controlStateRemote: 'Remote Controlling',
 
     // Control state badge (plan v0.1.38 BUG-022: snake_case aliases aligned with controlState*)
     status_idle: 'Independent',
+    status_armed: 'Armed · Waiting for edge',
     status_local_controlling: 'Controlling Remote',
     status_remote_controlling: 'Remote Controlling',
 
@@ -421,6 +449,7 @@ const MESSAGES = {
     btnDisconnect: 'Disconnect',
     btnStartSharing: '▶ Start Sharing',
     btnStopSharing: '■ Stop Sharing',
+    btnArmedWaiting: '⏳ Waiting',
     btnSettings: '⚙ Settings',
     btnSwitchRole: 'Switch',
     btnSwitch: 'Switch',
@@ -465,7 +494,7 @@ const MESSAGES = {
     hintHotkey: '💡 Press Ctrl+Alt+Tab to switch back to Windows local control',
 
     // Permission warning (BUG-031: distinguish permission kinds)
-    permissionWarningText: 'Accessibility permission is required to start sharing. Click the button on the right to open System Settings.',
+    permissionWarningText: 'Accessibility permission is required. If already granted but still showing, remove KVMini with "-" in System Settings then re-add with "+".',
     permissionWarningInputMonitoringText: 'Input Monitoring permission is required to start sharing. After authorizing, please fully quit KVMini (Cmd+Q) and relaunch for the permission to take effect.',
     permissionWarningBtnAccessibility: 'Open Accessibility Settings',
     permissionWarningBtnInputMonitoring: 'Open Input Monitoring Settings',
@@ -690,6 +719,7 @@ const MESSAGES = {
     vpnInterferenceTip: '⚠️ VPN interface(s) detected ({names}). VPN may hijack the default route and break LAN broadcast. Try temporarily disconnecting the VPN, then rescan.',
     firewallBlockTipMacos: '🛡️ macOS firewall may be blocking KVMini. Run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /Applications/KVMini.app && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblock /Applications/KVMini.app',
     firewallBlockTipWindows: '🛡️ Windows firewall may be blocking KVMini. Allow KVMini in "Windows Defender Firewall > Allowed apps".',
+    sharingArmed: 'Edge detection activated. Push mouse to screen edge to switch.',
     sharingStarted: 'Sharing started, you are now controlling the remote machine',
     sharingStopped: 'Sharing stopped',
     shareToggleFailed: 'Failed to toggle sharing. Check accessibility permission or connection status.',
@@ -746,8 +776,11 @@ const MESSAGES = {
     msgDisconnectManual: 'Disconnected manually',
     errDisconnectPrefix: 'Disconnect error: ',
     errReconnectFailPrefix: 'Reconnect failed: ',
+    errReconnectNoTarget: 'Cannot reconnect: no previous device found, please connect manually',
     msgReconnectFailRetrying: 'Reconnect failed, still retrying in background...',
     msgTlsMismatchDefault: 'TLS configuration mismatch, please check both sides',
+    msgTlsMismatchLocalOnly: 'Local TLS is enabled but remote is not. Connection may fail. Please disable local TLS or ask the remote to enable it.',
+    msgTlsMismatchRemoteOnly: 'Remote TLS is enabled but local is not. Connection may fail. Please enable local TLS or ask the remote to disable it.',
     msgConnectionLostDefault: 'Connection lost',
     msgReconnectSuccessDefault: 'Reconnected',
     errSettingsSavePrefix: 'Failed to save settings: ',
@@ -771,6 +804,13 @@ const MESSAGES = {
     nicDisconnectedInlineText: 'Selected network interface is disconnected. Please switch to another.',
     tlsFingerprintLoading: 'Loading...',
     certLoadFailed: 'Failed to load certificate',
+    // v0.1.41: Windows admin permission
+    winAdminRequired: 'Administrator Required',
+    winAdminBannerText: 'Running as standard user. Keyboard/mouse hooks may be limited. Please restart as administrator.',
+    winAdminBtnElevate: 'Restart as Admin',
+    // v0.1.41: FocusKeeper status
+    focusKeeperActive: 'Focus keeper active',
+    focusKeeperStopped: 'Focus keeper stopped',
   },};
 
 /** 当前语言，默认中文 */

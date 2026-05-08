@@ -29,8 +29,6 @@ pub enum EventType {
     Handshake = 0x01,
     /// 握手响应
     HandshakeAck = 0x02,
-    /// 鼠标移动
-    MouseMove = 0x10,
     /// 鼠标按下/释放
     MouseButton = 0x11,
     /// 滚轮
@@ -55,6 +53,10 @@ pub enum EventType {
     AuthRequest = 0x70,
     /// 密码验证响应
     AuthResponse = 0x71,
+    /// 控制权回切（远端撞反向边缘通知本机）
+    SwitchBackControl = 0x32,
+    /// 鼠标相对位移（v0.1.40 delta 模式：dx/dy i16，避免 grab 后绝对坐标冻结）
+    MouseMoveDelta = 0x33,
 }
 
 impl EventType {
@@ -62,7 +64,6 @@ impl EventType {
         match v {
             0x01 => Some(Self::Handshake),
             0x02 => Some(Self::HandshakeAck),
-            0x10 => Some(Self::MouseMove),
             0x11 => Some(Self::MouseButton),
             0x12 => Some(Self::MouseScroll),
             0x20 => Some(Self::KeyEvent),
@@ -75,6 +76,8 @@ impl EventType {
             0x61 => Some(Self::Pong),
             0x70 => Some(Self::AuthRequest),
             0x71 => Some(Self::AuthResponse),
+            0x32 => Some(Self::SwitchBackControl),
+            0x33 => Some(Self::MouseMoveDelta),
             _ => None,
         }
     }
@@ -201,13 +204,6 @@ pub enum KvmFrame {
         platform: Platform,
         screen_info: Vec<u8>,
     },
-    /// 鼠标移动：归一化坐标 [0, 10000]，携带时间戳
-    MouseMove {
-        x: i32,
-        y: i32,
-        timestamp_ms: u64,
-        modifiers: ModifierState,
-    },
     /// 鼠标按键
     MouseButton {
         button: u8,
@@ -250,6 +246,14 @@ pub enum KvmFrame {
     AuthRequest { password_hash: Vec<u8> },
     /// 密码验证响应
     AuthResponse { success: bool },
+    /// 控制权回切（远端撞到反向边缘，通知本机从 LocalControlling 切回 Armed）
+    SwitchBackControl,
+    /// 鼠标相对位移（v0.1.40 delta 模式）
+    ///
+    /// 替代 `MouseMove{x,y}` 的绝对坐标路径：采集端从 CGEvent `kCGMouseEventDeltaX/Y`
+    /// 读取硬件相对位移，远端用 `RemoteCursorState` 累加后 `CGWarpMouseCursorPosition` 落点。
+    /// 这是 Synergy/Barrier/ShareMouse 等竞品的标准方案，不会因 `CGAssociateMouseAndMouseCursorPosition(0)` 冻结。
+    MouseMoveDelta { dx: i16, dy: i16 },
 }
 
 /// 将 KvmFrame 编码为字节序列（小端序）
@@ -270,14 +274,6 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
             p.push(0);
             p.extend_from_slice(screen_info);
             (EventType::HandshakeAck, p)
-        }
-        KvmFrame::MouseMove { x, y, timestamp_ms, modifiers } => {
-            let mut p = Vec::with_capacity(17);
-            p.extend_from_slice(&x.to_le_bytes());
-            p.extend_from_slice(&y.to_le_bytes());
-            p.extend_from_slice(&timestamp_ms.to_le_bytes());
-            p.push(modifiers.bits());
-            (EventType::MouseMove, p)
         }
         KvmFrame::MouseButton { button, pressed, timestamp_ms, modifiers } => {
             let mut p = Vec::with_capacity(11);
@@ -327,6 +323,13 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
         }
         KvmFrame::AuthResponse { success } => {
             (EventType::AuthResponse, vec![if *success { 1 } else { 0 }])
+        }
+        KvmFrame::SwitchBackControl => (EventType::SwitchBackControl, vec![]),
+        KvmFrame::MouseMoveDelta { dx, dy } => {
+            let mut p = Vec::with_capacity(4);
+            p.extend_from_slice(&dx.to_le_bytes());
+            p.extend_from_slice(&dy.to_le_bytes());
+            (EventType::MouseMoveDelta, p)
         }
     };
 
@@ -383,17 +386,6 @@ pub fn decode(buf: &[u8]) -> KvmResult<(KvmFrame, usize)> {
             let platform = Platform::from_u8(payload[2]);
             let screen_info = payload[4..].to_vec();
             KvmFrame::HandshakeAck { version, platform, screen_info }
-        }
-        EventType::MouseMove => {
-            check_min_payload(payload, 17)?;
-            let x = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-            let y = i32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
-            let timestamp_ms = u64::from_le_bytes([
-                payload[8], payload[9], payload[10], payload[11],
-                payload[12], payload[13], payload[14], payload[15],
-            ]);
-            let modifiers = ModifierState::from_bits(payload[16]);
-            KvmFrame::MouseMove { x, y, timestamp_ms, modifiers }
         }
         EventType::MouseButton => {
             check_min_payload(payload, 11)?;
@@ -464,6 +456,13 @@ pub fn decode(buf: &[u8]) -> KvmResult<(KvmFrame, usize)> {
         EventType::AuthResponse => {
             check_min_payload(payload, 1)?;
             KvmFrame::AuthResponse { success: payload[0] != 0 }
+        }
+        EventType::SwitchBackControl => KvmFrame::SwitchBackControl,
+        EventType::MouseMoveDelta => {
+            check_min_payload(payload, 4)?;
+            let dx = i16::from_le_bytes([payload[0], payload[1]]);
+            let dy = i16::from_le_bytes([payload[2], payload[3]]);
+            KvmFrame::MouseMoveDelta { dx, dy }
         }
     };
 
@@ -564,7 +563,6 @@ pub fn write_frame(stream: &mut impl std::io::Write, frame: &KvmFrame) -> KvmRes
 // ── 键码映射 ────────────────────────────────────────────────────────────────
 
 pub mod keycode_map;
-pub mod event_queue;
 
 #[cfg(test)]
 mod tests {
@@ -591,13 +589,10 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_decode_mouse_move() {
-        let ts = now_ms();
-        let frame = KvmFrame::MouseMove {
-            x: 5000, y: 3000,
-            timestamp_ms: ts,
-            modifiers: ModifierState::from_bits(0b0101),
-        };
+    fn test_encode_decode_mouse_move_delta_legacy() {
+        // 旧 test_encode_decode_mouse_move 已移除（KvmFrame::MouseMove 已在 v0.1.40 删除）
+        // 该用例已迁移到 test_encode_decode_mouse_move_delta（在文件下方），此处仅保留命名兼容
+        let frame = KvmFrame::MouseMoveDelta { dx: 5, dy: -3 };
         let bytes = encode(&frame);
         let (decoded, _) = decode(&bytes).unwrap();
         assert_eq!(decoded, frame);
@@ -709,10 +704,7 @@ mod tests {
     #[test]
     fn test_multiple_frames_in_buffer() {
         let ts = now_ms();
-        let frame1 = KvmFrame::MouseMove {
-            x: 100, y: 200, timestamp_ms: ts,
-            modifiers: ModifierState::new(),
-        };
+        let frame1 = KvmFrame::MouseMoveDelta { dx: 100, dy: 200 };
         let frame2 = KvmFrame::KeyEvent {
             keycode: 0x41, pressed: true, timestamp_ms: ts,
             modifiers: ModifierState::new(),
@@ -738,5 +730,73 @@ mod tests {
         let bytes = encode(&KvmFrame::Heartbeat);
         assert_eq!(bytes[0], 0x56); // 'V'
         assert_eq!(bytes[1], 0x4B); // 'K'
+    }
+
+    #[test]
+    fn test_encode_decode_switch_back_control() {
+        let frame = KvmFrame::SwitchBackControl;
+        let bytes = encode(&frame);
+        assert_eq!(bytes.len(), HEADER_SIZE); // 无 payload
+        let (decoded, consumed) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+        assert_eq!(consumed, bytes.len());
+        // 验证 event_type 字节正确
+        assert_eq!(bytes[2], 0x32);
+    }
+
+    // ── v0.1.40 鼠标相对位移协议（delta 模式）──────────────────────────
+
+    #[test]
+    fn test_encode_decode_mouse_move_delta_basic() {
+        let frame = KvmFrame::MouseMoveDelta { dx: 5, dy: -3 };
+        let bytes = encode(&frame);
+        let (decoded, consumed) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+        assert_eq!(consumed, bytes.len());
+        // event_type 字节应为 0x33
+        assert_eq!(bytes[2], 0x33);
+    }
+
+    #[test]
+    fn test_mouse_move_delta_payload_size() {
+        // dx (i16) + dy (i16) = 4 bytes
+        let frame = KvmFrame::MouseMoveDelta { dx: 0, dy: 0 };
+        let bytes = encode(&frame);
+        assert_eq!(bytes.len(), HEADER_SIZE + 4);
+    }
+
+    #[test]
+    fn test_mouse_move_delta_extreme_values() {
+        // 边界：i16::MAX / i16::MIN 都能正确 roundtrip
+        let frame = KvmFrame::MouseMoveDelta {
+            dx: i16::MAX,
+            dy: i16::MIN,
+        };
+        let bytes = encode(&frame);
+        let (decoded, _) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+
+        let frame = KvmFrame::MouseMoveDelta {
+            dx: i16::MIN,
+            dy: i16::MAX,
+        };
+        let bytes = encode(&frame);
+        let (decoded, _) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_mouse_move_delta_little_endian() {
+        let frame = KvmFrame::MouseMoveDelta { dx: 0x0102, dy: 0x0304 };
+        let bytes = encode(&frame);
+        // payload = [02, 01, 04, 03]（小端序）
+        assert_eq!(&bytes[HEADER_SIZE..HEADER_SIZE + 4], &[0x02, 0x01, 0x04, 0x03]);
+    }
+
+    #[test]
+    fn test_mouse_move_delta_event_type_opcode() {
+        // 确认 EventType::MouseMoveDelta 枚举正确映射到 0x33
+        assert_eq!(EventType::MouseMoveDelta as u8, 0x33);
+        assert_eq!(EventType::from_u8(0x33), Some(EventType::MouseMoveDelta));
     }
 }

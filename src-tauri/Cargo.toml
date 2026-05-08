@@ -44,7 +44,7 @@ block = "0.1"
 
 # Windows 平台特定依赖
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "winbase", "processthreadsapi", "libloaderapi"] }
+winapi = { version = "0.3", features = ["winuser", "winbase", "processthreadsapi", "libloaderapi", "securitybaseapi", "shellapi", "handleapi"] }
 winreg = "0.52"
 
 [features]

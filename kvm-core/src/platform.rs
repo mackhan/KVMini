@@ -129,8 +129,15 @@ impl MouseButton {
 /// 原始输入事件（平台适配层采集后传递给 kvm-core）
 #[derive(Debug, Clone)]
 pub enum RawInputEvent {
-    /// 鼠标移动（屏幕绝对坐标，逻辑像素）
-    MouseMove { x: i32, y: i32 },
+    /// 鼠标移动
+    ///
+    /// - `x, y`: 屏幕绝对坐标（逻辑像素）—— Armed 态边缘检测用
+    /// - `dx, dy`: 相对位移（v0.1.40 新增）—— LocalControlling 态发送 `MouseMoveDelta` 用
+    ///
+    /// 采集端（macOS CGEventTap）读取 `kCGMouseEventDeltaX/Y` 硬件 delta；
+    /// 采集端（Windows WH_MOUSE_LL）通过帧差计算 `dx = x - last_x`。
+    /// 两个字段独立采集，消费端按状态选择使用哪对字段。
+    MouseMove { x: i32, y: i32, dx: i16, dy: i16 },
     /// 鼠标按下
     MouseDown { button: MouseButton },
     /// 鼠标释放
@@ -239,7 +246,7 @@ pub trait ClipboardProvider: Send + Sync {
     fn stop_watching(&self) -> KvmResult<()>;
 }
 
-/// 光标控制（显示/隐藏/设置位置）
+/// 光标控制（显示/隐藏/设置位置/抓取释放）
 pub trait CursorController: Send + Sync {
     /// 隐藏光标
     fn hide_cursor(&self) -> KvmResult<()>;
@@ -252,6 +259,53 @@ pub trait CursorController: Send + Sync {
 
     /// 获取当前光标位置
     fn get_position(&self) -> KvmResult<(i32, i32)>;
+
+    /// 抓取光标：断开物理鼠标与屏幕光标的绑定 + 隐藏光标
+    /// macOS: CGAssociateMouseAndMouseCursorPosition(false) + NSCursor::hide
+    /// Windows: ClipCursor 到 1x1 区域 + ShowCursor(false)
+    fn grab(&self) -> KvmResult<()>;
+
+    /// 释放光标：恢复物理鼠标与屏幕光标的绑定 + 显示光标
+    fn release(&self) -> KvmResult<()>;
+}
+
+/// 焦点保持器（解决 macOS 失焦后 CGAssociateMouseAndMouseCursorPosition 被系统重置的问题）
+///
+/// macOS 实现：创建 1×1 透明窗口 + 200ms 定时器持续 NSApp.activate，让系统认为 KVMini 始终前台。
+/// Windows 不存在此问题，给空实现。
+pub trait FocusKeeper: Send + Sync {
+    /// 进入 LocalControlling 时启动焦点保持
+    fn start(&self) -> KvmResult<()>;
+    /// 退出 LocalControlling 时停止焦点保持
+    fn stop(&self) -> KvmResult<()>;
+    /// 是否正在运行
+    fn is_active(&self) -> bool;
+}
+
+/// 权限状态（跨平台统一结构）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionStatus {
+    /// 是否拥有管理员/提权权限（Win: elevated; Mac: always true）
+    pub elevated: bool,
+    /// 辅助功能权限（macOS only, Win always true）
+    pub accessibility: bool,
+    /// 输入监控权限（macOS only, Win always true）
+    pub input_monitoring: bool,
+    /// 是否需要管理员权限（Win only, Mac always false）
+    pub admin_required: bool,
+}
+
+/// 权限检测与提权（跨平台）
+///
+/// macOS: 已由 permission.rs 实现 accessibility / input_monitoring 检测。
+/// Windows: 检测 UAC elevation 状态，支持请求提权（以管理员身份重启）。
+pub trait PermissionProvider: Send + Sync {
+    /// 当前进程是否以管理员/提权运行
+    fn is_elevated(&self) -> bool;
+    /// 请求提权（Win: 以 runas 重启；Mac: 不需要）
+    fn request_elevation(&self) -> KvmResult<()>;
+    /// 获取完整权限状态
+    fn permission_status(&self) -> PermissionStatus;
 }
 
 // ── 平台适配层聚合 ──────────────────────────────────────────────────────────
@@ -267,6 +321,8 @@ pub trait PlatformAdapter: Send + Sync {
     fn hotkey_manager(&self) -> &dyn HotkeyManager;
     fn clipboard_provider(&self) -> &dyn ClipboardProvider;
     fn cursor_controller(&self) -> &dyn CursorController;
+    fn focus_keeper(&self) -> &dyn FocusKeeper;
+    fn permission_provider(&self) -> &dyn PermissionProvider;
 }
 
 #[cfg(test)]

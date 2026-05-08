@@ -12,6 +12,8 @@ pub mod input_block;
 pub mod hotkey;
 pub mod clipboard;
 pub mod cursor;
+pub mod focus_keeper;
+pub mod permission;
 
 use kvm_core::platform::*;
 
@@ -24,6 +26,8 @@ pub struct WinPlatformAdapter {
     pub hotkey: hotkey::WinHotkeyManager,
     pub clipboard: clipboard::WinClipboardProvider,
     pub cursor: cursor::WinCursorController,
+    pub focus_keeper: focus_keeper::WinFocusKeeper,
+    pub permission: permission::WinPermissionProvider,
 }
 
 impl WinPlatformAdapter {
@@ -36,6 +40,8 @@ impl WinPlatformAdapter {
             hotkey: hotkey::WinHotkeyManager::new(),
             clipboard: clipboard::WinClipboardProvider::new(),
             cursor: cursor::WinCursorController::new(),
+            focus_keeper: focus_keeper::WinFocusKeeper::new(),
+            permission: permission::WinPermissionProvider::new(),
         }
     }
 }
@@ -48,4 +54,6 @@ impl PlatformAdapter for WinPlatformAdapter {
     fn hotkey_manager(&self) -> &dyn HotkeyManager { &self.hotkey }
     fn clipboard_provider(&self) -> &dyn ClipboardProvider { &self.clipboard }
     fn cursor_controller(&self) -> &dyn CursorController { &self.cursor }
+    fn focus_keeper(&self) -> &dyn FocusKeeper { &self.focus_keeper }
+    fn permission_provider(&self) -> &dyn PermissionProvider { &self.permission }
 }

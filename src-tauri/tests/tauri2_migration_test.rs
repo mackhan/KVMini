@@ -92,11 +92,13 @@ mod config_tests {
             switch_hotkey: "Ctrl+Shift+X".to_string(),
             edge_trigger: false,
             edge_threshold: 10,
+            edge_overshoot_px: 5,
             clipboard_sync: false,
             autostart: true,
             auto_reconnect: false,
             reconnect_max_attempts: 5,
             reconnect_interval_secs: 10,
+            enable_tls: true,
         };
         let json = serde_json::to_string_pretty(&original).expect("序列化失败");
         let loaded: AppConfig = serde_json::from_str(&json).expect("反序列化失败");

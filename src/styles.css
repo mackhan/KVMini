@@ -2104,6 +2104,16 @@ button, a, input, select, textarea, label, .toggle, .btn,
     margin-left: 6px;
 }
 
+/* TLS 状态面板文字颜色 */
+.tls-status-ok {
+    color: #10b981;
+    font-weight: 500;
+}
+.tls-status-warn {
+    color: #f59e0b;
+    font-weight: 500;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    关于 Tab
    ═══════════════════════════════════════════════════════════════════════════ */

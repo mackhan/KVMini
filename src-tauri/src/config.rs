@@ -29,6 +29,10 @@ pub struct AppConfig {
     #[serde(default = "default_edge_threshold")]
     pub edge_threshold: i32,
 
+    /// 边缘过冲量（像素），需推过边缘 N 像素才真正切换，0 = 贴边即切，默认 20
+    #[serde(default = "default_edge_overshoot")]
+    pub edge_overshoot_px: i32,
+
     /// 是否启用剪贴板共享
     #[serde(default = "default_true")]
     pub clipboard_sync: bool,
@@ -58,6 +62,7 @@ fn default_port() -> u16 { 23456 }
 fn default_hotkey() -> String { "Ctrl+Alt+S".to_string() }
 fn default_true() -> bool { true }
 fn default_edge_threshold() -> i32 { 5 }
+fn default_edge_overshoot() -> i32 { 5 }
 fn default_reconnect_max() -> u32 { 0 }
 fn default_reconnect_interval() -> u64 { 3 }
 
@@ -69,6 +74,7 @@ impl Default for AppConfig {
             switch_hotkey: default_hotkey(),
             edge_trigger: true,
             edge_threshold: default_edge_threshold(),
+            edge_overshoot_px: default_edge_overshoot(),
             clipboard_sync: true,
             autostart: false,
             enable_tls: true,
@@ -196,6 +202,7 @@ pub fn get_settings() -> Result<AppConfig, String> {
 /// Tauri 命令：保存设置
 #[tauri::command]
 pub fn save_settings(config: AppConfig) -> Result<(), String> {
+    log::info!("[配置] save_settings 被调用: enable_tls={}, port={}", config.enable_tls, config.port);
     // 同步自启动状态
     if config.autostart {
         if let Err(e) = crate::platform::autostart::enable_autostart() {

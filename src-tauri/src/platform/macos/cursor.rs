@@ -1,4 +1,4 @@
-//! macOS 光标控制实现（NSCursor + CGWarpMouseCursorPosition）
+//! macOS 光标控制实现（NSCursor + CGWarpMouseCursorPosition + CGAssociateMouseAndMouseCursorPosition）
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::CursorController;
@@ -43,6 +43,38 @@ impl CursorController for MacCursorController {
         { return get_cursor_position(); }
         #[cfg(not(target_os = "macos"))]
         Ok((0, 0))
+    }
+
+    fn grab(&self) -> KvmResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use core_graphics::display::CGAssociateMouseAndMouseCursorPosition;
+            unsafe {
+                // 断开物理鼠标与屏幕光标的绑定——鼠标移动不再驱动光标
+                CGAssociateMouseAndMouseCursorPosition(0);
+                // 隐藏光标，给用户明确的视觉反馈
+                use objc::{class, msg_send, sel, sel_impl};
+                let _: () = msg_send![class!(NSCursor), hide];
+            }
+            log::info!("[Cursor] macOS grab: 已断开鼠标↔光标绑定 + 隐藏光标");
+        }
+        Ok(())
+    }
+
+    fn release(&self) -> KvmResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use core_graphics::display::CGAssociateMouseAndMouseCursorPosition;
+            unsafe {
+                // 恢复物理鼠标与屏幕光标的绑定
+                CGAssociateMouseAndMouseCursorPosition(1);
+                // 显示光标
+                use objc::{class, msg_send, sel, sel_impl};
+                let _: () = msg_send![class!(NSCursor), unhide];
+            }
+            log::info!("[Cursor] macOS release: 已恢复鼠标↔光标绑定 + 显示光标");
+        }
+        Ok(())
     }
 }
 
