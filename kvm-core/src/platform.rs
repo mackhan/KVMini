@@ -271,7 +271,8 @@ pub trait CursorController: Send + Sync {
 
 /// 焦点保持器（解决 macOS 失焦后 CGAssociateMouseAndMouseCursorPosition 被系统重置的问题）
 ///
-/// macOS 实现：创建 1×1 透明窗口 + 200ms 定时器持续 NSApp.activate，让系统认为 KVMini 始终前台。
+/// macOS 实现（v0.1.42）：后台线程每 200ms 调一次 `CGAssociateMouseAndMouseCursorPosition(0)`
+/// 维持 grab，**不创建窗口、不抢前台焦点**（避免 v0.1.41 引入的点击丢失/误拖拽/键盘失效 bug）。
 /// Windows 不存在此问题，给空实现。
 pub trait FocusKeeper: Send + Sync {
     /// 进入 LocalControlling 时启动焦点保持

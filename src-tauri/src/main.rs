@@ -992,6 +992,24 @@ fn request_admin_elevation() -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.42".to_string(),
+            date: "2026-05-08".to_string(),
+            changes: vec![
+                "Mac 端控制响应彻底修复：v0.1.41 的 FocusKeeper 抢前台焦点（NSApp.activateIgnoringOtherApps）导致键盘失效/点击丢失/误触发拖拽/本机闪烁。v0.1.42 改为业界主流方案 — 仅周期性调 CGAssociateMouseAndMouseCursorPosition(0) keep-alive，不再创建窗口、不再抢焦点".to_string(),
+                "修复隐藏 bug：cursor.warp_cursor 在 grab 状态下不再误调 CGAssociate(1)，避免远端绝对定位时悄悄解除光标 grab".to_string(),
+                "前端 LocalControlling 状态下持续显示连接延迟（RTT），UI 提示更清晰".to_string(),
+                "Mac 手势屏蔽保留：LeftDragged/RightDragged/OtherDragged + kCGEventGesture/Pinch/Rotate/Swipe 在控制远端时全部 swallow".to_string(),
+                "Win 端继续完善 RawInput 双源、多屏 VIRTUALDESK、XButton、滚轮 i32 cast、Hook 5s 健康检查、UAC 权限横幅、WM_DISPLAYCHANGE 监听（详见 0.1.41 条目）".to_string(),
+            ],
+            changes_en: vec![
+                "Mac control responsiveness fully fixed: v0.1.41's FocusKeeper used NSApp.activateIgnoringOtherApps every 200ms to grab foreground, which broke keyboard input, swallowed clicks, misfired drags and flashed the local desktop. v0.1.42 follows the industry-standard approach (Synergy/Barrier/Logitech Flow) — only periodically calls CGAssociateMouseAndMouseCursorPosition(0) keep-alive, no longer creates a window, no longer steals focus".to_string(),
+                "Hidden bug fix: cursor.warp_cursor no longer calls CGAssociate(1) while grabbed, preventing silent grab release on remote absolute positioning".to_string(),
+                "Frontend now keeps showing latency (RTT) during LocalControlling for clearer UX".to_string(),
+                "Mac gesture blocking retained: LeftDragged/RightDragged/OtherDragged + kCGEventGesture/Pinch/Rotate/Swipe all swallowed when controlling remote".to_string(),
+                "Win side continues parity work: RawInput dual-source, multi-monitor VIRTUALDESK, XButton, signed i32 wheel cast, hook 5s health check, UAC banner, WM_DISPLAYCHANGE listener (see 0.1.41 notes)".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.41".to_string(),
             date: "2026-05-08".to_string(),
             changes: vec![
