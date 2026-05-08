@@ -187,37 +187,68 @@ fn win32_hook_thread(
 }
 
 /// v0.1.41: 注册 RawInput 鼠标设备
+/// v0.1.41 fix: 创建 message-only 窗口作为 hwnd_target（RIDEV_INPUTSINK 要求有效窗口句柄）
 #[cfg(target_os = "windows")]
 unsafe fn register_raw_input_device() {
     use winapi::um::winuser::*;
+    use winapi::shared::windef::HWND;
+    use std::os::windows::ffi::OsStrExt;
 
-    // RAWINPUTDEVICE 结构
-    #[repr(C)]
-    struct RAWINPUTDEVICE {
-        us_usage_page: u16,
-        us_usage: u16,
-        dw_flags: u32,
-        hwnd_target: winapi::shared::windef::HWND,
+    // 创建 message-only 窗口（HWND_MESSAGE 父窗口，不可见、不渲染）
+    let class_name: Vec<u16> = "KVMiniRawInput\0".encode_utf16().collect();
+    let wc = WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(winapi::um::winuser::DefWindowProcW),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: std::ptr::null_mut(),
+        hIcon: std::ptr::null_mut(),
+        hCursor: std::ptr::null_mut(),
+        hbrBackground: std::ptr::null_mut(),
+        lpszMenuName: std::ptr::null(),
+        lpszClassName: class_name.as_ptr(),
+    };
+    RegisterClassW(&wc);
+
+    let hwnd = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        std::ptr::null(),
+        0,
+        0, 0, 0, 0,
+        winapi::um::winuser::HWND_MESSAGE, // message-only 窗口
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+
+    if hwnd.is_null() {
+        log::warn!("[Win] 创建 RawInput message-only 窗口失败，将降级使用帧差 delta");
+        RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = false);
+        return;
     }
 
-    let rid = RAWINPUTDEVICE {
-        us_usage_page: 0x01, // HID_USAGE_PAGE_GENERIC
-        us_usage: 0x02,      // HID_USAGE_GENERIC_MOUSE
-        dw_flags: 0x00000100, // RIDEV_INPUTSINK: 接收即使窗口不在前台
-        hwnd_target: std::ptr::null_mut(), // 发到当前线程的消息队列
+    // 使用 winapi 提供的 RAWINPUTDEVICE 结构体（保证内存布局正确）
+    let rid = winapi::um::winuser::RAWINPUTDEVICE {
+        usUsagePage: 0x01, // HID_USAGE_PAGE_GENERIC
+        usUsage: 0x02,     // HID_USAGE_GENERIC_MOUSE
+        dwFlags: RIDEV_INPUTSINK, // 接收即使窗口不在前台
+        hwndTarget: hwnd,  // 有效的 message-only 窗口句柄
     };
 
     let result = RegisterRawInputDevices(
-        &rid as *const RAWINPUTDEVICE as *const _,
+        &rid as *const _,
         1,
-        std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+        std::mem::size_of::<winapi::um::winuser::RAWINPUTDEVICE>() as u32,
     );
 
     if result == 0 {
         log::warn!("[Win] RegisterRawInputDevices 失败，将降级使用帧差 delta");
         RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = false);
+        // 销毁无用窗口
+        DestroyWindow(hwnd);
     } else {
-        log::info!("[Win] RawInput 鼠标设备注册成功");
+        log::info!("[Win] RawInput 鼠标设备注册成功（message-only 窗口）");
         RAW_INPUT_REGISTERED.with(|cell| *cell.borrow_mut() = true);
     }
 }

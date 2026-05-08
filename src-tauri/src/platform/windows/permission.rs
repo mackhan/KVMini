@@ -119,9 +119,15 @@ fn request_elevation_impl() -> KvmResult<()> {
         }
     }
 
-    // 成功启动新进程后退出当前进程
-    log::info!("[Win/Permission] UAC 提权进程已启动，当前进程即将退出");
-    std::process::exit(0);
+    // 成功启动新进程后，给当前进程一小段时间执行 RAII 析构
+    // 然后退出（延迟退出确保打开的文件句柄/网络连接有机会优雅关闭）
+    log::info!("[Win/Permission] UAC 提权进程已启动，当前进程将在 500ms 后退出");
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::process::exit(0);
+    });
+
+    Ok(())
 }
 
 #[cfg(test)]

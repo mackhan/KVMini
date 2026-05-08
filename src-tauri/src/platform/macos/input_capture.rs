@@ -202,7 +202,6 @@ impl InputCapture for MacInputCapture {
 }
 
 #[cfg(target_os = "macos")]
-#[cfg(target_os = "macos")]
 use core_foundation::base::TCFType;
 
 // FFI: CGEventTapEnable 用于 re-enable 被系统自动 disable 的 tap
@@ -216,6 +215,8 @@ fn start_event_tap_in_current_thread(
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     control_state: Arc<AtomicU8>,
 ) -> KvmResult<()> {
+    // 克隆 capturing 给守护线程使用（退出条件）
+    let capturing_for_guard = Arc::clone(&capturing);
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
     use core_graphics::event::{
         CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
@@ -332,15 +333,24 @@ fn start_event_tap_in_current_thread(
 
     // BUG-030: 启动一个定时器，每 5 秒检测并 re-enable tap（防止被系统 disable 后无法恢复）
     // 这是因为 TapDisabledByTimeout 事件有时不会被回调收到（tap 已经 disabled 了）
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            unsafe {
-                let port_ref = mach_port_raw as core_foundation::mach_port::CFMachPortRef;
-                CGEventTapEnable(port_ref, true);
+    // v0.1.41 fix: 守护线程在 capturing=false 时退出，避免 stop_capture 后线程泄漏和潜在 UAF
+    std::thread::Builder::new()
+        .name("kvm-tap-guard".to_string())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                // 退出条件：capture 已停止
+                if !capturing_for_guard.load(Ordering::SeqCst) {
+                    log::info!("[Mac] tap 守护线程检测到 capturing=false，正常退出");
+                    break;
+                }
+                unsafe {
+                    let port_ref = mach_port_raw as core_foundation::mach_port::CFMachPortRef;
+                    CGEventTapEnable(port_ref, true);
+                }
             }
-        }
-    });
+        })
+        .ok();
 
     log::info!("[Mac] CGEventTap 已启动（子线程 RunLoop, CGEventTapOptions::Default, 含自动 re-enable 守护）");
     Ok(())

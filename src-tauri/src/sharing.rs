@@ -471,6 +471,7 @@ impl SharingManager {
         let capture_arc: Arc<PlatformCapture> = Arc::clone(&self.capture);
         let blocker_arc: Arc<PlatformBlocker> = Arc::clone(&self.blocker);
         let cursor_arc: Arc<PlatformCursor> = Arc::clone(&self.cursor);
+        let focus_keeper_arc: Arc<PlatformFocusKeeper> = Arc::clone(&self.focus_keeper);
         let app_for_edge = app.clone();
 
         tauri::async_runtime::spawn(async move {
@@ -508,6 +509,7 @@ impl SharingManager {
                                 &capture_arc,
                                 &blocker_arc,
                                 &cursor_arc,
+                                &focus_keeper_arc,
                             )
                             .await;
                         }
@@ -600,6 +602,7 @@ async fn handle_events_on_edge_trigger(
     capture: &Arc<PlatformCapture>,
     blocker: &Arc<PlatformBlocker>,
     cursor: &Arc<PlatformCursor>,
+    focus_keeper: &Arc<PlatformFocusKeeper>,
 ) {
     // 先扫一遍确定目标状态（用于判断是否保持 capture 运行）
     let mut target_state = None;
@@ -646,8 +649,16 @@ async fn handle_events_on_edge_trigger(
                 } else {
                     log::info!("[Sharing/EdgeReturn] HideCursor(grab) 已生效");
                 }
+                // v0.1.41 fix: 边缘触发路径也需要启动 FocusKeeper
+                if let Err(e) = focus_keeper.start() {
+                    log::warn!("[Sharing/EdgeReturn] FocusKeeper.start() 失败: {}", e);
+                }
             }
             StateEvent::ShowCursor => {
+                // v0.1.41 fix: 先停止 FocusKeeper
+                if let Err(e) = focus_keeper.stop() {
+                    log::warn!("[Sharing/EdgeReturn] FocusKeeper.stop() 失败: {}", e);
+                }
                 if let Err(e) = cursor.release() {
                     log::warn!("[Sharing/EdgeReturn] ShowCursor(release) 失败: {}", e);
                 } else {
