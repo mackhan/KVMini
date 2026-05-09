@@ -3,6 +3,11 @@
 //! v0.1.43: 所有注入事件在 `post()` 前会在 `kCGEventSourceUserData` (field 42) 上写入
 //! magic `KVMINI_INJECT_USER_DATA`，供 input_capture.rs 的 CGEventTap 回调过滤
 //! "自我注入事件"，避免被 PreemptDetector 误识别为物理抢占。
+//!
+//! v0.1.50:
+//! - inject_key: native_keycode 改为 X11 KeySym，通过 keysym_to_cg_keycode() 转换后注入
+//! - inject_scroll: 改用 SCROLL_UNIT_PIXEL 模式（±120px 合理，旧 LINE 模式 ±120 = 滚120行）
+//! - inject_mouse_button: 改用 CombinedSessionState 读取准确光标位置（修复 DecoupleCursor 下坐标偏移）
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{InputExecutor, MouseButton};
@@ -91,11 +96,17 @@ fn inject_mouse_button(button: MouseButton, pressed: bool) -> KvmResult<()> {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::CGPoint;
 
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-        .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
-    let current_pos = CGEvent::new(source.clone())
+    // v0.1.50: 用 CombinedSessionState 读取屏幕光标当前位置
+    // HIDSystemState 在 DecoupleCursor 状态下返回物理鼠标位置，而非光标位置
+    // CombinedSessionState 返回 CGWarpMouseCursorPosition 后的合成光标位置（准确）
+    let current_pos = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .ok()
+        .and_then(|s| CGEvent::new(s).ok())
         .map(|e| e.location())
         .unwrap_or(CGPoint::new(0.0, 0.0));
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
     let (event_type, cg_button) = match (button, pressed) {
         (MouseButton::Left, true)   => (CGEventType::LeftMouseDown,  CGMouseButton::Left),
         (MouseButton::Left, false)  => (CGEventType::LeftMouseUp,    CGMouseButton::Left),
@@ -118,9 +129,11 @@ fn inject_key(native_keycode: u16, pressed: bool) -> KvmResult<()> {
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
-    let event = CGEvent::new_keyboard_event(source, native_keycode as CGKeyCode, pressed)
+    // v0.1.50: native_keycode 是 X11 KeySym，需转换为 CGKeyCode 再注入
+    let cg_code = keysym_to_cg_keycode(native_keycode);
+    let event = CGEvent::new_keyboard_event(source, cg_code as CGKeyCode, pressed)
         .map_err(|_| platform_err!("CGEvent::new_keyboard_event",
-            format!("创建键盘事件失败: keycode={}", native_keycode)))?;
+            format!("创建键盘事件失败: keysym={:#06X} cg_code={}", native_keycode, cg_code)))?;
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);
     Ok(())
@@ -131,15 +144,147 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    // core-graphics 0.23 中 CGScrollEventUnit 是 u32 类型别名
-    // Line = 1, Pixel = 2
-    const SCROLL_UNIT_LINE: u32 = 1;
+    // v0.1.50: 改用 SCROLL_UNIT_PIXEL(=2) 模式
+    // 协议层滚轮单位为 ±120（与 Barrier/WM_MOUSEWHEEL 一致），
+    // PIXEL 模式直接传递像素值：±120px 在 macOS 上等效约 3-4 行，感受自然
+    // 旧的 SCROLL_UNIT_LINE(=1) 模式传入 ±120 = 滚 120 行（过快，已修复）
+    const SCROLL_UNIT_PIXEL: u32 = 2;
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
-    let event = CGEvent::new_scroll_event(source, SCROLL_UNIT_LINE, 2, dy, dx, 0)
+    let event = CGEvent::new_scroll_event(source, SCROLL_UNIT_PIXEL, 2, dy, dx, 0)
         .map_err(|_| platform_err!("CGEvent::new_scroll_event", "创建滚轮事件失败"))?;
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);
     Ok(())
+}
+
+/// X11 KeySym → macOS CGKeyCode 转换表（Mac 被控端，注入前调用）
+///
+/// v0.1.50: 采用 Barrier/Synergy 行业标准，协议层使用 X11 KeySym 作为通用键码。
+/// Win 控制端将 VK 转为 KeySym 发送，Mac 被控端此函数将 KeySym 转回 CGKeyCode 注入。
+///
+/// 参考：
+///   https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#keysym_encoding
+///   https://eastmanreference.com/complete-list-of-applescript-key-codes
+pub(crate) fn keysym_to_cg_keycode(ks: u16) -> u16 {
+    match ks {
+        // ── 字母键 (XK_lowercase → CGKeyCode) ──────────────────────────
+        0x0061 => 0,   // XK_a → a
+        0x0073 => 1,   // XK_s → s
+        0x0064 => 2,   // XK_d → d
+        0x0066 => 3,   // XK_f → f
+        0x0068 => 4,   // XK_h → h
+        0x0067 => 5,   // XK_g → g
+        0x007A => 6,   // XK_z → z
+        0x0078 => 7,   // XK_x → x
+        0x0063 => 8,   // XK_c → c
+        0x0076 => 9,   // XK_v → v
+        0x0062 => 11,  // XK_b → b
+        0x0071 => 12,  // XK_q → q
+        0x0077 => 13,  // XK_w → w
+        0x0065 => 14,  // XK_e → e
+        0x0072 => 15,  // XK_r → r
+        0x0079 => 16,  // XK_y → y
+        0x0074 => 17,  // XK_t → t
+        0x006F => 31,  // XK_o → o
+        0x0075 => 32,  // XK_u → u
+        0x0069 => 34,  // XK_i → i
+        0x0070 => 35,  // XK_p → p
+        0x006C => 37,  // XK_l → l
+        0x006A => 38,  // XK_j → j
+        0x006B => 40,  // XK_k → k
+        0x006E => 45,  // XK_n → n
+        0x006D => 46,  // XK_m → m
+        // ── 数字键 ──────────────────────────────────────────────────────
+        0x0031 => 18,  // XK_1 → 1
+        0x0032 => 19,  // XK_2 → 2
+        0x0033 => 20,  // XK_3 → 3
+        0x0034 => 21,  // XK_4 → 4
+        0x0036 => 22,  // XK_6 → 6
+        0x0035 => 23,  // XK_5 → 5
+        0x0039 => 25,  // XK_9 → 9
+        0x0037 => 26,  // XK_7 → 7
+        0x0038 => 28,  // XK_8 → 8
+        0x0030 => 29,  // XK_0 → 0
+        // ── 符号键 ──────────────────────────────────────────────────────
+        0x003D => 24,  // XK_equal         → =
+        0x002D => 27,  // XK_minus         → -
+        0x005B => 30,  // XK_bracketleft   → [
+        0x005D => 33,  // XK_bracketright  → ]
+        0xFF0D => 36,  // XK_Return        → Return
+        0x0027 => 39,  // XK_apostrophe    → '
+        0x003B => 41,  // XK_semicolon     → ;
+        0x005C => 42,  // XK_backslash     → \
+        0x002C => 43,  // XK_comma         → ,
+        0x002F => 44,  // XK_slash         → /
+        0x002E => 47,  // XK_period        → .
+        0x0060 => 50,  // XK_grave         → `
+        // ── 空格 / 退格 / Tab / Esc ────────────────────────────────────
+        0xFF09 => 48,  // XK_Tab       → Tab
+        0x0020 => 49,  // XK_space     → Space
+        0xFF08 => 51,  // XK_BackSpace → Delete(Backspace)
+        0xFF1B => 53,  // XK_Escape    → Escape
+        // ── 修饰键 ──────────────────────────────────────────────────────
+        0xFFEC => 54,  // XK_Super_R   → Right Cmd
+        0xFFEB => 55,  // XK_Super_L   → Left Cmd
+        0xFFE1 => 56,  // XK_Shift_L   → Left Shift
+        0xFFE5 => 57,  // XK_Caps_Lock → Caps Lock
+        0xFFE9 => 58,  // XK_Alt_L     → Left Option
+        0xFFE3 => 59,  // XK_Control_L → Left Control
+        0xFFE2 => 60,  // XK_Shift_R   → Right Shift
+        0xFFEA => 61,  // XK_Alt_R     → Right Option
+        0xFFE4 => 62,  // XK_Control_R → Right Control
+        // ── 方向键 ──────────────────────────────────────────────────────
+        0xFF51 => 123, // XK_Left  → Left
+        0xFF53 => 124, // XK_Right → Right
+        0xFF54 => 125, // XK_Down  → Down
+        0xFF52 => 126, // XK_Up    → Up
+        // ── 功能键 F1-F15 ───────────────────────────────────────────────
+        0xFFBE => 122, // XK_F1
+        0xFFBF => 120, // XK_F2
+        0xFFC0 => 99,  // XK_F3
+        0xFFC1 => 118, // XK_F4
+        0xFFC2 => 96,  // XK_F5
+        0xFFC3 => 97,  // XK_F6
+        0xFFC4 => 98,  // XK_F7
+        0xFFC5 => 100, // XK_F8
+        0xFFC6 => 101, // XK_F9
+        0xFFC7 => 109, // XK_F10
+        0xFFC8 => 103, // XK_F11
+        0xFFC9 => 111, // XK_F12
+        0xFFCA => 105, // XK_F13
+        0xFFCB => 107, // XK_F14
+        0xFFCC => 113, // XK_F15
+        // ── 数字键盘 ────────────────────────────────────────────────────
+        0xFFAE => 65,  // XK_KP_Decimal  → Numpad .
+        0xFFAA => 67,  // XK_KP_Multiply → Numpad *
+        0xFFAB => 69,  // XK_KP_Add      → Numpad +
+        0xFF7F => 71,  // XK_Num_Lock    → Num Lock
+        0xFFAF => 75,  // XK_KP_Divide   → Numpad /
+        0xFF8D => 76,  // XK_KP_Enter    → Numpad Enter
+        0xFFAD => 78,  // XK_KP_Subtract → Numpad -
+        0xFFB0 => 82,  // XK_KP_0 → Numpad 0
+        0xFFB1 => 83,  // XK_KP_1 → Numpad 1
+        0xFFB2 => 84,  // XK_KP_2 → Numpad 2
+        0xFFB3 => 85,  // XK_KP_3 → Numpad 3
+        0xFFB4 => 86,  // XK_KP_4 → Numpad 4
+        0xFFB5 => 87,  // XK_KP_5 → Numpad 5
+        0xFFB6 => 88,  // XK_KP_6 → Numpad 6
+        0xFFB7 => 89,  // XK_KP_7 → Numpad 7
+        0xFFB8 => 91,  // XK_KP_8 → Numpad 8
+        0xFFB9 => 92,  // XK_KP_9 → Numpad 9
+        // ── 扩展键 ──────────────────────────────────────────────────────
+        0xFF63 => 114, // XK_Insert    → Insert
+        0xFF50 => 115, // XK_Home      → Home
+        0xFF55 => 116, // XK_Page_Up   → Page Up
+        0xFFFF => 117, // XK_Delete    → Forward Delete
+        0xFF57 => 119, // XK_End       → End
+        0xFF56 => 121, // XK_Page_Down → Page Down
+        // ── 未映射：透传（保守降级）──────────────────────────────────────
+        other => {
+            log::debug!("[KeyMap/Mac] 未知 KeySym {:#06X}, 透传", other);
+            other
+        }
+    }
 }

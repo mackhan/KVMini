@@ -641,12 +641,82 @@ impl SharingManager {
                             .map(|s| s.state() == ControlState::LocalControlling)
                             .unwrap_or(false);
                         if is_local {
-                            if sample_count % 100 == 0 {
-                                log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, frame);
-                            }
-                            sample_count += 1;
-                            if let Err(e) = send_frame_via_app(&app_for_pump, &frame).await {
-                                log::warn!("[Sharing] send_frame 失败: {}", e);
+                            // v0.1.50: MouseMoveDelta Squash（参照 Barrier "Squash mouse moves"）
+                            // 收到 MouseMove 帧后，立即 drain channel 中积压的其余 Move 帧，
+                            // 将所有 dx/dy 累加后只发一帧，减少 async 发送次数，消除拖拽卡顿。
+                            // 非 Move 帧（Button/Key/Scroll）不合并，立即发送。
+                            let mut already_sent = false;
+                            let send_frame = if let KvmFrame::MouseMoveDelta { dx: fdx, dy: fdy } = frame {
+                                let mut acc_dx = fdx as i32;
+                                let mut acc_dy = fdy as i32;
+                                // drain 积压的连续 MouseMove 帧
+                                while let Ok(extra) = rx.try_recv() {
+                                    if let RawInputEvent::MouseMove { dx: ex, dy: ey, x, y, .. } = extra {
+                                        acc_dx = acc_dx.saturating_add(ex as i32);
+                                        acc_dy = acc_dy.saturating_add(ey as i32);
+                                        // 每个 Move 帧都要喂 EdgeDetector（保证边缘检测坐标准确）
+                                        let edge_result = {
+                                            let mut slot = edge_detector_arc.lock().await;
+                                            if let Some(d) = slot.as_mut() {
+                                                d.detect(x, y)
+                                            } else {
+                                                EdgeDetectResult::None
+                                            }
+                                        };
+                                        if let EdgeDetectResult::Triggered { direction, pos_ratio } = edge_result {
+                                            let current_state = state_arc.lock().await.state();
+                                            if current_state == ControlState::Armed {
+                                                let events = {
+                                                    let mut sm = state_arc.lock().await;
+                                                    sm.armed_to_local_controlling(direction, pos_ratio)
+                                                };
+                                                handle_events_on_edge_trigger(
+                                                    events,
+                                                    &app_for_edge,
+                                                    &capture_arc,
+                                                    &blocker_arc,
+                                                    &cursor_arc,
+                                                    &focus_keeper_arc,
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    } else {
+                                        // 非 Move 帧：先发合并的 Move，再发此帧，然后停止 drain
+                                        let merged = KvmFrame::MouseMoveDelta {
+                                            dx: acc_dx.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                            dy: acc_dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                        };
+                                        if let Err(e) = send_frame_via_app(&app_for_pump, &merged).await {
+                                            log::warn!("[Sharing] send_frame(squash) 失败: {}", e);
+                                        }
+                                        sample_count += 1;
+                                        let non_move = raw_to_frame(extra);
+                                        if let Err(e) = send_frame_via_app(&app_for_pump, &non_move).await {
+                                            log::warn!("[Sharing] send_frame 失败: {}", e);
+                                        }
+                                        sample_count += 1;
+                                        already_sent = true;
+                                        break;
+                                    }
+                                }
+                                // 合并后的 Move 帧（若未在 else 分支提前发送）
+                                KvmFrame::MouseMoveDelta {
+                                    dx: acc_dx.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                    dy: acc_dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                }
+                            } else {
+                                frame
+                            };
+
+                            if !already_sent {
+                                if sample_count % 100 == 0 {
+                                    log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, send_frame);
+                                }
+                                sample_count += 1;
+                                if let Err(e) = send_frame_via_app(&app_for_pump, &send_frame).await {
+                                    log::warn!("[Sharing] send_frame 失败: {}", e);
+                                }
                             }
                         }
                     }

@@ -1,5 +1,5 @@
 TN:
-SF:scripts/generate-latest-json.js
+SF:scripts\generate-latest-json.js
 FN:36,generateLatestJson
 FN:86,getArg
 FNF:2
@@ -80,7 +80,7 @@ BRF:30
 BRH:9
 end_of_record
 TN:
-SF:scripts/version-update.js
+SF:scripts\version-update.js
 FN:17,validateVersion
 FN:25,getCurrentVersion
 FN:36,incrementVersion
@@ -262,7 +262,7 @@ BRF:30
 BRH:11
 end_of_record
 TN:
-SF:src/accessibility.js
+SF:src\accessibility.js
 FN:30,applyOverlayText
 FN:35,(anonymous_1)
 FN:49,showOverlay
@@ -679,7 +679,7 @@ BRF:161
 BRH:81
 end_of_record
 TN:
-SF:src/connection.js
+SF:src\connection.js
 FN:18,isValidIpv4
 FN:22,(anonymous_1)
 FN:34,isValidPort
@@ -855,7 +855,7 @@ BRF:59
 BRH:16
 end_of_record
 TN:
-SF:src/history.js
+SF:src\history.js
 FN:19,getHistoryFromStorage
 FN:32,saveToStorage
 FN:35,(anonymous_2)
@@ -943,7 +943,7 @@ BRF:30
 BRH:4
 end_of_record
 TN:
-SF:src/i18n.js
+SF:src\i18n.js
 FN:831,getLocale
 FN:839,setLocale
 FN:850,t
@@ -995,7 +995,7 @@ BRF:21
 BRH:19
 end_of_record
 TN:
-SF:src/layout.js
+SF:src\layout.js
 FN:44,calcBoundingBox
 FN:71,calcLayoutFromDrop
 FN:88,isOverlapping
@@ -1318,7 +1318,7 @@ BRF:117
 BRH:28
 end_of_record
 TN:
-SF:src/license.js
+SF:src\license.js
 FN:23,_isBypassed
 FN:49,_getInvoke
 FN:61,checkLicenseStatus
@@ -1577,7 +1577,7 @@ BRF:101
 BRH:38
 end_of_record
 TN:
-SF:src/main.js
+SF:src\main.js
 FN:31,getTauriInvoke
 FN:56,waitForTauri
 FN:57,(anonymous_2)
@@ -4606,7 +4606,7 @@ BRF:1148
 BRH:30
 end_of_record
 TN:
-SF:src/platform.js
+SF:src\platform.js
 FN:18,initPlatform
 FN:28,safeInvoke
 FN:47,getVersionFromMeta
@@ -4739,7 +4739,7 @@ BRF:18
 BRH:5
 end_of_record
 TN:
-SF:src/settings.js
+SF:src\settings.js
 FN:30,loadSettingsFromStorage
 FN:46,saveSettingsToStorage
 FN:57,loadSettingsToUI
@@ -4830,7 +4830,7 @@ BRF:52
 BRH:4
 end_of_record
 TN:
-SF:src/theme.js
+SF:src\theme.js
 FN:17,getTheme
 FN:25,applyTheme
 FN:43,setTheme
@@ -4935,7 +4935,7 @@ BRF:43
 BRH:34
 end_of_record
 TN:
-SF:src/ui.js
+SF:src\ui.js
 FN:19,escapeHtml
 FN:36,setConnectionStatus
 FN:60,updateControlStateUI

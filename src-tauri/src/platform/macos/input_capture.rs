@@ -528,18 +528,151 @@ fn cg_event_to_raw(
             }
         }
         CGEventType::KeyDown => {
-            let keycode = event.get_integer_value_field(9) as u16;
+            let cg_code = event.get_integer_value_field(9) as u16;
+            let keysym = cg_keycode_to_keysym(cg_code);
             Some(RawInputEvent::KeyDown {
-                native_keycode: keycode,
+                native_keycode: keysym,
             })
         }
         CGEventType::KeyUp => {
-            let keycode = event.get_integer_value_field(9) as u16;
+            let cg_code = event.get_integer_value_field(9) as u16;
+            let keysym = cg_keycode_to_keysym(cg_code);
             Some(RawInputEvent::KeyUp {
-                native_keycode: keycode,
+                native_keycode: keysym,
             })
         }
         _ => None,
+    }
+}
+
+/// macOS CGKeyCode → X11 KeySym 转换表（Mac 采集端，发送前调用）
+///
+/// v0.1.50: 采用 Barrier/Synergy 行业标准，Mac 控制端将 CGKeyCode 转为 KeySym 发送，
+/// Win 被控端 keysym_to_vk() 转换注入，Mac 被控端 keysym_to_cg_keycode() 转换注入。
+///
+/// 参考：
+///   https://eastmanreference.com/complete-list-of-applescript-key-codes
+///   https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#keysym_encoding
+#[cfg(target_os = "macos")]
+pub(crate) fn cg_keycode_to_keysym(cg: u16) -> u16 {
+    match cg {
+        // ── 字母键 (CGKeyCode → XK_lowercase) ──────────────────────────
+        0  => 0x0061, // a → XK_a
+        1  => 0x0073, // s → XK_s
+        2  => 0x0064, // d → XK_d
+        3  => 0x0066, // f → XK_f
+        4  => 0x0068, // h → XK_h
+        5  => 0x0067, // g → XK_g
+        6  => 0x007A, // z → XK_z
+        7  => 0x0078, // x → XK_x
+        8  => 0x0063, // c → XK_c
+        9  => 0x0076, // v → XK_v
+        11 => 0x0062, // b → XK_b
+        12 => 0x0071, // q → XK_q
+        13 => 0x0077, // w → XK_w
+        14 => 0x0065, // e → XK_e
+        15 => 0x0072, // r → XK_r
+        16 => 0x0079, // y → XK_y
+        17 => 0x0074, // t → XK_t
+        31 => 0x006F, // o → XK_o
+        32 => 0x0075, // u → XK_u
+        34 => 0x0069, // i → XK_i
+        35 => 0x0070, // p → XK_p
+        37 => 0x006C, // l → XK_l
+        38 => 0x006A, // j → XK_j
+        40 => 0x006B, // k → XK_k
+        45 => 0x006E, // n → XK_n
+        46 => 0x006D, // m → XK_m
+        // ── 数字键（主键盘行）──────────────────────────────────────────
+        18 => 0x0031, // 1 → XK_1
+        19 => 0x0032, // 2 → XK_2
+        20 => 0x0033, // 3 → XK_3
+        21 => 0x0034, // 4 → XK_4
+        22 => 0x0036, // 6 → XK_6
+        23 => 0x0035, // 5 → XK_5
+        25 => 0x0039, // 9 → XK_9
+        26 => 0x0037, // 7 → XK_7
+        28 => 0x0038, // 8 → XK_8
+        29 => 0x0030, // 0 → XK_0
+        // ── 符号键 ──────────────────────────────────────────────────────
+        24 => 0x003D, // = → XK_equal
+        27 => 0x002D, // - → XK_minus
+        30 => 0x005B, // [ → XK_bracketleft
+        33 => 0x005D, // ] → XK_bracketright
+        36 => 0xFF0D, // Return → XK_Return
+        39 => 0x0027, // ' → XK_apostrophe
+        41 => 0x003B, // ; → XK_semicolon
+        42 => 0x005C, // \ → XK_backslash
+        43 => 0x002C, // , → XK_comma
+        44 => 0x002F, // / → XK_slash
+        47 => 0x002E, // . → XK_period
+        50 => 0x0060, // ` → XK_grave
+        // ── 空格 / 退格 / Tab / Esc ────────────────────────────────────
+        48 => 0xFF09, // Tab → XK_Tab
+        49 => 0x0020, // Space → XK_space
+        51 => 0xFF08, // Delete(Backspace) → XK_BackSpace
+        53 => 0xFF1B, // Escape → XK_Escape
+        // ── 修饰键 ──────────────────────────────────────────────────────
+        54 => 0xFFEC, // Right Cmd → XK_Super_R
+        55 => 0xFFEB, // Left Cmd  → XK_Super_L
+        56 => 0xFFE1, // Left Shift  → XK_Shift_L
+        57 => 0xFFE5, // Caps Lock   → XK_Caps_Lock
+        58 => 0xFFE9, // Left Option → XK_Alt_L
+        59 => 0xFFE3, // Left Control → XK_Control_L
+        60 => 0xFFE2, // Right Shift  → XK_Shift_R
+        61 => 0xFFEA, // Right Option → XK_Alt_R
+        62 => 0xFFE4, // Right Control → XK_Control_R
+        // ── 方向键 ──────────────────────────────────────────────────────
+        123 => 0xFF51, // Left  → XK_Left
+        124 => 0xFF53, // Right → XK_Right
+        125 => 0xFF54, // Down  → XK_Down
+        126 => 0xFF52, // Up    → XK_Up
+        // ── 功能键 F1-F15 ───────────────────────────────────────────────
+        122 => 0xFFBE, // F1
+        120 => 0xFFBF, // F2
+        99  => 0xFFC0, // F3
+        118 => 0xFFC1, // F4
+        96  => 0xFFC2, // F5
+        97  => 0xFFC3, // F6
+        98  => 0xFFC4, // F7
+        100 => 0xFFC5, // F8
+        101 => 0xFFC6, // F9
+        109 => 0xFFC7, // F10
+        103 => 0xFFC8, // F11
+        111 => 0xFFC9, // F12
+        105 => 0xFFCA, // F13
+        107 => 0xFFCB, // F14
+        113 => 0xFFCC, // F15
+        // ── 数字键盘 ────────────────────────────────────────────────────
+        65  => 0xFFAE, // Numpad . → XK_KP_Decimal
+        67  => 0xFFAA, // Numpad * → XK_KP_Multiply
+        69  => 0xFFAB, // Numpad + → XK_KP_Add
+        71  => 0xFF7F, // Num Lock → XK_Num_Lock
+        75  => 0xFFAF, // Numpad / → XK_KP_Divide
+        76  => 0xFF8D, // Numpad Enter → XK_KP_Enter
+        78  => 0xFFAD, // Numpad - → XK_KP_Subtract
+        82  => 0xFFB0, // Numpad 0 → XK_KP_0
+        83  => 0xFFB1, // Numpad 1 → XK_KP_1
+        84  => 0xFFB2, // Numpad 2 → XK_KP_2
+        85  => 0xFFB3, // Numpad 3 → XK_KP_3
+        86  => 0xFFB4, // Numpad 4 → XK_KP_4
+        87  => 0xFFB5, // Numpad 5 → XK_KP_5
+        88  => 0xFFB6, // Numpad 6 → XK_KP_6
+        89  => 0xFFB7, // Numpad 7 → XK_KP_7
+        91  => 0xFFB8, // Numpad 8 → XK_KP_8
+        92  => 0xFFB9, // Numpad 9 → XK_KP_9
+        // ── 扩展键 ──────────────────────────────────────────────────────
+        114 => 0xFF63, // Insert       → XK_Insert
+        115 => 0xFF50, // Home         → XK_Home
+        116 => 0xFF55, // Page Up      → XK_Page_Up
+        117 => 0xFFFF, // Forward Delete → XK_Delete
+        119 => 0xFF57, // End          → XK_End
+        121 => 0xFF56, // Page Down    → XK_Page_Down
+        // ── 未映射：透传 ────────────────────────────────────────────────
+        other => {
+            log::debug!("[KeyMap/Mac] 未知 CGKeyCode {}, 透传为 KeySym", other);
+            other
+        }
     }
 }
 
