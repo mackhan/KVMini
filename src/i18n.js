@@ -241,6 +241,7 @@ const MESSAGES = {
     labelClipboardSync: '跨设备剪贴板同步:',
     hintClipboardSync: '开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）',
 
+
     // 安全与加密
     settingsSecurity: '安全与加密',
     labelEnableTls: 'TLS 1.3 加密传输:',
@@ -250,6 +251,14 @@ const MESSAGES = {
     tlsFingerprintCopied: '指纹已复制到剪贴板',
     tlsFingerprintLoadFailed: '指纹加载失败',
     tlsFingerprintHint: '对端首次连接时需核对此指纹，确认一致后方可信任连接',
+
+    // 诊断
+    settingsDiagnostics: '诊断',
+    labelDebugLog: '调试日志模式:',
+    hintDebugLog: '开启后重启应用，日志包含详细调试信息（拖拽/滚轮/状态切换），排查完毕请关闭',
+    btnOpenLog: '📄 打开日志文件位置',
+    msgDebugLogEnabled: '调试模式已开启，重启应用后生效。日志路径：',
+    msgDebugLogDisabled: '调试模式已关闭，重启应用后生效',
     tlsDisabled: '（TLS 已关闭）',
     copied: '已复制',
 
@@ -650,6 +659,7 @@ const MESSAGES = {
     labelClipboardSync: 'Cross-device clipboard sync:',
     hintClipboardSync: 'When enabled, text copied on one device can be pasted on the other (plain text only, truncated at 1MB)',
 
+
     // Security & Encryption
     settingsSecurity: 'Security & Encryption',
     labelEnableTls: 'TLS 1.3 Encrypted Transport:',
@@ -659,6 +669,14 @@ const MESSAGES = {
     tlsFingerprintCopied: 'Fingerprint copied to clipboard',
     tlsFingerprintLoadFailed: 'Failed to load fingerprint',
     tlsFingerprintHint: 'When the remote connects for the first time, verify this fingerprint matches what is shown on the remote before trusting the connection.',
+
+    // Diagnostics
+    settingsDiagnostics: 'Diagnostics',
+    labelDebugLog: 'Debug Log Mode:',
+    hintDebugLog: 'When enabled, restart the app to get detailed debug logs (drag/scroll/state). Disable after troubleshooting.',
+    btnOpenLog: '📄 Open Log File Location',
+    msgDebugLogEnabled: 'Debug mode enabled. Restart app to take effect. Log path: ',
+    msgDebugLogDisabled: 'Debug mode disabled. Restart app to take effect.',
     tlsDisabled: '(TLS Disabled)',
     copied: 'Copied',
 

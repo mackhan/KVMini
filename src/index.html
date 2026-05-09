@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.53">
+    <meta name="app-version" content="0.1.54">
     <title data-i18n="pageTitle">KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -505,6 +505,22 @@
                                     <span id="cert-error-msg" class="cert-error-msg" data-i18n="certLoadFailed">证书加载失败</span>
                                     <button class="btn btn-small btn-danger" onclick="regenerateCert()"
                                         data-i18n="btnRegenerateCert">重新生成证书</button>
+                                </div>
+                            </div>
+
+                            <!-- 诊断与日志 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsDiagnostics">诊断</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelDebugLog">调试日志模式:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="debug-log-toggle">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p class="feature-hint" data-i18n="hintDebugLog">开启后重启应用，日志文件将包含详细调试信息（拖拽/滚轮/状态切换），排查完毕请关闭</p>
+                                <div class="settings-item">
+                                    <button class="btn btn-outline btn-small" id="open-log-btn" data-i18n="btnOpenLog">📄 打开日志文件位置</button>
                                 </div>
                             </div>
                         </div>

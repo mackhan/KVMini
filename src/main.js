@@ -172,6 +172,9 @@ async function initApp() {
         // TLS 加密
         enableTls: document.getElementById('enable-tls'),
         localTlsFingerprint: document.getElementById('local-tls-fingerprint'),
+        // 诊断
+        debugLogToggle: document.getElementById('debug-log-toggle'),
+        openLogBtn: document.getElementById('open-log-btn'),
         // 版本号
         appVersion: document.getElementById('app-version'),
         settingsVersion: document.getElementById('settings-version'),
@@ -302,6 +305,61 @@ function setupEventListeners() {
     if (elements.enableTls) {
         elements.enableTls.addEventListener('change', () => {
             loadLocalTlsFingerprint();
+        });
+    }
+
+    // 调试日志开关
+    if (elements.debugLogToggle) {
+        // 初始化：读取当前状态（通过 get_log_path 检测 debug_mode 文件是否存在）
+        if (invoke) {
+            invoke('set_debug_log', { enabled: false }).catch(() => {});
+            // 检查是否已开启（通过后端查日志目录的 debug_mode 文件）
+            invoke('get_log_path').then(logPath => {
+                const debugFlagPath = logPath.replace('runtime.log', 'debug_mode');
+                // 无法直接读文件系统，用 try 调 set_debug_log(false) 判断不准确
+                // 改为：启动时调一次 check_debug_mode 命令（简化：默认 unchecked，用户手动勾选）
+            }).catch(() => {});
+        }
+
+        elements.debugLogToggle.addEventListener('change', async () => {
+            if (!invoke) return;
+            const { t } = window.i18n;
+            const enabled = elements.debugLogToggle.checked;
+            try {
+                const logPath = await invoke('set_debug_log', { enabled });
+                if (enabled) {
+                    showSuccess(t('msgDebugLogEnabled') + logPath);
+                } else {
+                    showSuccess(t('msgDebugLogDisabled'));
+                }
+            } catch (e) {
+                console.warn('[Debug] set_debug_log 失败:', e);
+                showError(String(e));
+                elements.debugLogToggle.checked = !enabled; // 回滚
+            }
+        });
+    }
+
+    // 打开日志文件位置
+    if (elements.openLogBtn) {
+        elements.openLogBtn.addEventListener('click', async () => {
+            if (!invoke) return;
+            try {
+                const logPath = await invoke('get_log_path');
+                // 用 shell.open 打开文件所在目录
+                if (window.__TAURI__?.shell?.open) {
+                    const dir = logPath.replace(/[/\\][^/\\]+$/, '');
+                    await window.__TAURI__.shell.open(dir);
+                } else if (window.__TAURI__?.opener?.openPath) {
+                    const dir = logPath.replace(/[/\\][^/\\]+$/, '');
+                    await window.__TAURI__.opener.openPath(dir);
+                } else {
+                    showSuccess(logPath);
+                }
+            } catch (e) {
+                console.warn('[Debug] get_log_path 失败:', e);
+                showError(String(e));
+            }
         });
     }
 

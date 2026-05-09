@@ -507,14 +507,15 @@ fn cg_event_to_raw(
             // ScrollWheelEventIsContinuous = 88：1=触摸板连续滚动, 0=鼠标滚轮格滚动
             //
             // 问题：外接鼠标每格 PointDelta 仅 ≈3px，远端注入后滚动极慢。
-            // 修复：鼠标格滚动时改读 LineScrollDelta（字段 171/172），值为整格数（通常 ±3）
-            //       并乘以放大因子 40，使远端感受与本机一致。
+            // 修复：鼠标格滚动时改读 FixedPtDelta（字段 93/94，16.16 定点数），
+            //       整数部分 >> 16 得格数，乘以 120（Windows 标准一格值）使远端正常响应。
             //       触摸板连续滚动维持原 PointDelta 行为（高频小 delta，远端累积正常）。
             let is_continuous = event.get_integer_value_field(88) != 0;
             let (dx, dy) = if is_continuous {
                 // 触摸板：直接用点级 delta
                 let dx = event.get_integer_value_field(97) as i32;
                 let dy = event.get_integer_value_field(96) as i32;
+                log::trace!("[Mac/Capture] ScrollWheel touchpad dx={} dy={}", dx, dy);
                 (dx, dy)
             } else {
                 // 外接鼠标滚轮：读 FixedPtDelta（字段 93/94）并放大
@@ -524,6 +525,10 @@ fn cg_event_to_raw(
                 let dx_fixed = event.get_integer_value_field(94);
                 let dy = ((dy_fixed >> 16) as i32) * 120;
                 let dx = ((dx_fixed >> 16) as i32) * 120;
+                log::debug!(
+                    "[Mac/Capture] ScrollWheel mouse fixed_y={:#010X} fixed_x={:#010X} → dy={} dx={}",
+                    dy_fixed, dx_fixed, dy, dx
+                );
                 (dx, dy)
             };
             if dx == 0 && dy == 0 {

@@ -108,6 +108,12 @@ fn inject_mouse_move(x: i32, y: i32) -> KvmResult<()> {
         CGEventType::MouseMoved
     };
 
+    log::trace!(
+        "[Mac/Inject] move_mouse x={} y={} left_down={} type={:?}",
+        x, y, left_btn_down,
+        if left_btn_down { "LeftMouseDragged" } else { "MouseMoved" }
+    );
+
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
     let point = CGPoint::new(x as f64, y as f64);
@@ -132,6 +138,11 @@ fn inject_mouse_button(button: MouseButton, pressed: bool) -> KvmResult<()> {
         .and_then(|s| CGEvent::new(s).ok())
         .map(|e| e.location())
         .unwrap_or(CGPoint::new(0.0, 0.0));
+
+    log::debug!(
+        "[Mac/Inject] mouse_button {:?} pressed={} at ({:.0},{:.0})",
+        button, pressed, current_pos.x, current_pos.y
+    );
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
@@ -159,6 +170,10 @@ fn inject_key(native_keycode: u16, pressed: bool) -> KvmResult<()> {
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
     // v0.1.50: native_keycode 是 X11 KeySym，需转换为 CGKeyCode 再注入
     let cg_code = keysym_to_cg_keycode(native_keycode);
+    log::debug!(
+        "[Mac/Inject] key keysym={:#06X} cg_code={} pressed={}",
+        native_keycode, cg_code, pressed
+    );
     let event = CGEvent::new_keyboard_event(source, cg_code as CGKeyCode, pressed)
         .map_err(|_| platform_err!("CGEvent::new_keyboard_event",
             format!("创建键盘事件失败: keysym={:#06X} cg_code={}", native_keycode, cg_code)))?;
@@ -181,6 +196,11 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
     // dy=120 → lines=1, dy=-120 → lines=-1, dy=40 → lines=1（高分辨率鼠标至少1行）
     let lines_y = if dy == 0 { 0 } else { (dy.abs() / 120).max(1).min(20) * dy.signum() };
     let lines_x = if dx == 0 { 0 } else { (dx.abs() / 120).max(1).min(20) * dx.signum() };
+
+    log::debug!(
+        "[Mac/Inject] scroll raw(dx={} dy={}) → lines(x={} y={})",
+        dx, dy, lines_x, lines_y
+    );
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;

@@ -116,7 +116,17 @@ fn rotate_log_if_needed(log_path: &std::path::Path) {
 fn init_persistent_logger() {
     use std::io::Write;
 
-    let file_handle = resolve_log_dir().and_then(|dir| {
+    let log_dir = resolve_log_dir();
+
+    // v0.1.54: 调试模式——如果日志目录下存在 debug_mode 文件，提升日志级别到 debug
+    // 用法：在日志目录下 touch debug_mode，重启应用即可看到 debug 日志；
+    //       rm debug_mode 后重启恢复 info 级别
+    let debug_mode = log_dir.as_ref()
+        .map(|d| d.join("debug_mode").exists())
+        .unwrap_or(false);
+    let default_level = if debug_mode { "debug" } else { "info" };
+
+    let file_handle = log_dir.as_ref().and_then(|dir| {
         let log_path = dir.join("runtime.log");
         rotate_log_if_needed(&log_path);
         std::fs::OpenOptions::new()
@@ -128,7 +138,7 @@ fn init_persistent_logger() {
     });
 
     let mut builder = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
+        env_logger::Env::default().default_filter_or(default_level)
     );
 
     if let Some((log_path, file)) = file_handle {
@@ -147,9 +157,16 @@ fn init_persistent_logger() {
                     record.args()
                 )
             });
-        // 初始化后立即记录一条，方便用户确认日志目录
         builder.init();
-        log::info!("KVMini v{} 启动，日志文件: {}", env!("CARGO_PKG_VERSION"), log_path.display());
+        // v0.1.54: 启动头部打印完整诊断信息，方便查日志时快速定位版本/平台
+        log::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log::info!("KVMini v{} 启动", env!("CARGO_PKG_VERSION"));
+        log::info!("  平台: {}", std::env::consts::OS);
+        log::info!("  日志: {} (级别={}{})", log_path.display(), default_level,
+            if debug_mode { ", 调试模式已开启" } else { "" });
+        log::info!("  调试模式: {} (touch {}/debug_mode 可开启)", debug_mode,
+            log_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
+        log::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     } else {
         // 日志目录创建失败时退化为只写 stderr（保持原行为）
         builder.init();
@@ -793,6 +810,37 @@ fn write_startup_log(_content: String) -> Result<(), String> {
         log::info!("[Diagnostics] 诊断日志已写入: {:?}", log_path);
     }
     Ok(())
+}
+
+/// 获取当前运行时日志文件路径（供前端"打开日志"按钮使用）
+#[tauri::command]
+fn get_log_path() -> Result<String, String> {
+    resolve_log_dir()
+        .map(|d| d.join("runtime.log").to_string_lossy().into_owned())
+        .ok_or_else(|| "无法确定日志目录".to_string())
+}
+
+/// v0.1.54: 一键开启/关闭调试模式
+///
+/// 在日志目录下创建/删除 `debug_mode` 文件。
+/// 创建后**重启应用**即切换到 debug 级别日志，可诊断拖拽/滚轮/状态切换等问题。
+/// 返回操作结果和日志文件路径，方便前端展示提示。
+#[tauri::command]
+fn set_debug_log(enabled: bool) -> Result<String, String> {
+    let dir = resolve_log_dir().ok_or_else(|| "无法确定日志目录".to_string())?;
+    let flag = dir.join("debug_mode");
+    if enabled {
+        std::fs::write(&flag, b"").map_err(|e| format!("创建 debug_mode 失败: {}", e))?;
+        let log_path = dir.join("runtime.log").to_string_lossy().into_owned();
+        log::info!("[Logger] 调试模式已开启（重启后生效），日志文件: {}", log_path);
+        Ok(log_path)
+    } else {
+        if flag.exists() {
+            std::fs::remove_file(&flag).map_err(|e| format!("删除 debug_mode 失败: {}", e))?;
+        }
+        log::info!("[Logger] 调试模式已关闭（重启后生效）");
+        Ok(dir.join("runtime.log").to_string_lossy().into_owned())
+    }
 }
 
 // ── 自动更新 ──────────────────────────────────────────────────────────────
@@ -1747,6 +1795,8 @@ async fn main() {
             open_input_monitoring_settings,
             // 诊断日志
             write_startup_log,
+            get_log_path,
+            set_debug_log,
             // tauri-commerce SDK
             get_trial_status,
             get_locale,

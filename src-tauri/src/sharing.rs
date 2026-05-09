@@ -167,10 +167,28 @@ impl SharingManager {
         {
             let mut sm = self.state.lock().await;
             if sm.state() == ControlState::Idle {
+                log::info!("[Sharing] inject_remote_frame: 首帧到达，Idle → RemoteControlling 自动切换");
                 let evs = sm.switch_to_remote_controlling();
                 drop(sm);
                 self.handle_state_events_silent(evs).await;
             }
+        }
+
+        // v0.1.54 诊断日志：记录被控端收到的帧类型
+        match frame {
+            KvmFrame::MouseMoveDelta { dx, dy } => {
+                log::trace!("[Sharing/Remote] 收到 MouseMoveDelta dx={} dy={}", dx, dy);
+            }
+            KvmFrame::MouseButton { button, pressed, .. } => {
+                log::debug!("[Sharing/Remote] 收到 MouseButton btn={} pressed={}", button, pressed);
+            }
+            KvmFrame::MouseScroll { dx, dy, .. } => {
+                log::debug!("[Sharing/Remote] 收到 MouseScroll dx={} dy={}", dx, dy);
+            }
+            KvmFrame::KeyEvent { keycode, pressed, .. } => {
+                log::debug!("[Sharing/Remote] 收到 KeyEvent keycode={:#06X} pressed={}", keycode, pressed);
+            }
+            _ => {}
         }
 
         // v0.1.40: 鼠标 delta 单独处理（维护虚拟光标 + 反向边缘回切）
