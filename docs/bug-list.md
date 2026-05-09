@@ -564,3 +564,45 @@
 | **出现次数** | 1（v0.1.38 + BUG-022 修复后引入，v0.1.40 彻底修复） |
 | **测试用例** | `kvm-core/src/remote_cursor.rs` 16 个测试：on_enter 4 方向 / on_delta 累加 / clamp 4 方向 / 反向边缘 4 方向 / i32 溢出防护 / 入态贴边不立即触发 / 离开重置计数；`kvm-core/src/protocol.rs` 5 个 MouseMoveDelta 编解码测试 |
 | **关键教训** | 1) 采集端"位置"与"位移"是两个独立的物理量，在光标被 grab/disassociate 的场景下**只有 delta 是可信的**；2) 竞品已用 20+ 年验证的方案不要自创兜底——delta 模式就是 delta 模式，任何"绝对坐标兜底"都是冗余且错误；3) 协议升级时 TCP 可靠传输 + 无累积误差的 i16 delta 比 i32 绝对坐标更紧凑；4) 远端虚拟光标必须是本端（被控方）的**单一 owner**，避免跨进程同步 |
+
+## Bug #034：远端虚拟光标完全不动（v0.1.43 待修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 本机撞边进入 LocalControlling 后，远端屏幕上应出现的"虚拟光标"完全不动（用户误以为没连上）。本机光标卡在屏幕边缘只露一半。delta 帧确实到达远端，但 `CGWarpMouseCursorPosition` 调用后光标仍贴回物理鼠标当前位置。|
+| **根因** | macOS `MacCursorController::set_position` → `warp_cursor(grabbed=false)` 分支会在 `CGWarpMouseCursorPosition` 之后无条件调用 `CGAssociateMouseAndMouseCursorPosition(1)`（`platform/macos/cursor.rs:140-144`），该调用会**立刻把物理鼠标位置重新映射到光标**，相当于撤销刚才的 warp。被控端（RemoteControlling 态）从未调用 `cursor.grab()`，所以每次 delta warp 后都会走这个 Associate(1) 分支。次要根因：状态机 `switch_to_remote_controlling`（`kvm-core/src/state.rs:177-190`）只产生 `BlockInput`，没有 `ShowCursor`，Windows 上若历史 `ShowCursor` 引用计数为负则光标根本不可见。|
+| **修改方式** | (1) `kvm-core/src/state.rs::switch_to_remote_controlling` 追加 `StateEvent::ShowCursor`；对称地从 RemoteControlling 切回 Idle 时 `switch_to_idle` 的 Remote 分支也补 `ShowCursor`。 (2) `sharing.rs::handle_one` 在被控端状态下让 `ShowCursor` 调用 `cursor.show_cursor()`（不是 release，因为没有 grab）。 (3) macOS 端新增"被控模式"标志：在被控端入态时调用 `cursor.begin_remote_display()`（新方法），内部设 `is_grabbed=true` 等价状态让 `warp_cursor` 跳过 `CGAssociate(1)`，但**不**执行 `NSCursor hide`。简化方案：直接让 `MacCursorController` 在 `set_position` 时总是跳过 `CGAssociate(1)`（这个 v0.1.42 的"非 grab 下 Associate(1)"行为实际上没有任何正面作用，只会让 warp 被物理鼠标拉回，属于错误设计，应该奥卡姆剃刀掉）。 (4) Windows 端 `show_cursor` 循环 `ShowCursor(1)` 直到返回值 ≥ 0，抵消负引用计数。|
+| **修改次数** | 0（本次首修） |
+| **出现次数** | 1 |
+| **测试用例** | 新增 `test_switch_to_remote_controlling_produces_show_cursor`（state.rs）、`test_switch_to_idle_from_remote_produces_show_cursor`、`test_set_position_does_not_reassociate`（逻辑层可观测替代） |
+| **关键教训** | 奥卡姆剃刀：`warp_cursor(grabbed=false)` 里的 `CGAssociate(1)` 分支（v0.1.42 引入）属于过度设计，没有任何场景会从中受益，反而破坏了被控端的虚拟光标。应直接删除该分支，让 warp 的语义永远是纯 warp。|
+
+---
+
+## Bug #035：远端物理用户键鼠输入无法抢占自动终止共享（v0.1.43 新能力）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 被控端用户想拿回本机控制权时，没有自然的方式：只能让控制端主动撞反向边缘或按快捷键。不符合 Synergy/Logitech Flow/ShareMouse 等竞品的标准用户体验。|
+| **根因** | 设计缺失 — 原设计里 `RemoteControlling` 态下 `BlockInput` 吞掉所有本机键鼠，但吞之前没有做"物理输入检测"并主动回切的逻辑。 |
+| **修改方式** | (1) `kvm-core/src/preempt.rs` 新增 `PreemptDetector`（无锁 AtomicI64 累加 dx²+dy²，AtomicBool 标记 KeyDown），阈值硬编码 40px（平方=1600）。 (2) `kvm-core/src/protocol.rs::KvmFrame::SwitchBackControl` 扩展为 `{ reason: SwitchBackReason }`，枚举 `EdgeReturn=0` / `Preempt=1`，payload 1 字节；decode 兼容老版本（空 payload=EdgeReturn）。 (3) mac/win 的 input_capture 在 RemoteControlling 态下（且为物理事件：mac 判 `CGEventSourceStateID`；win 判 `LLMHF_INJECTED`）喂 PreemptDetector，触发后通过 `Arc<dyn Fn()>` 回调通知 sharing 层。 (4) `sharing.rs::on_local_physical_preempt()`：发 `SwitchBackControl { reason: Preempt }` → 自切 Idle + UnblockInput + 清理 remote_cursor。 (5) 控制端 `on_remote_switch_back_control` 按 reason emit "kvm://preempted" 事件，前端 `main.js` 监听后 `showToast(t('preempt_resume_toast'), 3000)`，i18n key 中英双语。 |
+| **修改次数** | 0（本次首修） |
+| **出现次数** | 0（新功能） |
+| **测试用例** | `kvm-core/src/preempt.rs`（阈值 39/40 边界、勾股 (30,30)→触发、reset 清零、多次 feed、KeyDown 单次触发）；`kvm-core/src/protocol.rs`（SwitchBackReason 编解码、legacy 0 byte payload 兼容）；前端 i18n 完整性测试同步。 |
+| **关键教训** | 奥卡姆剃刀：检测逻辑纯逻辑化放 kvm-core，平台层只做"喂样本 + 合成事件过滤"；触发后被控端自己切 Idle，控制端被动收帧走 local_to_armed，职责清晰不共享状态。 |
+
+---
+
+## Bug #036：Win 被控端断开连接后键鼠锁死（v0.1.44 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | Mac 主控端点"停止共享并退出"后，Win 被控端键鼠完全锁死（鼠标键盘都不响应），只能 Ctrl+Alt+Delete 杀进程恢复 |
+| **根因** | 多层原因叠加：(1) Win 端 v0.1.43 新增 Hook 层 `should_swallow()`（读 `control_state` 原子变量，RemoteControlling 时返回 1 吞掉所有键鼠事件），这是第一次真正有效的软屏蔽——之前 `BlockInput` API 非管理员权限下静默失败，实际从未屏蔽过；(2) `connection/mod.rs` 事件循环中 `Err(_) => break`——如果 broadcast channel 出现 `RecvError::Lagged`（缓冲区溢出丢事件），事件循环提前退出，后续 `NetworkEvent::ConnectionStateChanged(Disconnected)` 无人消费，`sm.on_disconnected()` 永远不会被调用；(3) `on_disconnected()` 没有兜底保护——如果事件处理链路中任何一步异常（锁竞争、panic），`capture.set_control_state(0)` 和 `blocker.unblock_input()` 可能被跳过 |
+| **修改方式** | 三层修复：(1) `connection/mod.rs`：区分 `RecvError::Lagged`（log warn + continue 继续接收）和 `RecvError::Closed`（正常 break），确保 Disconnected 事件不会因 lag 丢失；(2) `sharing.rs::on_disconnected()`：在正常事件处理链路后增加显式兜底——强制 `capture.set_control_state(Idle)` + 检查 `blocker.is_blocked()` 若仍为 true 则强制 `unblock_input()` + 强制 `cursor.recouple_physical_mouse()` + 清理 `remote_cursor`；(3) `platform/windows/input_block.rs`：新增 `force_unblock()` 方法供极端场景使用，并增加模块文档说明 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | 功能测试：Mac 主控端"停止共享并退出" → Win 被控端键鼠必须在 1 秒内恢复响应 |
+| **关键教训** | (1) 在"必须恢复"的场景中，不能只依赖事件链路的正确性——必须有**显式兜底**（defense in depth）：事件处理完后再检查一次状态是否真的归零了；(2) broadcast channel 的 Lagged error **绝不能**被当成致命错误处理——丢旧事件 ≠ 系统崩溃，后续的 Disconnected 事件是关键生命周期事件不能丢；(3) 软件工程中"第一次真正生效的屏蔽"会暴露之前从未被发现的恢复路径 bug——新增 BlockInput 能力时必须同步验证所有 UnblockInput 路径 |
+
+---

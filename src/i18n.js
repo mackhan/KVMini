@@ -92,6 +92,7 @@ const MESSAGES = {
     // 权限警告（BUG-031 按权限类型分开）
     permissionWarningText: '需要「辅助功能」权限才能开始键鼠共享。如果已授权仍提示，请在系统设置中先用"-"删除 KVMini 再用"+"重新添加',
     permissionWarningInputMonitoringText: '需要「输入监控」权限才能开始键鼠共享。授权后请完全退出 KVMini（Cmd+Q）再重新打开，权限才会生效',
+    permissionWarningInputMonitoringInfoText: '输入监控权限可能未授予（检测结果可能不准确）。可直接点击"开始共享"尝试，如失败请前往设置授权',
     permissionWarningBtnAccessibility: '前往辅助功能设置',
     permissionWarningBtnInputMonitoring: '前往输入监控设置',
 
@@ -319,6 +320,9 @@ const MESSAGES = {
     sharingStarted: '共享已启动，正在控制对端',
     sharingStopped: '共享已停止',
     shareToggleFailed: '切换共享状态失败，请检查辅助功能权限或连接状态',
+    captureFailedPermission: '⚠️ 启动共享失败：缺少输入监控权限。请在系统设置中授权后重试"开始共享"。',
+    // v0.1.43 Bug #035: 远端用户物理输入抢占回切 toast（Synergy/Logitech Flow 风格）
+    preempt_resume_toast: '远端用户恢复了本机控制',
 
     // 分页导航
     tabGeneral: '通用',
@@ -496,6 +500,7 @@ const MESSAGES = {
     // Permission warning (BUG-031: distinguish permission kinds)
     permissionWarningText: 'Accessibility permission is required. If already granted but still showing, remove KVMini with "-" in System Settings then re-add with "+".',
     permissionWarningInputMonitoringText: 'Input Monitoring permission is required to start sharing. After authorizing, please fully quit KVMini (Cmd+Q) and relaunch for the permission to take effect.',
+    permissionWarningInputMonitoringInfoText: 'Input Monitoring permission may not be granted (detection might be inaccurate). You can try clicking "Start Sharing" — if it fails, please authorize in Settings.',
     permissionWarningBtnAccessibility: 'Open Accessibility Settings',
     permissionWarningBtnInputMonitoring: 'Open Input Monitoring Settings',
 
@@ -723,6 +728,9 @@ const MESSAGES = {
     sharingStarted: 'Sharing started, you are now controlling the remote machine',
     sharingStopped: 'Sharing stopped',
     shareToggleFailed: 'Failed to toggle sharing. Check accessibility permission or connection status.',
+    captureFailedPermission: '⚠️ Failed to start sharing: Input Monitoring permission required. Please authorize in System Settings and try "Start Sharing" again.',
+    // v0.1.43 Bug #035: Remote physical input preemption toast (Synergy / Logitech Flow style)
+    preempt_resume_toast: 'Remote user resumed control',
 
     // Tab navigation
     tabGeneral: 'General',

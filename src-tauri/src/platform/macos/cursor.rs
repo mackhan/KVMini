@@ -5,9 +5,15 @@
 //! 这会立刻把 grab 解除（鼠标重新驱动光标）。当远端发来 MouseMoveAbsolute 或
 //! 边缘回切路径调用 `set_position` 时，grab 会被悄悄破坏。
 //!
-//! 修复方案：MacCursorController 维护 `is_grabbed: AtomicBool`，
-//! `grab()` / `release()` 维护其状态，`warp_cursor` 在 grab 中**只 warp 不 associate**，
-//! 非 grab 时保持原有行为。
+//! v0.1.42 方案：MacCursorController 维护 `is_grabbed: AtomicBool`，
+//! `warp_cursor` 在 grab 中**只 warp 不 associate**，非 grab 时保持原有行为。
+//!
+//! v0.1.43 修复（Bug #034 二修）：
+//! 非 grab 分支的 `CGAssociate(1)` 本身就是主根因——被控端 RemoteControlling 下
+//! 从不调 grab()，set_position 每次都走到 `!grabbed` 分支，warp 刚落点又立刻被
+//! `CGAssociate(1)` 把光标拉回物理鼠标位置，表现为远端虚拟光标完全不动。
+//! 修复：彻底删除非 grab 分支的 `CGAssociate(1)`，让 warp 成为纯粹的"落点"原语。
+//! LocalControlling 的 `Associate(1)` 恢复仍在 `release()` 中显式处理，不影响主流程。
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::CursorController;
@@ -120,15 +126,48 @@ impl CursorController for MacCursorController {
         }
         Ok(())
     }
+
+    /// v0.1.43 Bug #034：被控端入 RemoteControlling 时调用。
+    /// - 断开物理鼠标驱动光标（`CGAssociate(0)`）
+    /// - **保持光标可见**（不 hide），以便远端 warp 的"虚拟光标"对被控用户可见
+    fn decouple_physical_mouse(&self) -> KvmResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use core_graphics::display::CGAssociateMouseAndMouseCursorPosition;
+            unsafe {
+                CGAssociateMouseAndMouseCursorPosition(0);
+                // 兜底 unhide：部分场景下光标可能已被其他组件隐藏
+                use objc::{class, msg_send, sel, sel_impl};
+                let _: () = msg_send![class!(NSCursor), unhide];
+            }
+            log::info!(
+                "[Cursor] macOS decouple_physical_mouse: 断开鼠标↔光标绑定 + 保持光标可见（远端虚拟光标模式）"
+            );
+        }
+        Ok(())
+    }
+
+    fn recouple_physical_mouse(&self) -> KvmResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use core_graphics::display::CGAssociateMouseAndMouseCursorPosition;
+            unsafe {
+                CGAssociateMouseAndMouseCursorPosition(1);
+            }
+            log::info!("[Cursor] macOS recouple_physical_mouse: 恢复鼠标↔光标绑定");
+        }
+        Ok(())
+    }
 }
 
-/// warp 光标。`grabbed=true` 时**仅**调用 CGWarpMouseCursorPosition，不再调 Associate(1)，
-/// 否则会破坏当前 grab 状态。
+/// warp 光标。纯粹的"落点"原语：只调 `CGWarpMouseCursorPosition`，
+/// 不再根据 `grabbed` 调 `CGAssociate(1/0)`——
+/// - `grab()`/`release()` 里已显式负责解绑/恢复绑定
+/// - 非 grab 场景下额外的 Associate(1) 会立即把 warp 的光标拉回物理鼠标位置，
+///   导致远端虚拟光标不动（Bug #034 根因）
 #[cfg(target_os = "macos")]
-fn warp_cursor(x: i32, y: i32, grabbed: bool) -> KvmResult<()> {
-    use core_graphics::display::{
-        CGAssociateMouseAndMouseCursorPosition, CGPoint, CGWarpMouseCursorPosition,
-    };
+fn warp_cursor(x: i32, y: i32, _grabbed: bool) -> KvmResult<()> {
+    use core_graphics::display::{CGPoint, CGWarpMouseCursorPosition};
     let point = CGPoint::new(x as f64, y as f64);
     let result = unsafe { CGWarpMouseCursorPosition(point) };
     if result != 0 {
@@ -136,14 +175,6 @@ fn warp_cursor(x: i32, y: i32, grabbed: bool) -> KvmResult<()> {
             "CGWarpMouseCursorPosition",
             format!("失败: code={}", result)
         ));
-    }
-    if !grabbed {
-        // 非 grab 状态下保持原有行为：warp 后立即重新绑定，避免某些场景下的轻微漂移
-        unsafe {
-            CGAssociateMouseAndMouseCursorPosition(1);
-        }
-    } else {
-        log::debug!("[Cursor] warp 在 grab 状态，跳过 CGAssociate(1) 以保持 grab 有效");
     }
     Ok(())
 }
@@ -221,6 +252,29 @@ mod tests {
         assert!(
             c.is_grabbed(),
             "set_position 不允许改变 is_grabbed 状态（v0.1.42 BUG-034 回归保护）"
+        );
+    }
+
+    /// Bug #034 真正根因回归测试（v0.1.43）：
+    /// 被控端处于 RemoteControlling 时从不调 grab()（grab 只用于本机 LocalControlling 隐藏光标）。
+    /// 旧实现在 `warp_cursor(grabbed=false)` 分支无条件 `CGAssociate(1)`，
+    /// 会把刚 warp 的光标立即被物理鼠标位置覆盖，表现为虚拟光标完全不动。
+    ///
+    /// 修复：非 grab 分支取消 `CGAssociate(1)` 调用，warp 成为纯粹的"落点"原语。
+    /// set_position 必须在 non-grab 模式下仍保持光标在目标坐标附近（不被物理鼠标瞬间拉回）。
+    /// 这个测试不验证光标真实坐标（headless 环境下 CGWarpMouseCursorPosition 可能返回非 0），
+    /// 而是验证 set_position 对于 `!is_grabbed` 不会 panic、不改变 grab 标志。
+    #[test]
+    fn test_set_position_in_non_grab_does_not_panic_or_mutate_state() {
+        let c = MacCursorController::new();
+        assert!(!c.is_grabbed());
+        // 非 grab 路径下多次调用，不应 panic，不应翻转状态
+        for (x, y) in [(100, 100), (500, 500), (1920, 1080)] {
+            let _ = c.set_position(x, y);
+        }
+        assert!(
+            !c.is_grabbed(),
+            "非 grab 场景的 set_position 不允许把 is_grabbed 翻转为 true"
         );
     }
 }

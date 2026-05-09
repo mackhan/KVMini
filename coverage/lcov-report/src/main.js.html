@@ -23,9 +23,9 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">5.58% </span>
+                <span class="strong">5.54% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>91/1628</span>
+                <span class='fraction'>91/1641</span>
             </div>
         
             
@@ -37,16 +37,16 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">7.34% </span>
+                <span class="strong">7.18% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>13/177</span>
+                <span class='fraction'>13/181</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">6.01% </span>
+                <span class="strong">5.96% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>90/1497</span>
+                <span class='fraction'>90/1510</span>
             </div>
         
             
@@ -3267,7 +3267,29 @@
 <a name='L3202'></a><a href='#L3202'>3202</a>
 <a name='L3203'></a><a href='#L3203'>3203</a>
 <a name='L3204'></a><a href='#L3204'>3204</a>
-<a name='L3205'></a><a href='#L3205'>3205</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L3205'></a><a href='#L3205'>3205</a>
+<a name='L3206'></a><a href='#L3206'>3206</a>
+<a name='L3207'></a><a href='#L3207'>3207</a>
+<a name='L3208'></a><a href='#L3208'>3208</a>
+<a name='L3209'></a><a href='#L3209'>3209</a>
+<a name='L3210'></a><a href='#L3210'>3210</a>
+<a name='L3211'></a><a href='#L3211'>3211</a>
+<a name='L3212'></a><a href='#L3212'>3212</a>
+<a name='L3213'></a><a href='#L3213'>3213</a>
+<a name='L3214'></a><a href='#L3214'>3214</a>
+<a name='L3215'></a><a href='#L3215'>3215</a>
+<a name='L3216'></a><a href='#L3216'>3216</a>
+<a name='L3217'></a><a href='#L3217'>3217</a>
+<a name='L3218'></a><a href='#L3218'>3218</a>
+<a name='L3219'></a><a href='#L3219'>3219</a>
+<a name='L3220'></a><a href='#L3220'>3220</a>
+<a name='L3221'></a><a href='#L3221'>3221</a>
+<a name='L3222'></a><a href='#L3222'>3222</a>
+<a name='L3223'></a><a href='#L3223'>3223</a>
+<a name='L3224'></a><a href='#L3224'>3224</a>
+<a name='L3225'></a><a href='#L3225'>3225</a>
+<a name='L3226'></a><a href='#L3226'>3226</a>
+<a name='L3227'></a><a href='#L3227'>3227</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -3639,6 +3661,28 @@
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -6847,6 +6891,28 @@ function <span class="fstat-no" title="function not covered" >setupEventListener
             }
         }).catch(<span class="fstat-no" title="function not covered" >e </span>=&gt; <span class="cstat-no" title="statement not covered" >console.warn('控制状态事件监听注册失败:', e))</span>;
 &nbsp;
+        // BUG-035: 监听 capture 因权限失败 → 显示输入监控权限横幅（非全屏遮罩，允许用户授权后重试）
+<span class="cstat-no" title="statement not covered" >        window.__TAURI__.event.listen('sharing://capture-failed-permission', <span class="fstat-no" title="function not covered" >()</span> =&gt; {</span>
+            const { t } = <span class="cstat-no" title="statement not covered" >window.i18n;</span>
+<span class="cstat-no" title="statement not covered" >            console.warn('[KVMini] capture 因输入监控权限失败，显示权限横幅');</span>
+<span class="cstat-no" title="statement not covered" >            window.AccessibilityModule.showPermissionWarning(elements, 'input-monitoring');</span>
+<span class="cstat-no" title="statement not covered" >            showError(t('captureFailedPermission'));</span>
+        }).catch(<span class="fstat-no" title="function not covered" >e </span>=&gt; <span class="cstat-no" title="statement not covered" >console.warn('capture-failed-permission 事件监听注册失败:', e))</span>;
+&nbsp;
+        // v0.1.43 Bug #035: 监听远端物理输入抢占事件（Synergy/Logitech Flow 风格）
+        // 当远端用户在被控端用物理键鼠"抢回"控制权时，后端 emit kvm://preempted，
+        // 控制端弹 3 秒 toast 告知用户。被控端不弹。
+<span class="cstat-no" title="statement not covered" >        window.__TAURI__.event.listen('kvm://preempted', <span class="fstat-no" title="function not covered" >()</span> =&gt; {</span>
+            const { t } = <span class="cstat-no" title="statement not covered" >window.i18n;</span>
+<span class="cstat-no" title="statement not covered" >            console.info('[KVMini] 远端用户物理输入抢占，控制端回 Armed');</span>
+<span class="cstat-no" title="statement not covered" >            try {</span>
+                // 复用 success-toast（3 秒自动消失，与需求一致）
+<span class="cstat-no" title="statement not covered" >                showSuccess(t('preempt_resume_toast'));</span>
+            } catch (err) {
+<span class="cstat-no" title="statement not covered" >                console.warn('[KVMini] 显示抢占 toast 失败:', err);</span>
+            }
+        }).catch(<span class="fstat-no" title="function not covered" >e </span>=&gt; <span class="cstat-no" title="statement not covered" >console.warn('kvm://preempted 事件监听注册失败:', e))</span>;
+&nbsp;
         // 监听后台更新检查发现新版本事件
 <span class="cstat-no" title="statement not covered" >        window.__TAURI__.event.listen('update-available', <span class="fstat-no" title="function not covered" >(e</span>vent) =&gt; {</span>
             const payload = <span class="cstat-no" title="statement not covered" >event.payload || {};</span>
@@ -9682,7 +9748,7 @@ window.closeAboutModal = closeAboutModal;
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-05-08T04:10:49.908Z
+                at 2026-05-09T04:13:29.184Z
             </div>
         <script src="../prettify.js"></script>
         <script>

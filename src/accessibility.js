@@ -259,8 +259,11 @@ async function checkPermissionAfterConnect(elements, invoke) {
                 console.log('[Permission] 输入监控权限重试结果:', im);
             }
             if (im !== 'Granted' && im !== 'N/A') {
-                console.warn('[Permission] 输入监控权限最终 Denied，显示横幅');
-                showPermissionWarning(elements, 'input-monitoring');
+                // BUG-035: CGPreflightListenEventAccess 进程内缓存不准确（授权后仍返回 Denied）
+                // 不禁用"开始共享"按钮——让用户可以点击重试，CGEventTap::new() 会验证真实权限
+                // 只显示信息性提示横幅（不含 disabled 按钮）
+                console.warn('[Permission] 输入监控 preflight=Denied（可能是进程缓存），显示提示但不阻止操作');
+                showPermissionWarningInfoOnly(elements, 'input-monitoring');
                 return;
             }
             console.log('[Permission] 输入监控已授权 ✓');
@@ -328,6 +331,52 @@ function hidePermissionWarning(elements) {
     }
 }
 
+/**
+ * BUG-035: 只显示信息性横幅提示，不禁用"开始共享"按钮
+ * 用于 CGPreflightListenEventAccess 进程缓存返回 Denied 但实际权限可能已授予的情况
+ * 用户仍可点击"开始共享"重试（CGEventTap::new 会验证真实权限状态）
+ */
+function showPermissionWarningInfoOnly(elements, kind = 'input-monitoring') {
+    const t = (window.i18n && window.i18n.t) ? window.i18n.t : (k) => k;
+    if (elements?.permissionWarning) {
+        elements.permissionWarning.classList.remove('hidden');
+        const textEl = elements.permissionWarning.querySelector('.permission-warning-text');
+        const btnEl = elements.permissionWarning.querySelector('.permission-warning-btn') ||
+                      document.getElementById('permission-warning-btn');
+        if (textEl) {
+            const textKey = kind === 'input-monitoring'
+                ? 'permissionWarningInputMonitoringInfoText'
+                : 'permissionWarningText';
+            textEl.textContent = t(textKey);
+            textEl.setAttribute('data-i18n', textKey);
+        }
+        if (btnEl) {
+            const btnKey = kind === 'input-monitoring'
+                ? 'permissionWarningBtnInputMonitoring'
+                : 'permissionWarningBtnAccessibility';
+            btnEl.textContent = t(btnKey);
+            btnEl.setAttribute('data-i18n', btnKey);
+            btnEl.setAttribute('data-kind', kind);
+            btnEl.classList.remove('hidden');
+            const tauri = window.__TAURI__;
+            const invoke = tauri?.core?.invoke || tauri?.invoke || null;
+            btnEl.onclick = async () => {
+                if (!invoke) return;
+                const cmd = btnEl.getAttribute('data-kind') === 'input-monitoring'
+                    ? 'open_input_monitoring_settings'
+                    : 'open_accessibility_settings';
+                try { await invoke(cmd); } catch (e) {
+                    console.error('[Permission] 打开系统设置失败:', e);
+                }
+            };
+        }
+    }
+    // 关键区别：不禁用"开始共享"按钮
+    if (elements?.startSharingBtn) {
+        elements.startSharingBtn.disabled = false;
+    }
+}
+
 async function openAccessibilitySettings(invoke) {
     if (!invoke) return;
     try {
@@ -344,6 +393,7 @@ window.AccessibilityModule = {
     initAccessibilityEventListeners,
     checkPermissionAfterConnect,
     showPermissionWarning,
+    showPermissionWarningInfoOnly,
     hidePermissionWarning,
     openAccessibilitySettings,
     // 供测试/main.js 使用

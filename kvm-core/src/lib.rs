@@ -23,6 +23,7 @@ pub mod network;
 pub mod edge_logic;
 pub mod cursor_mapping;
 pub mod remote_cursor;
+pub mod preempt;
 pub mod clipboard;
 pub mod auth;
 pub mod config;

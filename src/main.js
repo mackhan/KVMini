@@ -374,6 +374,28 @@ function setupEventListeners() {
             }
         }).catch(e => console.warn('控制状态事件监听注册失败:', e));
 
+        // BUG-035: 监听 capture 因权限失败 → 显示输入监控权限横幅（非全屏遮罩，允许用户授权后重试）
+        window.__TAURI__.event.listen('sharing://capture-failed-permission', () => {
+            const { t } = window.i18n;
+            console.warn('[KVMini] capture 因输入监控权限失败，显示权限横幅');
+            window.AccessibilityModule.showPermissionWarning(elements, 'input-monitoring');
+            showError(t('captureFailedPermission'));
+        }).catch(e => console.warn('capture-failed-permission 事件监听注册失败:', e));
+
+        // v0.1.43 Bug #035: 监听远端物理输入抢占事件（Synergy/Logitech Flow 风格）
+        // 当远端用户在被控端用物理键鼠"抢回"控制权时，后端 emit kvm://preempted，
+        // 控制端弹 3 秒 toast 告知用户。被控端不弹。
+        window.__TAURI__.event.listen('kvm://preempted', () => {
+            const { t } = window.i18n;
+            console.info('[KVMini] 远端用户物理输入抢占，控制端回 Armed');
+            try {
+                // 复用 success-toast（3 秒自动消失，与需求一致）
+                showSuccess(t('preempt_resume_toast'));
+            } catch (err) {
+                console.warn('[KVMini] 显示抢占 toast 失败:', err);
+            }
+        }).catch(e => console.warn('kvm://preempted 事件监听注册失败:', e));
+
         // 监听后台更新检查发现新版本事件
         window.__TAURI__.event.listen('update-available', (event) => {
             const payload = event.payload || {};

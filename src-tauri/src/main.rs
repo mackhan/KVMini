@@ -992,6 +992,44 @@ fn request_admin_elevation() -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.44".to_string(),
+            date: "2026-05-09".to_string(),
+            changes: vec![
+                "修复 Win 被控端断开连接后键鼠锁死（Bug #036）：主控端点「停止共享并退出」后，Win 端 Hook 层 should_swallow() 仍在吞事件 → 键鼠完全无响应".to_string(),
+                "broadcast channel Lagged 防护：事件循环 RecvError::Lagged 改为 warn + continue（不再 break 退出），确保 Disconnected 事件不会因缓冲区溢出被丢失".to_string(),
+                "on_disconnected 纵深防御：正常事件处理链路后增加显式兜底——强制 control_state=Idle + 检查 blocker 是否仍 blocked + 强制 recouple_physical_mouse + 清理 remote_cursor".to_string(),
+                "WinInputBlocker 新增 force_unblock() 方法：极端场景（进程退出前 / 状态异常）强制调用 BlockInput(FALSE) 确保键鼠恢复".to_string(),
+            ],
+            changes_en: vec![
+                "Fix Win target keyboard/mouse lockup on disconnect (Bug #036): after controller clicks 'Stop Sharing & Exit', Win hook layer should_swallow() keeps swallowing events → keyboard and mouse completely unresponsive".to_string(),
+                "Broadcast channel Lagged protection: event loop RecvError::Lagged now logs warning + continues (no longer breaks), ensuring Disconnected events are never lost due to buffer overflow".to_string(),
+                "on_disconnected defense-in-depth: after normal event processing, explicitly force control_state=Idle + check/force unblock blocker + recouple physical mouse + clear remote cursor".to_string(),
+                "WinInputBlocker adds force_unblock() method: for extreme scenarios (pre-exit cleanup / abnormal state) forcibly calls BlockInput(FALSE) to guarantee input recovery".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.43".to_string(),
+            date: "2026-05-09".to_string(),
+            changes: vec![
+                "修复远端虚拟光标不显示（Bug #034）：被控端进入 RemoteControlling 时主动调 CGAssociateMouseAndMouseCursorPosition(0) 解耦物理光标 + 显式 unhide，让本机撞边后远端屏幕能看到虚拟光标随 MouseMoveDelta 实时移动".to_string(),
+                "新增远端物理输入抢占回切（Feature #035，Synergy / Logitech Flow 风格）：被控端在 RemoteControlling 下检测到物理鼠标累计位移 ≥ 40px 或任意键盘按下，立即发 SwitchBackControl{reason=Preempt} 让控制端秒退 Armed 态，被控端自动切回 Idle 并解除 BlockInput".to_string(),
+                "控制端抢占回切时弹 3 秒 toast「远端用户恢复了本机控制 / Remote user resumed control」，被控端静默，符合主流 KM 共享产品体验".to_string(),
+                "协议扩展：KvmFrame::SwitchBackControl 新增 reason 字段（1 字节 payload），向后兼容 v0.1.42 及以下版本（空 payload 自动解析为 EdgeReturn）".to_string(),
+                "合成事件过滤：Mac 端给所有注入事件打 kCGEventSourceUserData magic tag（0x4B56_4D49 \"KVMI\"），Win 端依赖 LLMHF_INJECTED / LLKHF_INJECTED flag，确保被控端吞掉自己注入的事件时不会误触发抢占".to_string(),
+                "新增核心模块 kvm-core/preempt.rs：无锁 PreemptDetector（AtomicI64 累加 dx²+dy² + AtomicBool triggered），18 单元测试护航阈值 / 勾股 / reset / 状态机隔离".to_string(),
+                "Mac + Win 两端同步实现、行为一致、代码隔离；整体新增/扩展 248 Rust 测试 + 33 i18n 测试全绿".to_string(),
+            ],
+            changes_en: vec![
+                "Fix remote virtual cursor invisible (Bug #034): when target enters RemoteControlling, proactively call CGAssociateMouseAndMouseCursorPosition(0) to decouple physical cursor and explicitly unhide it, so after the controller hits the edge the virtual cursor becomes visible on remote and follows MouseMoveDelta in real time".to_string(),
+                "Add remote physical input preemption (Feature #035, Synergy / Logitech Flow style): while RemoteControlling, target detects local physical mouse cumulative movement ≥ 40px or any key press, immediately sends SwitchBackControl{reason=Preempt} to flip controller back to Armed, and target auto-returns to Idle + releases BlockInput".to_string(),
+                "Controller shows a 3-second toast 'Remote user resumed control' on preempt; target stays silent — matches mainstream KM sharing UX".to_string(),
+                "Protocol extension: KvmFrame::SwitchBackControl adds a reason field (1-byte payload). Backward compatible with v0.1.42 and older (empty payload decodes as EdgeReturn)".to_string(),
+                "Synthetic event filtering: Mac tags every injected event with kCGEventSourceUserData magic number (0x4B56_4D49 'KVMI'); Win relies on LLMHF_INJECTED / LLKHF_INJECTED flags — so the target never preempts itself when its own injected events bubble through the capture layer".to_string(),
+                "New core module kvm-core/preempt.rs: lock-free PreemptDetector (AtomicI64 accumulates dx²+dy² + AtomicBool triggered), covered by 18 unit tests on threshold / pythagorean / reset / state isolation".to_string(),
+                "Mac + Win parity: identical behavior, isolated platform code; 248 Rust tests + 33 i18n tests all green".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.42".to_string(),
             date: "2026-05-08".to_string(),
             changes: vec![
