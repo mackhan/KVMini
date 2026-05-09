@@ -13,6 +13,23 @@ use kvm_core::error::KvmResult;
 use kvm_core::platform::InputBlocker;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// 进程启动时调用：无条件清除可能残留的 BlockInput 状态。
+///
+/// Win32 BlockInput(1) 是进程级 API，但不会随进程退出自动还原（TerminateProcess 不走 Drop）。
+/// 因此每次启动时主动调用一次 BlockInput(0)，确保上次异常退出留下的屏蔽状态被清除。
+#[cfg(target_os = "windows")]
+pub fn startup_cleanup() {
+    use winapi::um::winuser::BlockInput;
+    unsafe { BlockInput(0); }
+    log::info!("[Win] startup_cleanup: BlockInput(0) 已执行（清除可能残留的屏蔽状态）");
+}
+
+/// Non-Windows placeholder
+#[cfg(not(target_os = "windows"))]
+pub fn startup_cleanup() {}
+
+
+
 /// Windows 输入屏蔽器
 pub struct WinInputBlocker {
     blocked: AtomicBool,

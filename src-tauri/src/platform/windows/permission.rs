@@ -4,7 +4,7 @@
 //! 若未提权，可请求提权（以 runas verb 重启当前进程后退出）。
 
 use kvm_core::error::KvmResult;
-use kvm_core::platform::{FocusKeeper, PermissionProvider, PermissionStatus};
+use kvm_core::platform::{PermissionProvider, PermissionStatus};
 
 pub struct WinPermissionProvider;
 

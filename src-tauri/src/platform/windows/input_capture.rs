@@ -154,8 +154,6 @@ fn win32_hook_thread(
     preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
 ) {
     use winapi::um::winuser::*;
-    use winapi::shared::minwindef::*;
-    use winapi::shared::windef::*;
 
     HOOK_CALLBACK.with(|cell| {
         *cell.borrow_mut() = Some(callback);
@@ -218,17 +216,24 @@ fn win32_hook_thread(
             // v0.1.41: 5s 健康检查 — 验证 hook 是否仍有效
             if last_health_check.elapsed() >= std::time::Duration::from_secs(5) {
                 last_health_check = std::time::Instant::now();
-                // 尝试检测 hook 是否被系统移除（LowLevelHooksTimeout）
-                // 如果 hook 失效，重新安装
-                // 注意：Windows 没有直接检测 hook 是否有效的 API
-                // 实践中依赖 hook 消息频率间接判断
                 log::trace!("[Win] Hook 健康检查通过（5s interval）");
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            // v0.1.47: 用 MsgWaitForMultipleObjectsEx 替代 sleep(1ms)
+            // sleep(1ms) 在 Windows 上实际精度约 15ms（默认时钟精度），导致拖拽卡顿
+            // MsgWaitForMultipleObjectsEx 在有消息时立即返回（亚毫秒），无消息时精确等待
+            // QS_ALLINPUT: 等待任意消息（鼠标/键盘/WM_INPUT 等）
+            use winapi::um::winuser::{MsgWaitForMultipleObjectsEx, QS_ALLINPUT, MWMO_INPUTAVAILABLE};
+            MsgWaitForMultipleObjectsEx(
+                0,
+                std::ptr::null(),
+                2, // 最长等待 2ms（兜底，防止 capturing 变化后无限等待）
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            );
         }
 
-        if !mouse_hook.is_null() { UnhookWindowsHookEx(mouse_hook); }
+            if !mouse_hook.is_null() { UnhookWindowsHookEx(mouse_hook); }
         if !keyboard_hook.is_null() { UnhookWindowsHookEx(keyboard_hook); }
     }
 }
@@ -238,8 +243,6 @@ fn win32_hook_thread(
 #[cfg(target_os = "windows")]
 unsafe fn register_raw_input_device() {
     use winapi::um::winuser::*;
-    use winapi::shared::windef::HWND;
-    use std::os::windows::ffi::OsStrExt;
 
     // 创建 message-only 窗口（HWND_MESSAGE 父窗口，不可见、不渲染）
     let class_name: Vec<u16> = "KVMiniRawInput\0".encode_utf16().collect();

@@ -497,10 +497,35 @@ fn cg_event_to_raw(
             button: MouseButton::Middle,
         }),
         CGEventType::ScrollWheel => {
-            // ScrollWheelEventPointDeltaAxis2 = 97, ScrollWheelEventPointDeltaAxis1 = 96
-            let dx = event.get_integer_value_field(97) as i32;
-            let dy = event.get_integer_value_field(96) as i32;
-            Some(RawInputEvent::Scroll { dx, dy })
+            // ScrollWheelEventPointDeltaAxis1 = 96（Y 轴点级 delta，触摸板精确）
+            // ScrollWheelEventPointDeltaAxis2 = 97（X 轴点级 delta）
+            // ScrollWheelEventIsContinuous = 88：1=触摸板连续滚动, 0=鼠标滚轮格滚动
+            //
+            // 问题：外接鼠标每格 PointDelta 仅 ≈3px，远端注入后滚动极慢。
+            // 修复：鼠标格滚动时改读 LineScrollDelta（字段 171/172），值为整格数（通常 ±3）
+            //       并乘以放大因子 40，使远端感受与本机一致。
+            //       触摸板连续滚动维持原 PointDelta 行为（高频小 delta，远端累积正常）。
+            let is_continuous = event.get_integer_value_field(88) != 0;
+            let (dx, dy) = if is_continuous {
+                // 触摸板：直接用点级 delta
+                let dx = event.get_integer_value_field(97) as i32;
+                let dy = event.get_integer_value_field(96) as i32;
+                (dx, dy)
+            } else {
+                // 外接鼠标滚轮：读 FixedPtDelta（字段 93/94）并放大
+                // FixedPtDelta 是 16.16 定点数，整数部分 >> 16 即格数
+                // 每格通常 = 1，乘以 120（Windows 标准一格值）使远端正常响应
+                let dy_fixed = event.get_integer_value_field(93);
+                let dx_fixed = event.get_integer_value_field(94);
+                let dy = ((dy_fixed >> 16) as i32) * 120;
+                let dx = ((dx_fixed >> 16) as i32) * 120;
+                (dx, dy)
+            };
+            if dx == 0 && dy == 0 {
+                None
+            } else {
+                Some(RawInputEvent::Scroll { dx, dy })
+            }
         }
         CGEventType::KeyDown => {
             let keycode = event.get_integer_value_field(9) as u16;

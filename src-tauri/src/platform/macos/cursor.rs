@@ -160,6 +160,21 @@ impl CursorController for MacCursorController {
     }
 }
 
+/// BUG-039 Mac：进程启动时无条件恢复物理鼠标↔光标绑定。
+///
+/// 进程被强杀时 Drop 不执行，CGAssociateMouseAndMouseCursorPosition(0) 残留，
+/// 导致重启后鼠标移动和光标位置不同步。每次启动调用一次确保状态干净。
+#[cfg(target_os = "macos")]
+pub fn startup_cleanup() {
+    use core_graphics::display::CGAssociateMouseAndMouseCursorPosition;
+    unsafe { CGAssociateMouseAndMouseCursorPosition(1); }
+    log::info!("[Cursor] startup_cleanup: CGAssociate(1) 已执行（清除可能残留的解绑状态）");
+}
+
+/// Non-macOS placeholder
+#[cfg(not(target_os = "macos"))]
+pub fn startup_cleanup() {}
+
 /// warp 光标。纯粹的"落点"原语：只调 `CGWarpMouseCursorPosition`，
 /// 不再根据 `grabbed` 调 `CGAssociate(1/0)`——
 /// - `grab()`/`release()` 里已显式负责解绑/恢复绑定

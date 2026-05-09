@@ -570,6 +570,8 @@ impl SharingManager {
         let cursor_arc: Arc<PlatformCursor> = Arc::clone(&self.cursor);
         let focus_keeper_arc: Arc<PlatformFocusKeeper> = Arc::clone(&self.focus_keeper);
         let remote_cursor_arc: Arc<Mutex<Option<RemoteCursorState>>> = Arc::clone(&self.remote_cursor);
+        // 无锁状态读取：直接从 capture 的 AtomicU8 读，避免热路径每帧 lock().await
+        let control_state_atomic = self.capture.control_state_arc();
         let app_for_edge = app.clone();
         let app_for_pump = app.clone();
 
@@ -620,8 +622,25 @@ impl SharingManager {
                         }
 
                         let frame = raw_to_frame(raw);
-                        let current_state = state_arc.lock().await.state();
-                        if current_state == ControlState::LocalControlling {
+                        // 热路径状态读取：无锁 AtomicU8（Win/Mac 均支持），消除每帧锁竞争和丢帧风险
+                        #[cfg(target_os = "windows")]
+                        let is_local = {
+                            use std::sync::atomic::Ordering;
+                            use crate::platform::windows::input_capture::CONTROL_STATE_LOCAL_CONTROLLING;
+                            control_state_atomic.load(Ordering::Relaxed) == CONTROL_STATE_LOCAL_CONTROLLING
+                        };
+                        #[cfg(target_os = "macos")]
+                        let is_local = {
+                            use std::sync::atomic::Ordering;
+                            use crate::platform::macos::input_capture::CONTROL_STATE_LOCAL_CONTROLLING;
+                            control_state_atomic.load(Ordering::Relaxed) == CONTROL_STATE_LOCAL_CONTROLLING
+                        };
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        let is_local = state_arc
+                            .try_lock()
+                            .map(|s| s.state() == ControlState::LocalControlling)
+                            .unwrap_or(false);
+                        if is_local {
                             if sample_count % 100 == 0 {
                                 log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, frame);
                             }
@@ -937,10 +956,8 @@ pub(crate) fn inject_frame(executor: &dyn InputExecutor, frame: &KvmFrame) -> Kv
                 executor.mouse_up(b)
             }
         }
-        KvmFrame::MouseScroll { .. } => {
-            // 当前 InputExecutor trait 暂未提供滚轮接口，记日志跳过（MVP）
-            log::debug!("[Sharing] MouseScroll 注入未实现，跳过");
-            Ok(())
+        KvmFrame::MouseScroll { dx, dy, .. } => {
+            executor.scroll(*dx, *dy)
         }
         KvmFrame::KeyEvent { keycode, pressed, .. } => {
             if *pressed {

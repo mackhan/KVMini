@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "kvm-core"
-version = "0.1.44"
+version = "0.1.49"
 dependencies = [
  "bincode",
  "hex",
@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "kvmini"
-version = "0.1.44"
+version = "0.1.49"
 dependencies = [
  "block",
  "core-foundation 0.9.4",

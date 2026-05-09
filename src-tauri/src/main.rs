@@ -763,7 +763,9 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
 /// 写入启动诊断日志到 ~/Library/Logs/KVMini/startup.log（macOS 专属）
 /// 非 macOS 平台直接返回 Ok
 #[tauri::command]
-fn write_startup_log(content: String) -> Result<(), String> {
+fn write_startup_log(_content: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let content = _content;
     #[cfg(target_os = "macos")]
     {
         use std::fs;
@@ -1776,6 +1778,14 @@ async fn main() {
         // 托管全局快捷键状态
         .manage(HotkeyState::new())
         .setup(|app| {
+            // ── BUG-039 修复：启动时强制清除可能残留的 BlockInput 状态 ──────
+            // 上次进程被强杀时 Drop 未执行，Win32 BlockInput(1) 不随进程退出还原
+            #[cfg(target_os = "windows")]
+            platform::windows::input_block::startup_cleanup();
+            // Mac：清除可能残留的 CGAssociate(0) 解绑状态（强杀后鼠标↔光标不同步）
+            #[cfg(target_os = "macos")]
+            platform::macos::cursor::startup_cleanup();
+
             // 注册 updater 插件（必须在 setup 中注册，desktop only）
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -1827,6 +1837,15 @@ async fn main() {
             }
 
             Ok(())
+        })
+        .on_window_event(|_window, event| {
+            // BUG-039: 窗口销毁时强制清除残留状态，防止正常退出后下次启动时键鼠被锁
+            if let tauri::WindowEvent::Destroyed = event {
+                #[cfg(target_os = "windows")]
+                platform::windows::input_block::startup_cleanup();
+                #[cfg(target_os = "macos")]
+                platform::macos::cursor::startup_cleanup();
+            }
         })
         .run(tauri::generate_context!())
         .expect("KVMini 启动失败");
