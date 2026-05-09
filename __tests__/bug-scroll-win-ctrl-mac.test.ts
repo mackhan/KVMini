@@ -5,8 +5,9 @@
  *   Win WM_MOUSEWHEEL 采集 ±120（WHEEL_DELTA），通过协议发到 Mac，
  *   Mac inject_scroll 用 SCROLL_UNIT_LINE 模式把 ±120 当行数注入 → 一次滚 120 行
  *
- * 修复：Mac inject_scroll 改用 SCROLL_UNIT_PIXEL(=2) 模式，
- *   ±120px 在 Mac 上滚动幅度合理（约 3-4 行等效，与 Barrier 协议 ±120 单位一致）
+ * 修复（v0.1.52）：Mac inject_scroll 改回 SCROLL_UNIT_LINE(=1) 模式，
+ *   传入前除以 120（Barrier 行业标准：±120 协议单位 → ±1 行），
+ *   感受与本机鼠标一致。
  *
  * 根因2（鼠标点击）：
  *   DecoupleCursor 状态下（CGAssociate 断开物理鼠标绑定），
@@ -24,40 +25,33 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 }
 
-// ── Bug 1：滚轮 PIXEL 模式 ─────────────────────────────────────────────────
-describe('BUG-041 Mac inject_scroll — PIXEL 模式修复', () => {
+// ── Bug 1：滚轮 LINE 模式 + /120（v0.1.52 修复）──────────────────────────────
+describe('BUG-041 Mac inject_scroll — LINE 模式 + /120 修复（v0.1.52）', () => {
   const src = () => read('src-tauri/src/platform/macos/input_inject.rs');
 
-  it('inject_scroll 必须使用 SCROLL_UNIT_PIXEL(=2)，不能使用 SCROLL_UNIT_LINE(=1)', () => {
+  it('inject_scroll 必须使用 SCROLL_UNIT_LINE(=1) 模式', () => {
     const content = src();
-    // 必须有 SCROLL_UNIT_PIXEL 常量定义
-    expect(/SCROLL_UNIT_PIXEL.*=\s*2/.test(content)).toBe(true);
+    // 必须有 SCROLL_UNIT_LINE 常量定义（值为 1）
+    expect(/SCROLL_UNIT_LINE.*=\s*1/.test(content)).toBe(true);
   });
 
-  it('new_scroll_event 调用必须传入 SCROLL_UNIT_PIXEL 而非 SCROLL_UNIT_LINE', () => {
+  it('new_scroll_event 调用必须传入 SCROLL_UNIT_LINE', () => {
     const content = src();
-    // new_scroll_event 的第二个参数必须是 SCROLL_UNIT_PIXEL
-    // 匹配: new_scroll_event(source, SCROLL_UNIT_PIXEL, ...)
-    expect(/new_scroll_event\s*\([^)]*SCROLL_UNIT_PIXEL/.test(content)).toBe(true);
+    expect(/new_scroll_event\s*\([^)]*SCROLL_UNIT_LINE/.test(content)).toBe(true);
   });
 
-  it('不能再使用旧的 SCROLL_UNIT_LINE = 1 作为 new_scroll_event 参数', () => {
+  it('inject_scroll 中必须有 /120 的除法换算（±120 协议单位 → ±1 行）', () => {
     const content = src();
-    // 旧代码: new_scroll_event(source, SCROLL_UNIT_LINE, 2, dy, dx, 0)
-    // SCROLL_UNIT_LINE 常量本身可以存在，但不能作为 new_scroll_event 的第二参数
-    const callMatch = content.match(/new_scroll_event\s*\([^)]+\)/);
-    if (callMatch) {
-      // 调用中不应该出现值为 1 的字面量作为第二参数（SCROLL_UNIT_LINE）
-      expect(/new_scroll_event\s*\(\s*\w+\s*,\s*1\s*,/.test(content)).toBe(false);
-    }
-  });
-
-  it('dy 值应直接传入（协议 ±120 在 PIXEL 模式下是合理像素量）', () => {
-    const content = src();
-    // PIXEL 模式下不需要做 /120 转换，dy 直接传
-    // 确保 inject_scroll 函数中没有 "/ 120" 或 "/120"
+    // inject_scroll 函数中必须有 / 120 或 /120
     const injectScrollFn = content.match(/fn inject_scroll[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(/\/\s*120/.test(injectScrollFn)).toBe(false);
+    expect(/\/\s*120/.test(injectScrollFn)).toBe(true);
+  });
+
+  it('不使用 SCROLL_UNIT_PIXEL(=2) 模式（已回退）', () => {
+    const content = src();
+    // v0.1.52 回退了 PIXEL 模式
+    const injectScrollFn = content.match(/fn inject_scroll[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(/SCROLL_UNIT_PIXEL/.test(injectScrollFn)).toBe(false);
   });
 });
 

@@ -87,6 +87,9 @@ pub struct EdgeDetector {
     edge_hit_count: i32,
     /// 是否已贴边（用于判断首次到达边缘）
     at_edge: bool,
+    /// v0.1.52: 静默期截止时间（被控端抢占回切后，主控端有一段时间不会重新触发边缘切换）
+    /// Barrier "Squash"/"Cooldown" 机制：防止抢占后立即重新进入 LocalControlling
+    silence_until: Option<std::time::Instant>,
 }
 
 impl EdgeDetector {
@@ -98,6 +101,7 @@ impl EdgeDetector {
             active: true,
             edge_hit_count: 0,
             at_edge: false,
+            silence_until: None,
         }
     }
 
@@ -126,12 +130,32 @@ impl EdgeDetector {
         self.at_edge = false;
     }
 
+    /// v0.1.52: 进入静默期（抢占回 Armed 后调用，防止主控端立即重新触发）
+    /// duration_ms：静默时长，推荐 800ms（Barrier 默认行为）
+    pub fn enter_silence(&mut self, duration_ms: u64) {
+        self.silence_until = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(duration_ms)
+        );
+        self.reset_overshoot();
+        log::debug!("[EdgeDetector] 进入静默期 {}ms", duration_ms);
+    }
+
     /// 检测鼠标位置是否触发边缘切换
     /// x, y 为虚拟桌面绝对坐标（逻辑像素）
     /// BUG-029: macOS 坐标被系统 clamp，改为"连续贴边次数"触发
     pub fn detect(&mut self, x: i32, y: i32) -> EdgeDetectResult {
         if !self.active {
             return EdgeDetectResult::None;
+        }
+
+        // v0.1.52: 静默期内不触发（抢占后保护窗口）
+        if let Some(until) = self.silence_until {
+            if std::time::Instant::now() < until {
+                return EdgeDetectResult::None;
+            } else {
+                self.silence_until = None; // 静默期结束
+                log::debug!("[EdgeDetector] 静默期结束，恢复边缘检测");
+            }
         }
 
         // 防抖

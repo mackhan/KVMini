@@ -144,15 +144,18 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    // v0.1.50: 改用 SCROLL_UNIT_PIXEL(=2) 模式
-    // 协议层滚轮单位为 ±120（与 Barrier/WM_MOUSEWHEEL 一致），
-    // PIXEL 模式直接传递像素值：±120px 在 macOS 上等效约 3-4 行，感受自然
-    // 旧的 SCROLL_UNIT_LINE(=1) 模式传入 ±120 = 滚 120 行（过快，已修复）
-    const SCROLL_UNIT_PIXEL: u32 = 2;
+    // v0.1.52: 改回 SCROLL_UNIT_LINE(=1) + 除以 120（Barrier 行业标准方案）
+    // 协议层滚轮单位为 ±120（与 WM_MOUSEWHEEL WHEEL_DELTA 一致），
+    // macOS LINE 单位 = 1 行；传入 ±1 为自然一格；传 ±120 = 滚 120 行（过快）。
+    // 除以 120 将协议单位还原为 macOS 行数，感受与本机鼠标一致。
+    const SCROLL_UNIT_LINE: u32 = 1;
+    // 至少 ±1 行，避免小 delta 完全丢失
+    let lines_y = if dy == 0 { 0 } else { (dy / 120).max(1).min(20) * dy.signum() };
+    let lines_x = if dx == 0 { 0 } else { (dx / 120).max(1).min(20) * dx.signum() };
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
-    let event = CGEvent::new_scroll_event(source, SCROLL_UNIT_PIXEL, 2, dy, dx, 0)
+    let event = CGEvent::new_scroll_event(source, SCROLL_UNIT_LINE, 2, lines_y, lines_x, 0)
         .map_err(|_| platform_err!("CGEvent::new_scroll_event", "创建滚轮事件失败"))?;
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);

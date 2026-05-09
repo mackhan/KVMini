@@ -290,8 +290,16 @@ impl SharingManager {
         );
         self.handle_state_events_with_emit(evs, app).await;
 
-        // Preempt 场景通知前端弹 toast（控制端侧）
+        // v0.1.52: Preempt 场景——主控端回 Armed 后，设置 EdgeDetector 静默期（800ms）
+        // 防止主控端鼠标微动立即重新触发 LocalControlling，给远端用户留操作时间
+        // 参照 Barrier "focus time" / Logitech Flow "switch cooldown" 设计
         if let kvm_core::protocol::SwitchBackReason::Preempt = reason {
+            let mut slot = self.edge_detector.lock().await;
+            if let Some(d) = slot.as_mut() {
+                d.enter_silence(800);
+                log::info!("[Sharing] Preempt 后 EdgeDetector 进入 800ms 静默期（防止立即重新触发）");
+            }
+            drop(slot);
             log::info!("[Sharing] 远端物理输入抢占，emit kvm://preempted 供前端 toast");
             let _ = app.emit("kvm://preempted", ());
         }
@@ -738,7 +746,7 @@ impl SharingManager {
                             continue;
                         }
                         log::info!(
-                            "[Sharing][Preempt] 抢占触发 (cause={:?})：发 SwitchBackControl(Preempt) + 回 Idle",
+                            "[Sharing][Preempt] 抢占触发 (cause={:?})：发 SwitchBackControl(Preempt) + 回 Armed",
                             cause
                         );
                         // 1. 发 SwitchBackControl{Preempt}
@@ -752,7 +760,9 @@ impl SharingManager {
                         {
                             log::warn!("[Sharing][Preempt] SwitchBackControl 发送失败: {}", e);
                         }
-                        // 2. 本端 RemoteControlling → Idle
+                        // 2. 本端 RemoteControlling → Idle（无 Armed 态可回，被控端直接 Idle）
+                        //    注：被控端没有 Armed 状态概念（Armed 是主控端专有），
+                        //    Idle = 正常状态；主控端收到 Preempt 后回 Armed + 静默期
                         let evs = {
                             let mut sm = state_arc.lock().await;
                             sm.on_disconnected()

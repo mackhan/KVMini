@@ -464,10 +464,15 @@ fn cg_event_to_raw(
     use kvm_core::platform::MouseButton;
 
     match event_type {
-        CGEventType::MouseMoved => {
+        CGEventType::MouseMoved
+        | CGEventType::LeftMouseDragged
+        | CGEventType::RightMouseDragged
+        | CGEventType::OtherMouseDragged => {
             let loc = event.location();
             // v0.1.40: 读取硬件 delta（CGEventField 93/94 = kCGMouseEventDeltaX/Y）
             // 绕过 grab 后 event.location() 冻结的问题（根本修复远端鼠标不动 bug）
+            // v0.1.52: 拖拽事件（LeftMouseDragged 等）与 MouseMoved 相同处理，
+            // 否则拖拽时远端只收到 Down/Up，没有中间移动帧，窗口无法真正拖动
             use core_graphics::event::EventField;
             let dx = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X) as i16;
             let dy = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y) as i16;
