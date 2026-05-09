@@ -369,6 +369,9 @@ function setupEventListeners() {
                 showSuccess(t('sharingArmed'));
             } else if (state === 'LocalControlling') {
                 showSuccess(t('sharingStarted'));
+            } else if (state === 'RemoteControlling') {
+                // v0.1.53: 被控端进入 RemoteControlling，显示提示
+                showSuccess(t('controlStateRemote'));
             } else if (state === 'Idle') {
                 showSuccess(t('sharingStopped'));
             }
@@ -598,10 +601,13 @@ async function handleDisconnect() {
     if (!invoke) { showError(window.i18n.t('errTauriNotReady')); return; }
     const { t } = window.i18n;
     try {
-        // 断开 TCP 连接（包括握手建立的连接），停止自动重连
-        await invoke('disconnect_from_mac').catch(() => {});
-        await invoke('disconnect_tcp').catch(() => {});
-        await invoke('disconnect_devices').catch(() => {});
+        // v0.1.53: 统一调用 disconnect_peer（后端注册的真实断开命令）
+        // 它会调用 ConnectionManager.disconnect() → 触发 ConnectionStateChanged(Disconnected) 事件
+        // → on_disconnected() → SharingManager 状态机归零、解除键鼠屏蔽
+        // 旧的 disconnect_from_mac/disconnect_tcp/disconnect_devices 命令不存在（.catch 静默吞掉了错误）
+        await invoke('disconnect_peer').catch((e) => {
+            console.warn('[KVMini] disconnect_peer 失败:', e);
+        });
         appState.connected = false;
         appState.connectionType = null;
         setConnectionStatus('disconnected');
@@ -2248,12 +2254,20 @@ function updateSharingButtonForState(state) {
     if (state === 'Armed') {
         btn.setAttribute('data-i18n', 'btnArmedWaiting');
         btn.textContent = t('btnArmedWaiting');
+        btn.disabled = false;
     } else if (state === 'LocalControlling') {
         btn.setAttribute('data-i18n', 'btnStopSharing');
         btn.textContent = t('btnStopSharing');
+        btn.disabled = false;
+    } else if (state === 'RemoteControlling') {
+        // v0.1.53: 被远端控制时，按钮显示"被远端控制中"，禁用（不允许手动切换）
+        btn.setAttribute('data-i18n', 'btnRemoteControlled');
+        btn.textContent = t('btnRemoteControlled');
+        btn.disabled = true;
     } else {
         btn.setAttribute('data-i18n', 'btnStartSharing');
         btn.textContent = t('btnStartSharing');
+        btn.disabled = false;
     }
 }
 

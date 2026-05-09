@@ -6,8 +6,13 @@
 //!
 //! v0.1.50:
 //! - inject_key: native_keycode 改为 X11 KeySym，通过 keysym_to_cg_keycode() 转换后注入
-//! - inject_scroll: 改用 SCROLL_UNIT_PIXEL 模式（±120px 合理，旧 LINE 模式 ±120 = 滚120行）
+//! - inject_scroll: 改回 SCROLL_UNIT_LINE 模式 + dy/120（Barrier 行业标准）
 //! - inject_mouse_button: 改用 CombinedSessionState 读取准确光标位置（修复 DecoupleCursor 下坐标偏移）
+//!
+//! v0.1.53:
+//! - inject_mouse_move: 感知当前左键按下状态，按下时发 LeftMouseDragged（修复被控端拖拽无效问题）
+//!   macOS 要求拖拽期间事件类型为 LeftMouseDragged，否则 WindowServer 不会移动窗口。
+//!   通过 CGEventSourceButtonState(HIDSystemState, LeftButton) 判断左键是否按下。
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{InputExecutor, MouseButton};
@@ -74,16 +79,39 @@ impl InputExecutor for MacInputExecutor {
     }
 }
 
+/// FFI: CGEventSourceButtonState — 查询 HID 层某按键的当前按下状态
+/// kCGMouseButtonLeft = 0, kCGMouseButtonRight = 1
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGEventSourceButtonState(stateID: u32, button: u32) -> bool;
+}
+
+/// HIDSystemState (= 1) 对应 CGEventSourceStateID::HIDSystemState
+#[cfg(target_os = "macos")]
+const CG_HID_SYSTEM_STATE: u32 = 1;
+/// kCGMouseButtonLeft = 0
+#[cfg(target_os = "macos")]
+const CG_MOUSE_BUTTON_LEFT: u32 = 0;
+
 #[cfg(target_os = "macos")]
 fn inject_mouse_move(x: i32, y: i32) -> KvmResult<()> {
     use core_graphics::event::{CGEvent, CGEventType, CGMouseButton};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::CGPoint;
 
+    // v0.1.53: 感知左键按下状态，决定发 LeftMouseDragged 还是 MouseMoved
+    // macOS WindowServer 要求拖拽事件类型为 LeftMouseDragged，否则即使坐标变化也不移动窗口
+    let left_btn_down = unsafe { CGEventSourceButtonState(CG_HID_SYSTEM_STATE, CG_MOUSE_BUTTON_LEFT) };
+    let event_type = if left_btn_down {
+        CGEventType::LeftMouseDragged
+    } else {
+        CGEventType::MouseMoved
+    };
+
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
     let point = CGPoint::new(x as f64, y as f64);
-    let event = CGEvent::new_mouse_event(source, CGEventType::MouseMoved, point, CGMouseButton::Left)
+    let event = CGEvent::new_mouse_event(source, event_type, point, CGMouseButton::Left)
         .map_err(|_| platform_err!("CGEvent::new_mouse_event", "创建鼠标移动事件失败"))?;
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);
@@ -149,9 +177,10 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
     // macOS LINE 单位 = 1 行；传入 ±1 为自然一格；传 ±120 = 滚 120 行（过快）。
     // 除以 120 将协议单位还原为 macOS 行数，感受与本机鼠标一致。
     const SCROLL_UNIT_LINE: u32 = 1;
-    // 至少 ±1 行，避免小 delta 完全丢失
-    let lines_y = if dy == 0 { 0 } else { (dy / 120).max(1).min(20) * dy.signum() };
-    let lines_x = if dx == 0 { 0 } else { (dx / 120).max(1).min(20) * dx.signum() };
+    // v0.1.53 修复：对绝对值做 max(1) 再乘符号，避免 max(1) 对负数结果错误
+    // dy=120 → lines=1, dy=-120 → lines=-1, dy=40 → lines=1（高分辨率鼠标至少1行）
+    let lines_y = if dy == 0 { 0 } else { (dy.abs() / 120).max(1).min(20) * dy.signum() };
+    let lines_x = if dx == 0 { 0 } else { (dx.abs() / 120).max(1).min(20) * dx.signum() };
 
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| platform_err!("CGEventSource::new", "创建 CGEventSource 失败"))?;
