@@ -256,5 +256,17 @@ describe('i18n 多语言模块', () => {
         expect(MESSAGES.zh[key]).not.toBe(MESSAGES.en[key]);
       }
     });
+
+    // BUG-035 / Feature #035: 远端物理输入抢占回切 toast 的中英双语
+    it('远端抢占回切 toast key 必须在 zh+en 都存在且中英文不一致', () => {
+      const requiredKeys = ['preempt_resume_toast'];
+      for (const key of requiredKeys) {
+        expect(MESSAGES.zh[key]).toBeDefined();
+        expect(MESSAGES.zh[key]).not.toBe('');
+        expect(MESSAGES.en[key]).toBeDefined();
+        expect(MESSAGES.en[key]).not.toBe('');
+        expect(MESSAGES.zh[key]).not.toBe(MESSAGES.en[key]);
+      }
+    });
   });
 });

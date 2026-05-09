@@ -267,11 +267,34 @@ pub trait CursorController: Send + Sync {
 
     /// 释放光标：恢复物理鼠标与屏幕光标的绑定 + 显示光标
     fn release(&self) -> KvmResult<()>;
+
+    /// 断开物理鼠标驱动光标（但保持光标可见）
+    ///
+    /// v0.1.43 Bug #034：被控端进入 RemoteControlling 时，需要让远端发来的 `MouseMoveDelta`
+    /// 经 warp 后能在本机屏幕上可见，但物理鼠标不应把光标拉回实际物理位置。
+    /// - macOS: `CGAssociateMouseAndMouseCursorPosition(0)`，**不隐藏光标**
+    /// - Windows: no-op（`SetCursorPos` 在 Windows 上直接生效，不需要 decouple）
+    ///
+    /// 默认实现为 no-op，平台如需特殊处理请 override。
+    fn decouple_physical_mouse(&self) -> KvmResult<()> {
+        Ok(())
+    }
+
+    /// 恢复物理鼠标驱动光标（退出 RemoteControlling 时）
+    ///
+    /// - macOS: `CGAssociateMouseAndMouseCursorPosition(1)`
+    /// - Windows: no-op
+    ///
+    /// 默认实现为 no-op，平台如需特殊处理请 override。
+    fn recouple_physical_mouse(&self) -> KvmResult<()> {
+        Ok(())
+    }
 }
 
 /// 焦点保持器（解决 macOS 失焦后 CGAssociateMouseAndMouseCursorPosition 被系统重置的问题）
 ///
-/// macOS 实现：创建 1×1 透明窗口 + 200ms 定时器持续 NSApp.activate，让系统认为 KVMini 始终前台。
+/// macOS 实现（v0.1.42）：后台线程每 200ms 调一次 `CGAssociateMouseAndMouseCursorPosition(0)`
+/// 维持 grab，**不创建窗口、不抢前台焦点**（避免 v0.1.41 引入的点击丢失/误拖拽/键盘失效 bug）。
 /// Windows 不存在此问题，给空实现。
 pub trait FocusKeeper: Send + Sync {
     /// 进入 LocalControlling 时启动焦点保持

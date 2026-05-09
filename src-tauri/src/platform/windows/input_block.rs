@@ -6,6 +6,8 @@
 //!
 //! 原设计强依赖 BlockInput（需要 UAC 提权），非管理员运行时完全失效。
 //! 新设计让 hook 层作为独立兜底——只要 hook 在跑，就能在回调中吞掉事件。
+//!
+//! v0.1.44 BUG-036: 增加 force_unblock() 方法，断开连接时强制确保键鼠恢复。
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::InputBlocker;
@@ -19,6 +21,18 @@ pub struct WinInputBlocker {
 impl WinInputBlocker {
     pub fn new() -> Self {
         Self { blocked: AtomicBool::new(false) }
+    }
+
+    /// BUG-036: 强制解除屏蔽（无论当前状态如何都执行 unblock）
+    /// 用于断开连接兜底、进程退出前清理等场景
+    pub fn force_unblock(&self) {
+        self.blocked.store(false, Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        {
+            use winapi::um::winuser::BlockInput;
+            unsafe { BlockInput(0); }
+        }
+        log::info!("[Win] force_unblock: 键鼠屏蔽已强制解除");
     }
 }
 

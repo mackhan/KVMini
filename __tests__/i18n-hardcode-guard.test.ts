@@ -199,6 +199,8 @@ describe('i18n 守卫：禁止新增硬编码中文', () => {
             'scanningSubnetTip', 'monitorRemoteDisconnected', 'monitorTooltipTemplate',
             'certRegenSuccess', 'certRegenFailed', 'shareText',
             'nicDescriptionHint', 'nicDisconnectedInlineText',
+            // v0.1.43 新增：远端物理输入抢占回切 toast
+            'preempt_resume_toast',
         ];
 
         const missing = requiredKeys.filter(k => !(k in MESSAGES.zh) || !(k in MESSAGES.en));

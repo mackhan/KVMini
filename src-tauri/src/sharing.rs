@@ -38,6 +38,7 @@ use kvm_core::config::ScreenLayout;
 use kvm_core::edge_logic::{EdgeConfig, EdgeDetectResult, EdgeDetector};
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{CursorController, FocusKeeper, InputBlocker, InputCapture, InputExecutor, MouseButton, RawInputEvent, VirtualDesktop};
+use kvm_core::preempt::PreemptCause;
 use kvm_core::protocol::{KvmFrame, ModifierState, ScreenEdge};
 use kvm_core::remote_cursor::{RemoteCursorAction, RemoteCursorState};
 use kvm_core::state::{ControlState, StateEvent, StateMachine};
@@ -208,9 +209,16 @@ impl SharingManager {
                 }
             }
             RemoteCursorAction::SwitchBack => {
-                log::info!("[Sharing] 远端虚拟光标撞反向边缘 → 发 SwitchBackControl");
-                // 先发 SwitchBackControl 通知对端
-                if let Err(e) = send_frame_via_app(app, &KvmFrame::SwitchBackControl).await {
+                log::info!("[Sharing] 远端虚拟光标撞反向边缘 → 发 SwitchBackControl(EdgeReturn)");
+                // 先发 SwitchBackControl 通知对端（EdgeReturn 原因：自然边缘回切）
+                if let Err(e) = send_frame_via_app(
+                    app,
+                    &KvmFrame::SwitchBackControl {
+                        reason: kvm_core::protocol::SwitchBackReason::EdgeReturn,
+                    },
+                )
+                .await
+                {
                     log::warn!("[Sharing] SwitchBackControl 发送失败: {}", e);
                 }
                 // 本端：RemoteControlling → Idle（对端收到后应回到 Armed/LocalControlling）
@@ -261,23 +269,59 @@ impl SharingManager {
         // 不改状态，不停 capture，保持 LocalControlling 状态
     }
 
-    /// 由 connection 事件循环调用：远端 SwitchBackControl（远端撞反向边缘，回切到 Armed）
-    pub async fn on_remote_switch_back(&self, app: &tauri::AppHandle) {
+    /// 由 connection 事件循环调用：远端 SwitchBackControl（远端撞反向边缘或物理输入抢占，回切到 Armed）
+    ///
+    /// v0.1.43: 按 reason 区分来源
+    /// - `EdgeReturn`：远端虚拟光标撞反向边缘自然回切，静默处理
+    /// - `Preempt`：远端用户物理输入抢占（Synergy/Logitech Flow 风格），emit `kvm://preempted` 让前端弹 toast
+    pub async fn on_remote_switch_back(
+        &self,
+        app: &tauri::AppHandle,
+        reason: kvm_core::protocol::SwitchBackReason,
+    ) {
         let evs = self.state.lock().await.local_to_armed();
         if evs.is_empty() {
             log::warn!("[Sharing] on_remote_switch_back: 当前状态不是 LocalControlling，忽略");
             return;
         }
-        log::info!("[Sharing] on_remote_switch_back: LocalControlling → Armed");
+        log::info!(
+            "[Sharing] on_remote_switch_back: LocalControlling → Armed (reason={:?})",
+            reason
+        );
         self.handle_state_events_with_emit(evs, app).await;
+
+        // Preempt 场景通知前端弹 toast（控制端侧）
+        if let kvm_core::protocol::SwitchBackReason::Preempt = reason {
+            log::info!("[Sharing] 远端物理输入抢占，emit kvm://preempted 供前端 toast");
+            let _ = app.emit("kvm://preempted", ());
+        }
     }
 
     /// 连接断开时强制回到 IDLE
+    ///
+    /// BUG-036 修复：增加显式兜底，确保无论事件处理链路是否异常，
+    /// 键鼠屏蔽和 Hook 吞事件一定被恢复。防止 Win 端断开后键鼠锁死。
     pub async fn on_disconnected(&self, app: &tauri::AppHandle) {
+        log::info!("[Sharing] on_disconnected 开始执行");
         let evs = self.state.lock().await.on_disconnected();
         self.handle_state_events_with_emit(evs, app).await;
+
+        // ── BUG-036 兜底：无论上面事件处理是否正常完成，强制确保以下状态归零 ──
+        // 1. Hook 层 control_state → Idle（停止吞事件）
+        self.capture.set_control_state(control_state_to_u8(ControlState::Idle));
+        // 2. 强制解除键鼠屏蔽
+        if self.blocker.is_blocked() {
+            log::warn!("[Sharing] on_disconnected 兜底：blocker 仍处于 blocked，强制解除");
+            let _ = self.blocker.unblock_input();
+        }
+        // 3. 恢复物理鼠标↔光标绑定（防止 DecoupleCursor 残留）
+        let _ = self.cursor.recouple_physical_mouse();
+        // 4. 清理远端虚拟光标
+        *self.remote_cursor.lock().await = None;
+
         let _ = self.capture.stop_capture();
         *self.event_tx.lock().await = None;
+        log::info!("[Sharing] on_disconnected 执行完毕（兜底保障已生效）");
     }
 
     /// toggle_sharing 命令的核心逻辑
@@ -343,10 +387,26 @@ impl SharingManager {
 
                 // BUG-028：Armed 状态需要 capture 运行以监听鼠标边缘
                 // Idle → Armed：启动 capture + EdgeDetector（监听模式，不吞事件）
+                // BUG-035：如果 capture 启动失败（输入监控权限未授予），回退状态到 Idle 并通知前端
                 if from == ControlState::Idle && to == ControlState::Armed {
                     if let Some(app) = app {
                         if let Err(e) = self.start_capture_and_pump(app.clone()).await {
-                            log::error!("[Sharing] Armed 启动 capture 失败: {}", e);
+                            log::error!("[Sharing] Armed 启动 capture 失败（可能缺少输入监控权限）: {}", e);
+                            // 回退状态机到 Idle
+                            {
+                                let mut sm = self.state.lock().await;
+                                let _ = sm.force_idle();
+                            }
+                            self.capture.set_control_state(control_state_to_u8(ControlState::Idle));
+                            // 通知前端：状态回退到 Idle
+                            let _ = app.emit("control-state-changed", ControlStateChange {
+                                from: "Armed".to_string(),
+                                to: "Idle".to_string(),
+                            });
+                            // 通知前端：输入监控权限不足（用 capture-failed 事件，触发横幅提示而非全屏遮罩，
+                            // 让用户可以授权后重试"开始共享"）
+                            let _ = app.emit("sharing://capture-failed-permission", ());
+                            log::warn!("[Sharing] Armed 回退到 Idle（capture 失败），已通知前端显示输入监控授权横幅");
                         } else {
                             log::info!("[Sharing] Armed 模式 capture 已启动（监听边缘）");
                             // BUG-034: CGEventTap 启动成功 = 输入监控权限实际可用
@@ -442,6 +502,24 @@ impl SharingManager {
                     log::info!("[Sharing] ShowCursor(release) 已生效：鼠标↔光标绑定恢复");
                 }
             }
+            StateEvent::DecoupleCursor => {
+                // v0.1.43 Bug #034：被控端入 RemoteControlling 时断开物理鼠标驱动（保持光标可见）
+                // 让远端发来的 MouseMoveDelta 经 CGWarpMouseCursorPosition 落点后，
+                // 本机物理鼠标移动不会把光标立即拉回真实物理坐标。
+                if let Err(e) = self.cursor.decouple_physical_mouse() {
+                    log::warn!("[Sharing] DecoupleCursor 失败: {}", e);
+                } else {
+                    log::info!("[Sharing] DecoupleCursor 已生效（远端虚拟光标模式）");
+                }
+            }
+            StateEvent::RecoupleCursor => {
+                // v0.1.43 Bug #034：退出 RemoteControlling 时恢复物理鼠标驱动
+                if let Err(e) = self.cursor.recouple_physical_mouse() {
+                    log::warn!("[Sharing] RecoupleCursor 失败: {}", e);
+                } else {
+                    log::info!("[Sharing] RecoupleCursor 已生效（物理鼠标驱动恢复）");
+                }
+            }
         }
     }
 
@@ -466,67 +544,142 @@ impl SharingManager {
             let _ = cb_tx.send(raw);
         }))?;
 
+        // v0.1.43 Bug #035：注册抢占回调
+        // 被控端 RemoteControlling 态下，capture 层检测到物理输入抢占 → 通过 channel 通知 pump。
+        // 走 channel（而非直接 try_state+spawn）的原因：
+        // 1. Tauri `State<'_, T>` 不 Send，在 spawn 的 future 里跨 await 会破坏 Send 约束
+        // 2. pump 任务自身已持有所有必要的 Arc 字段（state/capture/blocker/cursor/remote_cursor），
+        //    select! 分支可在同一个 task 内同步处理抢占动作，避免循环引用和借用难题
+        // 3. UnboundedSender 是 Send + Sync + 'static，在 capture 原生线程回调里安全使用
+        let (preempt_tx, mut preempt_rx) = unbounded_channel::<PreemptCause>();
+        self.capture
+            .set_preempt_callback(Box::new(move |cause| {
+                log::info!(
+                    "[Sharing][Preempt] 平台 capture 回调触发抢占 (cause={:?})，发送到 pump channel",
+                    cause
+                );
+                if let Err(e) = preempt_tx.send(cause) {
+                    log::warn!("[Sharing][Preempt] preempt_tx 发送失败（pump 已结束？）: {}", e);
+                }
+            }));
+
         let edge_detector_arc = Arc::clone(&self.edge_detector);
         let state_arc = Arc::clone(&self.state);
         let capture_arc: Arc<PlatformCapture> = Arc::clone(&self.capture);
         let blocker_arc: Arc<PlatformBlocker> = Arc::clone(&self.blocker);
         let cursor_arc: Arc<PlatformCursor> = Arc::clone(&self.cursor);
         let focus_keeper_arc: Arc<PlatformFocusKeeper> = Arc::clone(&self.focus_keeper);
+        let remote_cursor_arc: Arc<Mutex<Option<RemoteCursorState>>> = Arc::clone(&self.remote_cursor);
         let app_for_edge = app.clone();
+        let app_for_pump = app.clone();
 
         tauri::async_runtime::spawn(async move {
             let mut sample_count: u64 = 0;
-            while let Some(raw) = rx.recv().await {
-                // BUG-022：MouseMove 分支先喂 EdgeDetector，触发回切
-                if let RawInputEvent::MouseMove { x, y, .. } = raw {
-                    let result = {
-                        let mut slot = edge_detector_arc.lock().await;
-                        if let Some(d) = slot.as_mut() {
-                            d.detect(x, y)
-                        } else {
-                            EdgeDetectResult::None
-                        }
-                    };
-                    if let EdgeDetectResult::Triggered { direction, pos_ratio } = result {
-                        // BUG-030: 只在 Armed 状态下响应边缘触发（Armed→LocalControlling）
-                        // LocalControlling 下不通过本地边缘检测回切（回切靠快捷键或远端 SwitchBackControl）
-                        // 原因：进入 LocalControlling 后鼠标坐标仍停留在边缘区域，
-                        // 如果响应会立即触发回切，导致 Armed↔LocalControlling 无限振荡
-                        let current_state = state_arc.lock().await.state();
-                        if current_state == ControlState::Armed {
-                            log::info!(
-                                "[Sharing] EdgeDetect triggered (Armed→Local): dir={:?} pos_ratio={}",
-                                direction,
-                                pos_ratio
-                            );
-                            let events = {
-                                let mut sm = state_arc.lock().await;
-                                sm.armed_to_local_controlling(direction, pos_ratio)
-                            };
-                            handle_events_on_edge_trigger(
-                                events,
-                                &app_for_edge,
-                                &capture_arc,
-                                &blocker_arc,
-                                &cursor_arc,
-                                &focus_keeper_arc,
-                            )
-                            .await;
-                        }
-                    }
-                }
+            loop {
+                tokio::select! {
+                    // 原有 RawInputEvent 流
+                    maybe_raw = rx.recv() => {
+                        let Some(raw) = maybe_raw else {
+                            log::info!("[Sharing] capture pump 结束（rx 关闭）");
+                            break;
+                        };
 
-                let frame = raw_to_frame(raw);
-                // BUG-028: 只在 LocalControlling 状态下才转发帧到对端
-                // Armed 状态下 capture 只用于边缘检测，不发帧
-                let current_state = state_arc.lock().await.state();
-                if current_state == ControlState::LocalControlling {
-                    if sample_count % 100 == 0 {
-                        log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, frame);
+                        // BUG-022：MouseMove 分支先喂 EdgeDetector，触发回切
+                        if let RawInputEvent::MouseMove { x, y, .. } = raw {
+                            let result = {
+                                let mut slot = edge_detector_arc.lock().await;
+                                if let Some(d) = slot.as_mut() {
+                                    d.detect(x, y)
+                                } else {
+                                    EdgeDetectResult::None
+                                }
+                            };
+                            if let EdgeDetectResult::Triggered { direction, pos_ratio } = result {
+                                let current_state = state_arc.lock().await.state();
+                                if current_state == ControlState::Armed {
+                                    log::info!(
+                                        "[Sharing] EdgeDetect triggered (Armed→Local): dir={:?} pos_ratio={}",
+                                        direction,
+                                        pos_ratio
+                                    );
+                                    let events = {
+                                        let mut sm = state_arc.lock().await;
+                                        sm.armed_to_local_controlling(direction, pos_ratio)
+                                    };
+                                    handle_events_on_edge_trigger(
+                                        events,
+                                        &app_for_edge,
+                                        &capture_arc,
+                                        &blocker_arc,
+                                        &cursor_arc,
+                                        &focus_keeper_arc,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+
+                        let frame = raw_to_frame(raw);
+                        let current_state = state_arc.lock().await.state();
+                        if current_state == ControlState::LocalControlling {
+                            if sample_count % 100 == 0 {
+                                log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, frame);
+                            }
+                            sample_count += 1;
+                            if let Err(e) = send_frame_via_app(&app_for_pump, &frame).await {
+                                log::warn!("[Sharing] send_frame 失败: {}", e);
+                            }
+                        }
                     }
-                    sample_count += 1;
-                    if let Err(e) = send_frame_via_app(&app, &frame).await {
-                        log::warn!("[Sharing] send_frame 失败: {}", e);
+
+                    // v0.1.43 Bug #035: 物理输入抢占信号
+                    maybe_preempt = preempt_rx.recv() => {
+                        let Some(cause) = maybe_preempt else {
+                            log::debug!("[Sharing][Preempt] preempt_rx 关闭");
+                            // 抢占通道关闭不影响主循环，继续
+                            continue;
+                        };
+                        // 仅 RemoteControlling 处理
+                        let current = state_arc.lock().await.state();
+                        if current != ControlState::RemoteControlling {
+                            log::debug!(
+                                "[Sharing][Preempt] 当前 {:?}，非 RemoteControlling，忽略",
+                                current
+                            );
+                            continue;
+                        }
+                        log::info!(
+                            "[Sharing][Preempt] 抢占触发 (cause={:?})：发 SwitchBackControl(Preempt) + 回 Idle",
+                            cause
+                        );
+                        // 1. 发 SwitchBackControl{Preempt}
+                        if let Err(e) = send_frame_via_app(
+                            &app_for_pump,
+                            &KvmFrame::SwitchBackControl {
+                                reason: kvm_core::protocol::SwitchBackReason::Preempt,
+                            },
+                        )
+                        .await
+                        {
+                            log::warn!("[Sharing][Preempt] SwitchBackControl 发送失败: {}", e);
+                        }
+                        // 2. 本端 RemoteControlling → Idle
+                        let evs = {
+                            let mut sm = state_arc.lock().await;
+                            sm.on_disconnected()
+                        };
+                        // 3. 清理虚拟光标
+                        *remote_cursor_arc.lock().await = None;
+                        // 4. 处理事件（UnblockInput / RecoupleCursor / StateChanged 等）
+                        handle_events_on_edge_trigger(
+                            evs,
+                            &app_for_pump,
+                            &capture_arc,
+                            &blocker_arc,
+                            &cursor_arc,
+                            &focus_keeper_arc,
+                        )
+                        .await;
                     }
                 }
             }
@@ -663,6 +816,22 @@ async fn handle_events_on_edge_trigger(
                     log::warn!("[Sharing/EdgeReturn] ShowCursor(release) 失败: {}", e);
                 } else {
                     log::info!("[Sharing/EdgeReturn] ShowCursor(release) 已生效");
+                }
+            }
+            // v0.1.43 Bug #034：被控端入 RemoteControlling 时断开物理鼠标驱动
+            StateEvent::DecoupleCursor => {
+                if let Err(e) = cursor.decouple_physical_mouse() {
+                    log::warn!("[Sharing/EdgeReturn] DecoupleCursor 失败: {}", e);
+                } else {
+                    log::info!("[Sharing/EdgeReturn] DecoupleCursor 已生效（远端虚拟光标模式）");
+                }
+            }
+            // v0.1.43 Bug #034：被控端离开 RemoteControlling 时恢复物理鼠标驱动
+            StateEvent::RecoupleCursor => {
+                if let Err(e) = cursor.recouple_physical_mouse() {
+                    log::warn!("[Sharing/EdgeReturn] RecoupleCursor 失败: {}", e);
+                } else {
+                    log::info!("[Sharing/EdgeReturn] RecoupleCursor 已生效（物理鼠标驱动恢复）");
                 }
             }
             other => log::debug!("[Sharing/EdgeReturn] event ignored: {:?}", other),

@@ -16,6 +16,7 @@
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{InputCapture, RawInputEvent};
+use kvm_core::preempt::{PhysicalInputSample, PreemptCause, PreemptDecision, PreemptDetector};
 use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
     Arc, Mutex,
@@ -32,12 +33,30 @@ pub const CONTROL_STATE_IDLE: u8 = 0;
 pub const CONTROL_STATE_LOCAL_CONTROLLING: u8 = 1;
 pub const CONTROL_STATE_REMOTE_CONTROLLING: u8 = 2;
 
+/// v0.1.43：注入事件的 magic user data，用于 CGEventTap 回调过滤自我产生的合成事件。
+///
+/// `input_inject.rs` 在 `event.post()` 前调 `set_integer_value_field(kCGEventSourceUserData=42, ...)`
+/// 写入此值；tap 回调读到相同值即认为是自注入事件，跳过抢占检测。
+/// 值取 b"KVMI" 的 i64，碰撞概率极低。
+pub const KVMINI_INJECT_USER_DATA: i64 = 0x4B56_4D49; // "KVMI"
+
+/// macOS Core Graphics 事件字段 `kCGEventSourceUserData` 的 raw 值
+#[cfg(target_os = "macos")]
+pub const K_CG_EVENT_SOURCE_USER_DATA: u32 = 42;
+
+/// 抢占回调类型别名
+pub type PreemptCallback = Box<dyn Fn(PreemptCause) + Send + Sync>;
+
 pub struct MacInputCapture {
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     /// 控制状态，CGEventTap 回调按此决定是否吞事件。
     /// 初始为 Idle，绝不在未明确切到 Local/Remote 时吞事件（防止误吞用户输入）。
     control_state: Arc<AtomicU8>,
+    /// v0.1.43 抢占检测器（仅在 RemoteControlling 态下喂样本）
+    preempt_detector: Arc<PreemptDetector>,
+    /// v0.1.43 抢占触发回调（sharing 层设置），触发后 detector.reset()
+    preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
     /// 持有捕获子线程的 RunLoop 引用，用于 stop 时唤醒
     #[cfg(target_os = "macos")]
     run_loop: Arc<Mutex<Option<RunLoopHandle>>>,
@@ -58,6 +77,8 @@ impl MacInputCapture {
             capturing: Arc::new(AtomicBool::new(false)),
             callback: Arc::new(Mutex::new(None)),
             control_state: Arc::new(AtomicU8::new(CONTROL_STATE_IDLE)),
+            preempt_detector: Arc::new(PreemptDetector::new()),
+            preempt_callback: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "macos")]
             run_loop: Arc::new(Mutex::new(None)),
         }
@@ -75,6 +96,11 @@ impl MacInputCapture {
                 describe_state(new_state)
             );
         }
+        // v0.1.43 抢占检测器：只在 RemoteControlling 态下工作，切态时 reset 避免残留累计
+        if new_state == CONTROL_STATE_REMOTE_CONTROLLING {
+            self.preempt_detector.reset();
+            log::debug!("[Mac] preempt_detector.reset()（进入 RemoteControlling）");
+        }
     }
 
     /// 获取当前控制状态（主要用于测试与诊断）
@@ -86,6 +112,19 @@ impl MacInputCapture {
     /// 直接让 SharingManager 持同一个 Arc，避免反复 setter 调用）
     pub fn control_state_arc(&self) -> Arc<AtomicU8> {
         Arc::clone(&self.control_state)
+    }
+
+    /// v0.1.43 设置抢占触发回调（sharing 层调用）
+    ///
+    /// 回调会在被控端检测到物理鼠标累计位移 ≥40px 或任意 KeyDown 时触发，
+    /// 上层负责发 SwitchBackControl + 切 Idle。触发后 detector 已自动 reset。
+    pub fn set_preempt_callback(&self, cb: PreemptCallback) {
+        *self.preempt_callback.lock().unwrap() = Some(cb);
+    }
+
+    /// v0.1.43 清除抢占回调（disconnect / stop 时调用）
+    pub fn clear_preempt_callback(&self) {
+        *self.preempt_callback.lock().unwrap() = None;
     }
 }
 
@@ -125,13 +164,21 @@ impl InputCapture for MacInputCapture {
             let cb = Arc::clone(&self.callback);
             let run_loop_slot = Arc::clone(&self.run_loop);
             let control_state = Arc::clone(&self.control_state);
+            let preempt_detector = Arc::clone(&self.preempt_detector);
+            let preempt_callback = Arc::clone(&self.preempt_callback);
             let (started_tx, started_rx) = std::sync::mpsc::sync_channel::<KvmResult<()>>(1);
 
             // 专用子线程：创建 Tap → 注册到本线程 RunLoop → CFRunLoopRun() 阻塞
             std::thread::Builder::new()
                 .name("kvm-cgeventtap".to_string())
                 .spawn(move || {
-                    match start_event_tap_in_current_thread(capturing, cb, control_state) {
+                    match start_event_tap_in_current_thread(
+                        capturing,
+                        cb,
+                        control_state,
+                        preempt_detector,
+                        preempt_callback,
+                    ) {
                         Ok(_) => {
                             // 把当前线程的 RunLoop 引用回传给主控制端
                             let rl = CFRunLoop::get_current();
@@ -214,6 +261,8 @@ fn start_event_tap_in_current_thread(
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     control_state: Arc<AtomicU8>,
+    preempt_detector: Arc<PreemptDetector>,
+    preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
 ) -> KvmResult<()> {
     // 克隆 capturing 给守护线程使用（退出条件）
     let capturing_for_guard = Arc::clone(&capturing);
@@ -274,6 +323,56 @@ fn start_event_tap_in_current_thread(
 
             // 读取控制状态（提前到这里，用于日志和决策）
             let state = control_state.load(Ordering::Relaxed);
+
+            // ── v0.1.43 抢占检测 ─────────────────────────────────────
+            // 仅在 RemoteControlling 态、且事件非自注入时喂 PreemptDetector
+            if state == CONTROL_STATE_REMOTE_CONTROLLING {
+                // 过滤自注入事件：input_inject 写入的 KVMINI_INJECT_USER_DATA magic
+                let user_data = event.get_integer_value_field(K_CG_EVENT_SOURCE_USER_DATA);
+                let is_synthetic = user_data == KVMINI_INJECT_USER_DATA;
+
+                if !is_synthetic {
+                    let sample = match event_type {
+                        CGEventType::MouseMoved
+                        | CGEventType::LeftMouseDragged
+                        | CGEventType::RightMouseDragged
+                        | CGEventType::OtherMouseDragged => {
+                            use core_graphics::event::EventField;
+                            let dx = event
+                                .get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X)
+                                as i32;
+                            let dy = event
+                                .get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y)
+                                as i32;
+                            if dx != 0 || dy != 0 {
+                                Some(PhysicalInputSample::Move { dx, dy })
+                            } else {
+                                None
+                            }
+                        }
+                        CGEventType::KeyDown => Some(PhysicalInputSample::KeyDown),
+                        _ => None,
+                    };
+
+                    if let Some(s) = sample {
+                        if let PreemptDecision::ShouldPreempt { cause } =
+                            preempt_detector.feed(s)
+                        {
+                            log::info!(
+                                "[Mac][Preempt] physical input preempt triggered (cause={:?})",
+                                cause
+                            );
+                            // 触发回调（在 tap 回调线程；sharing 层应尽快 spawn async 异步发帧）
+                            if let Ok(guard) = preempt_callback.lock() {
+                                if let Some(cb) = guard.as_ref() {
+                                    cb(cause);
+                                }
+                            }
+                            // detector 在内部已自动置位 triggered，本次调用后不会重复触发
+                        }
+                    }
+                }
+            }
 
             // 2. 先把事件送给 sender（无论最后是否吞）——
             //    只有 LocalControlling 状态下这些事件才有意义转发给对端，

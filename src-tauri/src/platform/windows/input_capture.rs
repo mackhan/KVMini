@@ -6,9 +6,18 @@
 //! - Idle：CallNextHookEx 放行
 //! - LocalControlling / RemoteControlling：返回 1（非零）吞掉事件
 //! - 状态通过 Arc<AtomicU8> 跨线程共享，hook 回调用 Relaxed 读。
+//!
+//! v0.1.43 新增（Bug #035 物理输入抢占）：
+//! - RemoteControlling 态下，Hook 回调在"吞事件"之前，同时把**物理** MouseMove / KeyDown
+//!   喂给 `PreemptDetector`（kvm-core 无锁实现），累计位移超过阈值或任意键按下触发抢占。
+//! - 合成事件过滤：
+//!     * 鼠标：`MSLLHOOKSTRUCT.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)`
+//!     * 键盘：`KBDLLHOOKSTRUCT.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)`
+//! - 抢占触发后通过回调通知 sharing 层，sharing 发 `SwitchBackControl{Preempt}` + 自切 Idle。
 
 use kvm_core::error::KvmResult;
 use kvm_core::platform::{InputCapture, MouseButton, RawInputEvent};
+use kvm_core::preempt::{PhysicalInputSample, PreemptCause, PreemptDecision, PreemptDetector};
 use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
     Arc, Mutex,
@@ -19,12 +28,19 @@ pub const CONTROL_STATE_IDLE: u8 = 0;
 pub const CONTROL_STATE_LOCAL_CONTROLLING: u8 = 1;
 pub const CONTROL_STATE_REMOTE_CONTROLLING: u8 = 2;
 
+/// v0.1.43: 抢占触发回调
+pub type PreemptCallback = Box<dyn Fn(PreemptCause) + Send + Sync>;
+
 /// Windows 输入采集器
 pub struct WinInputCapture {
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     /// 控制状态：0=Idle / 1=LocalControlling / 2=RemoteControlling
     control_state: Arc<AtomicU8>,
+    /// v0.1.43: 抢占检测器（无锁 AtomicI64/AtomicBool）
+    preempt_detector: Arc<PreemptDetector>,
+    /// v0.1.43: 抢占触发回调；sharing 层通过 set_preempt_callback 注入
+    preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
 }
 
 impl WinInputCapture {
@@ -33,6 +49,8 @@ impl WinInputCapture {
             capturing: Arc::new(AtomicBool::new(false)),
             callback: Arc::new(Mutex::new(None)),
             control_state: Arc::new(AtomicU8::new(CONTROL_STATE_IDLE)),
+            preempt_detector: Arc::new(PreemptDetector::new()),
+            preempt_callback: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -45,6 +63,11 @@ impl WinInputCapture {
                 describe_state(old),
                 describe_state(new_state)
             );
+            // v0.1.43: 进入 RemoteControlling 时重置 PreemptDetector，避免历史累计误触发
+            if new_state == CONTROL_STATE_REMOTE_CONTROLLING {
+                self.preempt_detector.reset();
+                log::info!("[Win][Preempt] 进入 RemoteControlling，PreemptDetector 已重置");
+            }
         }
     }
 
@@ -54,6 +77,18 @@ impl WinInputCapture {
 
     pub fn control_state_arc(&self) -> Arc<AtomicU8> {
         Arc::clone(&self.control_state)
+    }
+
+    /// v0.1.43: 注入抢占回调（sharing 层在启动 capture 时调用）。
+    /// 多次调用会覆盖上一个回调。
+    pub fn set_preempt_callback(&self, cb: PreemptCallback) {
+        *self.preempt_callback.lock().unwrap() = Some(cb);
+        log::info!("[Win][Preempt] 抢占回调已注册");
+    }
+
+    /// v0.1.43: 清除抢占回调（stop_capture 时或显式清理）
+    pub fn clear_preempt_callback(&self) {
+        *self.preempt_callback.lock().unwrap() = None;
     }
 }
 
@@ -83,8 +118,10 @@ impl InputCapture for WinInputCapture {
             let capturing = Arc::clone(&self.capturing);
             let cb = Arc::clone(&self.callback);
             let control_state = Arc::clone(&self.control_state);
+            let preempt_detector = Arc::clone(&self.preempt_detector);
+            let preempt_callback = Arc::clone(&self.preempt_callback);
             std::thread::spawn(move || {
-                win32_hook_thread(capturing, cb, control_state);
+                win32_hook_thread(capturing, cb, control_state, preempt_detector, preempt_callback);
             });
         }
 
@@ -97,7 +134,9 @@ impl InputCapture for WinInputCapture {
         // 安全兜底：停止采集时强制回 Idle
         self.control_state
             .store(CONTROL_STATE_IDLE, Ordering::Relaxed);
-        log::info!("[Win] 键鼠采集已停止，control_state → Idle");
+        // v0.1.43: 清理抢占状态（回调保留不清，便于重启 capture 后立即生效）
+        self.preempt_detector.reset();
+        log::info!("[Win] 键鼠采集已停止，control_state → Idle，PreemptDetector 已重置");
         Ok(())
     }
 
@@ -111,6 +150,8 @@ fn win32_hook_thread(
     capturing: Arc<AtomicBool>,
     callback: Arc<Mutex<Option<Box<dyn Fn(RawInputEvent) + Send + Sync>>>>,
     control_state: Arc<AtomicU8>,
+    preempt_detector: Arc<PreemptDetector>,
+    preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
 ) {
     use winapi::um::winuser::*;
     use winapi::shared::minwindef::*;
@@ -124,6 +165,12 @@ fn win32_hook_thread(
     });
     HOOK_CONTROL_STATE.with(|cell| {
         *cell.borrow_mut() = Some(control_state);
+    });
+    HOOK_PREEMPT_DETECTOR.with(|cell| {
+        *cell.borrow_mut() = Some(preempt_detector);
+    });
+    HOOK_PREEMPT_CALLBACK.with(|cell| {
+        *cell.borrow_mut() = Some(preempt_callback);
     });
 
     unsafe {
@@ -314,6 +361,12 @@ thread_local! {
         std::cell::RefCell::new(None);
     static HOOK_CONTROL_STATE: std::cell::RefCell<Option<Arc<AtomicU8>>> =
         std::cell::RefCell::new(None);
+    /// v0.1.43: 抢占检测器（hook 回调只读路径，Arc 克隆即可）
+    static HOOK_PREEMPT_DETECTOR: std::cell::RefCell<Option<Arc<PreemptDetector>>> =
+        std::cell::RefCell::new(None);
+    /// v0.1.43: 抢占触发回调
+    static HOOK_PREEMPT_CALLBACK: std::cell::RefCell<Option<Arc<Mutex<Option<PreemptCallback>>>>> =
+        std::cell::RefCell::new(None);
     /// v0.1.40: 上一次鼠标位置（用于帧差计算 dx/dy 的降级路径）
     static LAST_MOUSE_POS: std::cell::RefCell<Option<(i32, i32)>> =
         std::cell::RefCell::new(None);
@@ -344,6 +397,36 @@ fn should_swallow() -> bool {
     )
 }
 
+/// v0.1.43: 若当前处于 RemoteControlling，喂样本到 PreemptDetector；
+/// 触发时调用已注册的回调。Hook 回调线程路径，必须 O(1) 无锁优先。
+#[cfg(target_os = "windows")]
+fn feed_preempt(sample: PhysicalInputSample) {
+    if read_control_state() != CONTROL_STATE_REMOTE_CONTROLLING {
+        return;
+    }
+    let decision = HOOK_PREEMPT_DETECTOR.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|d| d.feed(sample))
+            .unwrap_or(PreemptDecision::Idle)
+    });
+    if let PreemptDecision::ShouldPreempt { cause } = decision {
+        log::info!(
+            "[Win][Preempt] 物理输入抢占触发 (cause={:?})",
+            cause
+        );
+        HOOK_PREEMPT_CALLBACK.with(|cell| {
+            if let Some(cb_arc) = cell.borrow().as_ref() {
+                if let Ok(guard) = cb_arc.lock() {
+                    if let Some(cb) = guard.as_ref() {
+                        cb(cause);
+                    }
+                }
+            }
+        });
+    }
+}
+
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn mouse_hook_proc(
     n_code: i32,
@@ -356,6 +439,11 @@ unsafe extern "system" fn mouse_hook_proc(
         let ms_hook = &*(l_param as *const MSLLHOOKSTRUCT);
         let x = ms_hook.pt.x;
         let y = ms_hook.pt.y;
+
+        // v0.1.43: 识别是否为 SendInput 等合成事件（排除自我抢占）
+        // LLMHF_INJECTED = 0x00000001, LLMHF_LOWER_IL_INJECTED = 0x00000002
+        const LLMHF_INJECTED_MASK: u32 = 0x0000_0003;
+        let is_injected = (ms_hook.flags & LLMHF_INJECTED_MASK) != 0;
 
         let event = match w_param as u32 {
             WM_MOUSEMOVE => {
@@ -390,6 +478,15 @@ unsafe extern "system" fn mouse_hook_proc(
                 LAST_MOUSE_POS.with(|cell| {
                     *cell.borrow_mut() = Some((x, y));
                 });
+
+                // v0.1.43: 非合成鼠标移动 → 喂 PreemptDetector（累计位移）
+                if !is_injected && (dx != 0 || dy != 0) {
+                    feed_preempt(PhysicalInputSample::Move {
+                        dx: dx as i32,
+                        dy: dy as i32,
+                    });
+                }
+
                 Some(RawInputEvent::MouseMove { x, y, dx, dy })
             }
             WM_LBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Left }),
@@ -454,8 +551,19 @@ unsafe extern "system" fn keyboard_hook_proc(
         let kb_hook = &*(l_param as *const KBDLLHOOKSTRUCT);
         let vk_code = kb_hook.vkCode as u16;
 
+        // v0.1.43: 识别合成键盘事件
+        // LLKHF_INJECTED = 0x00000010, LLKHF_LOWER_IL_INJECTED = 0x00000002
+        const LLKHF_INJECTED_MASK: u32 = 0x0000_0012;
+        let is_injected = (kb_hook.flags & LLKHF_INJECTED_MASK) != 0;
+
         let event = match w_param as u32 {
-            WM_KEYDOWN | WM_SYSKEYDOWN => Some(RawInputEvent::KeyDown { native_keycode: vk_code }),
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                // v0.1.43: 非合成键盘按下 → 喂 PreemptDetector（任意键即触发）
+                if !is_injected {
+                    feed_preempt(PhysicalInputSample::KeyDown);
+                }
+                Some(RawInputEvent::KeyDown { native_keycode: vk_code })
+            }
             WM_KEYUP | WM_SYSKEYUP => Some(RawInputEvent::KeyUp { native_keycode: vk_code }),
             _ => None,
         };
@@ -484,6 +592,7 @@ unsafe extern "system" fn keyboard_hook_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn test_default_state_is_idle() {
@@ -505,5 +614,52 @@ mod tests {
         cap.capturing.store(true, Ordering::SeqCst);
         let _ = cap.stop_capture();
         assert_eq!(cap.control_state(), CONTROL_STATE_IDLE);
+    }
+
+    /// v0.1.43: 进入 RemoteControlling 时 PreemptDetector 必须被 reset，
+    /// 避免从上一次 Session 残留累计值立即触发抢占。
+    #[test]
+    fn test_enter_remote_controlling_resets_preempt_detector() {
+        let cap = WinInputCapture::new();
+        // 先人为累计一些移动
+        cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 30, dy: 0 });
+        // 再切到 REMOTE_CONTROLLING：set_control_state 应调 reset
+        cap.set_control_state(CONTROL_STATE_REMOTE_CONTROLLING);
+        // 再喂 30 像素位移（总累计 30，不应触发：阈值 40px）
+        let decision = cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 30, dy: 0 });
+        assert!(
+            matches!(decision, PreemptDecision::Idle),
+            "切入 RemoteControlling 后 reset 没生效，被累计触发了"
+        );
+    }
+
+    /// v0.1.43: set_preempt_callback 可被正确安装；
+    /// 这里不启动真实 hook，只验证 Arc<Mutex<Option<_>>> 写入路径。
+    #[test]
+    fn test_set_and_clear_preempt_callback() {
+        let cap = WinInputCapture::new();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_cb = Arc::clone(&hits);
+        cap.set_preempt_callback(Box::new(move |_cause| {
+            hits_cb.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(cap.preempt_callback.lock().unwrap().is_some());
+        cap.clear_preempt_callback();
+        assert!(cap.preempt_callback.lock().unwrap().is_none());
+    }
+
+    /// v0.1.43: 回归保护——切到 LocalControlling / Idle 不应重置 PreemptDetector
+    /// （reset 仅在进入 REMOTE_CONTROLLING 时触发）
+    #[test]
+    fn test_non_remote_state_transition_does_not_reset_detector() {
+        let cap = WinInputCapture::new();
+        cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 20, dy: 0 });
+        cap.set_control_state(CONTROL_STATE_LOCAL_CONTROLLING);
+        // 再喂 35 像素（累计 20+35=55 > 40），应触发
+        let decision = cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 35, dy: 0 });
+        assert!(
+            matches!(decision, PreemptDecision::ShouldPreempt { .. }),
+            "切 LocalControlling 不应 reset 累计值"
+        );
     }
 }

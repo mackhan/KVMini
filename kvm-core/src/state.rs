@@ -58,6 +58,15 @@ pub enum StateEvent {
     HideCursor,
     /// 需要显示光标
     ShowCursor,
+    /// 需要断开物理鼠标驱动光标（保持光标可见）
+    ///
+    /// v0.1.43 Bug #034：被控端入 RemoteControlling 时，让远端 warp 生效但本机光标仍可见，
+    /// 物理鼠标移动不驱动光标。`CursorController::decouple_physical_mouse` 平台实现。
+    DecoupleCursor,
+    /// 需要恢复物理鼠标驱动光标
+    ///
+    /// v0.1.43 Bug #034：被控端出 RemoteControlling 时恢复正常鼠标行为。
+    RecoupleCursor,
     /// 需要释放所有修饰键
     ReleaseModifiers(ModifierState),
 }
@@ -174,6 +183,10 @@ impl StateMachine {
     }
 
     /// 触发切换到 REMOTE_CONTROLLING（收到对端的 SwitchControl 帧）
+    ///
+    /// v0.1.43 Bug #034 修复：追加 `DecoupleCursor` 事件。
+    /// 被控端需要断开物理鼠标↔光标绑定（保持光标可见），
+    /// 这样远端通过 `CGWarpMouseCursorPosition` 落的虚拟光标才不会被物理鼠标瞬间拉回。
     pub fn switch_to_remote_controlling(&mut self) -> Vec<StateEvent> {
         if self.state != ControlState::Idle {
             return vec![];
@@ -186,6 +199,7 @@ impl StateMachine {
             StateEvent::StateChanged { from, to: self.state },
             StateEvent::SendFrame(KvmFrame::SwitchControlAck),
             StateEvent::BlockInput,
+            StateEvent::DecoupleCursor,
         ]
     }
 
@@ -219,6 +233,8 @@ impl StateMachine {
                 // 清除修饰键状态
                 self.modifiers.clear();
                 events.push(StateEvent::UnblockInput);
+                // v0.1.43 Bug #034：对称地恢复物理鼠标↔光标绑定
+                events.push(StateEvent::RecoupleCursor);
             }
             ControlState::Idle => {}
         }
@@ -229,6 +245,15 @@ impl StateMachine {
     /// 连接断开时强制回到 IDLE
     pub fn on_disconnected(&mut self) -> Vec<StateEvent> {
         self.switch_to_idle()
+    }
+
+    /// BUG-035: 强制回退到 Idle（不产生 StateEvent，由调用方手动处理通知）
+    /// 用于 capture 启动失败时回退状态机，此时上层已自行发送了前端事件
+    pub fn force_idle(&mut self) -> ControlState {
+        let from = self.state;
+        self.state = ControlState::Idle;
+        self.modifiers.clear();
+        from
     }
 
     /// 快捷键触发切换（v0.1.40 语义：Idle↔Armed，LocalControlling→Armed）
@@ -403,6 +428,47 @@ mod tests {
         let events = sm.switch_to_remote_controlling();
         assert_eq!(sm.state(), ControlState::RemoteControlling);
         assert!(!events.is_empty());
+    }
+
+    /// Bug #034 回归：被控端入 RemoteControlling 时必须产生 DecoupleCursor 事件，
+    /// 让 sharing 层通过 `cursor.decouple_physical_mouse()` 断开物理鼠标↔光标绑定，
+    /// 否则远端发来的 warp 会被物理鼠标瞬间拉回，虚拟光标看起来完全不动。
+    #[test]
+    fn test_switch_to_remote_controlling_emits_decouple_cursor() {
+        let mut sm = StateMachine::new();
+        let events = sm.switch_to_remote_controlling();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StateEvent::DecoupleCursor)),
+            "RemoteControlling 入态必须包含 DecoupleCursor 事件（bug #034 fix），实际 events = {:?}",
+            events
+        );
+    }
+
+    /// 入 RemoteControlling 同时仍要 BlockInput（吞掉本机键鼠），
+    /// 这是抢占检测前的预设语义。
+    #[test]
+    fn test_switch_to_remote_controlling_still_blocks_input() {
+        let mut sm = StateMachine::new();
+        let events = sm.switch_to_remote_controlling();
+        assert!(events.iter().any(|e| matches!(e, StateEvent::BlockInput)));
+    }
+
+    /// 对称：退出 RemoteControlling 时必须 RecoupleCursor，否则物理鼠标驱动不恢复
+    #[test]
+    fn test_switch_to_idle_from_remote_emits_recouple_cursor() {
+        let mut sm = StateMachine::new();
+        sm.switch_to_remote_controlling();
+        let events = sm.switch_to_idle();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StateEvent::RecoupleCursor)),
+            "RemoteControlling → Idle 必须包含 RecoupleCursor 事件，实际 events = {:?}",
+            events
+        );
+        assert!(events.iter().any(|e| matches!(e, StateEvent::UnblockInput)));
     }
 
     #[test]

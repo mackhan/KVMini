@@ -246,8 +246,12 @@ impl KvmConnectionManager {
                                                 SwitchControlAck => {
                                                     sm.on_remote_switch_ack(&app_for_sharing).await;
                                                 }
-                                                SwitchBackControl => {
-                                                    sm.on_remote_switch_back(&app_for_sharing).await;
+                                                SwitchBackControl { reason } => {
+                                                    sm.on_remote_switch_back(
+                                                        &app_for_sharing,
+                                                        *reason,
+                                                    )
+                                                    .await;
                                                 }
                                                 _ => {}
                                             }
@@ -267,7 +271,16 @@ impl KvmConnectionManager {
                                     let _ = app.emit("connection-status", ev);
                                 }
                             }
-                            Err(_) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                // BUG-036: broadcast buffer 溢出丢了 n 条旧事件
+                                // 继续接收后续事件，确保 Disconnected 不会因 lag 丢失
+                                log::warn!("[事件循环] broadcast lagged，丢失 {} 条旧事件，继续接收", n);
+                                continue;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                log::info!("[事件循环] broadcast sender 已关闭，退出循环");
+                                break;
+                            }
                         }
                     }
                 }

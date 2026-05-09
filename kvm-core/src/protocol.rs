@@ -136,6 +136,32 @@ impl ScreenEdge {
     }
 }
 
+/// 控制权回切的原因
+///
+/// v0.1.43 引入：区分"远端撞到反向边缘的自然回切"与"远端用户物理输入抢占"。
+/// 协议载荷为 1 字节；payload 为空时按 `EdgeReturn` 解码，保证对 v0.1.42 及更老版本的向后兼容。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SwitchBackReason {
+    /// 远端虚拟光标撞到反向边缘，自然回切
+    EdgeReturn = 0x00,
+    /// 远端用户物理输入抢占（Synergy/Logitech Flow 风格）
+    Preempt = 0x01,
+}
+
+impl SwitchBackReason {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0x01 => Self::Preempt,
+            _ => Self::EdgeReturn, // 未知值按兼容策略退化为 EdgeReturn
+        }
+    }
+
+    pub fn as_u8(&self) -> u8 {
+        *self as u8
+    }
+}
+
 /// 修饰键状态位图
 ///
 /// 每个修饰键占 1 bit，用于在事件帧中携带修饰键状态。
@@ -246,8 +272,8 @@ pub enum KvmFrame {
     AuthRequest { password_hash: Vec<u8> },
     /// 密码验证响应
     AuthResponse { success: bool },
-    /// 控制权回切（远端撞到反向边缘，通知本机从 LocalControlling 切回 Armed）
-    SwitchBackControl,
+    /// 控制权回切（远端撞到反向边缘或物理输入抢占，通知本机从 LocalControlling 切回 Armed）
+    SwitchBackControl { reason: SwitchBackReason },
     /// 鼠标相对位移（v0.1.40 delta 模式）
     ///
     /// 替代 `MouseMove{x,y}` 的绝对坐标路径：采集端从 CGEvent `kCGMouseEventDeltaX/Y`
@@ -324,7 +350,9 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
         KvmFrame::AuthResponse { success } => {
             (EventType::AuthResponse, vec![if *success { 1 } else { 0 }])
         }
-        KvmFrame::SwitchBackControl => (EventType::SwitchBackControl, vec![]),
+        KvmFrame::SwitchBackControl { reason } => {
+            (EventType::SwitchBackControl, vec![reason.as_u8()])
+        }
         KvmFrame::MouseMoveDelta { dx, dy } => {
             let mut p = Vec::with_capacity(4);
             p.extend_from_slice(&dx.to_le_bytes());
@@ -457,7 +485,15 @@ pub fn decode(buf: &[u8]) -> KvmResult<(KvmFrame, usize)> {
             check_min_payload(payload, 1)?;
             KvmFrame::AuthResponse { success: payload[0] != 0 }
         }
-        EventType::SwitchBackControl => KvmFrame::SwitchBackControl,
+        EventType::SwitchBackControl => {
+            // 向后兼容：v0.1.42 及更老版本 payload 为空 → 默认 EdgeReturn
+            let reason = if payload.is_empty() {
+                SwitchBackReason::EdgeReturn
+            } else {
+                SwitchBackReason::from_u8(payload[0])
+            };
+            KvmFrame::SwitchBackControl { reason }
+        }
         EventType::MouseMoveDelta => {
             check_min_payload(payload, 4)?;
             let dx = i16::from_le_bytes([payload[0], payload[1]]);
@@ -734,14 +770,70 @@ mod tests {
 
     #[test]
     fn test_encode_decode_switch_back_control() {
-        let frame = KvmFrame::SwitchBackControl;
+        // v0.1.43: payload = 1 字节 reason
+        let frame = KvmFrame::SwitchBackControl {
+            reason: SwitchBackReason::EdgeReturn,
+        };
         let bytes = encode(&frame);
-        assert_eq!(bytes.len(), HEADER_SIZE); // 无 payload
+        assert_eq!(bytes.len(), HEADER_SIZE + 1);
         let (decoded, consumed) = decode(&bytes).unwrap();
         assert_eq!(decoded, frame);
         assert_eq!(consumed, bytes.len());
         // 验证 event_type 字节正确
         assert_eq!(bytes[2], 0x32);
+        // reason 字节
+        assert_eq!(bytes[HEADER_SIZE], 0x00);
+    }
+
+    #[test]
+    fn test_switch_back_reason_encode_decode_roundtrip() {
+        // EdgeReturn 和 Preempt 都能正确 roundtrip
+        for reason in [SwitchBackReason::EdgeReturn, SwitchBackReason::Preempt] {
+            let frame = KvmFrame::SwitchBackControl { reason };
+            let bytes = encode(&frame);
+            let (decoded, _) = decode(&bytes).unwrap();
+            assert_eq!(decoded, frame);
+        }
+    }
+
+    #[test]
+    fn test_switch_back_preempt_byte_value() {
+        let frame = KvmFrame::SwitchBackControl {
+            reason: SwitchBackReason::Preempt,
+        };
+        let bytes = encode(&frame);
+        assert_eq!(bytes[HEADER_SIZE], 0x01);
+    }
+
+    #[test]
+    fn test_switch_back_legacy_empty_payload_compat() {
+        // 手动构造一个 v0.1.42 风格的 SwitchBackControl 帧（0 字节 payload）
+        let mut bytes = Vec::with_capacity(HEADER_SIZE);
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.push(EventType::SwitchBackControl as u8);
+        bytes.push(0); // flags
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // payload_len = 0
+        assert_eq!(bytes.len(), HEADER_SIZE);
+
+        // 解码应退化为 EdgeReturn，保证对 v0.1.42 及更老版本的兼容
+        let (decoded, consumed) = decode(&bytes).unwrap();
+        assert_eq!(
+            decoded,
+            KvmFrame::SwitchBackControl {
+                reason: SwitchBackReason::EdgeReturn,
+            }
+        );
+        assert_eq!(consumed, HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_switch_back_reason_from_u8_unknown_falls_back_to_edge_return() {
+        // 未来若出现未知 reason 值（如新客户端给老客户端发 0x7F），
+        // 退化为 EdgeReturn 是安全默认（不会破坏 LocalControlling→Armed 回切主流程）
+        assert_eq!(SwitchBackReason::from_u8(0x00), SwitchBackReason::EdgeReturn);
+        assert_eq!(SwitchBackReason::from_u8(0x01), SwitchBackReason::Preempt);
+        assert_eq!(SwitchBackReason::from_u8(0x7F), SwitchBackReason::EdgeReturn);
+        assert_eq!(SwitchBackReason::from_u8(0xFF), SwitchBackReason::EdgeReturn);
     }
 
     // ── v0.1.40 鼠标相对位移协议（delta 模式）──────────────────────────
