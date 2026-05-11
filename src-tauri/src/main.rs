@@ -20,6 +20,7 @@ mod connection;
 mod network_scan;
 mod platform;
 mod sharing;
+mod state_guard;
 
 // ── 通用 Tauri 命令 ────────────────────────────────────────────────────────
 
@@ -1041,6 +1042,42 @@ fn request_admin_elevation() -> Result<(), String> {
 #[tauri::command]
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.56".to_string(),
+            date: "2026-05-11".to_string(),
+            changes: vec![
+                "新增 StateGuard 模块：Watchdog 机制每 500ms 检测远程帧活跃度，3 秒无帧自动恢复 Idle 状态，彻底解决被控端断连后键鼠锁死问题".to_string(),
+                "新增 Ctrl+Alt+S（Win）/ Ctrl+Option+S（Mac）强制恢复热键，可在任何卡死场景立即释放键鼠控制".to_string(),
+                "新增 sharing-state-sync 原子状态快照事件，解决前端状态显示错乱/不一致问题".to_string(),
+                "重构状态管理日志系统，统一使用 [StateGuard] 前缀，增强状态变迁追踪能力".to_string(),
+                "SharingManager 集成 StateGuard：进入 RemoteControlling 自动启动 Watchdog，退出或断连自动停止".to_string(),
+            ],
+            changes_en: vec![
+                "Add StateGuard module: Watchdog checks remote frame activity every 500ms, auto-recovers to Idle after 3s of inactivity, completely fixing keyboard/mouse lockup after disconnection".to_string(),
+                "Add Ctrl+Alt+S (Win) / Ctrl+Option+S (Mac) force recovery hotkey for immediate input release in any stuck scenario".to_string(),
+                "Add sharing-state-sync atomic state snapshot event, fixing frontend state display inconsistencies".to_string(),
+                "Refactor state management logging with unified [StateGuard] prefix for enhanced state transition tracking".to_string(),
+                "Integrate StateGuard into SharingManager: auto-start Watchdog on RemoteControlling entry, auto-stop on exit or disconnect".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.55".to_string(),
+            date: "2026-05-11".to_string(),
+            changes: vec![
+                "修复被控端 Idle → RemoteControlling 时 capture（CGEventTap / Win Hook）从未启动的根本性 bug（BUG-037）".to_string(),
+                "修复 Win 被控时本机键鼠操作不能抢回控制权（PreemptDetector 因 hook 未装永远收不到样本）".to_string(),
+                "修复 Mac/Win 被控端键鼠屏蔽实际失效，导致两端鼠标错乱、本机仍可操作本机".to_string(),
+                "修复 Mac 主控跨屏拖动到 Win 被控端松开后窗口仍处于拖动状态（BUG-038）：LocalControlling 退出（边缘回切 / 抢占 / 断连 / 快捷键）时新增 ReleaseMouseButtons 事件，按追踪状态自动给被控端补发 MouseUp 帧".to_string(),
+                "StateMachine 新增 pressed_mouse_buttons 位掩码追踪与 drain_pressed_mouse_buttons() 接口；switch_to_remote_controlling 增加 StartCapture，switch_to_idle 从 RemoteControlling 退出增加 StopCapture".to_string(),
+            ],
+            changes_en: vec![
+                "Fix the fundamental bug where the passive end never started capture (CGEventTap / Win Hook) when transitioning Idle → RemoteControlling (BUG-037)".to_string(),
+                "Fix Win passive end unable to reclaim control via local keyboard/mouse (PreemptDetector never received samples because hook was not installed)".to_string(),
+                "Fix Mac/Win input blocking actually being ineffective, causing dual-cursor chaos where the local machine still responded to its own input".to_string(),
+                "Fix Mac controller dragging to Win passive end leaving the window stuck in drag state after release (BUG-038): LocalControlling exit (edge return / preempt / disconnect / hotkey) now emits ReleaseMouseButtons to send MouseUp frames for tracked pressed buttons".to_string(),
+                "StateMachine adds pressed_mouse_buttons bitmask tracking and drain_pressed_mouse_buttons() API; switch_to_remote_controlling now emits StartCapture, switch_to_idle from RemoteControlling now emits StopCapture".to_string(),
+            ],
+        },
         tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.44".to_string(),
             date: "2026-05-09".to_string(),

@@ -606,3 +606,45 @@
 | **关键教训** | (1) 在"必须恢复"的场景中，不能只依赖事件链路的正确性——必须有**显式兜底**（defense in depth）：事件处理完后再检查一次状态是否真的归零了；(2) broadcast channel 的 Lagged error **绝不能**被当成致命错误处理——丢旧事件 ≠ 系统崩溃，后续的 Disconnected 事件是关键生命周期事件不能丢；(3) 软件工程中"第一次真正生效的屏蔽"会暴露之前从未被发现的恢复路径 bug——新增 BlockInput 能力时必须同步验证所有 UnblockInput 路径 |
 
 ---
+
+## Bug #037：被控端 capture（hook/CGEventTap）从未启动，导致抢占失效 + 屏蔽失效 + 两端鼠标错乱（v0.1.55 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | (1) Win 被控状态下，本机键鼠操作不能抢回控制权（PreemptDetector 永远不触发）；(2) Mac/Win 被控端的"屏蔽"事实上失效——主控端控制远端时，被控端本机鼠标键盘仍能正常操作本机，造成「主控端 Mac 和被控端 Win 同时各自有鼠标在动」，两端互相错乱 |
+| **根因** | 统一根因——被控端从 Idle 直接进入 RemoteControlling 时，`StateMachine::switch_to_remote_controlling()` 产生的事件序列只有 `StateChanged + SendFrame(Ack) + BlockInput + DecoupleCursor`，**缺少 StartCapture**。导致 hook/CGEventTap 从未装上：① Win 端 hook 软屏蔽是吞事件唯一手段，hook 没装 → BlockInput 软屏蔽实际失效；② Mac 端 CGEventTap 在 control_state == REMOTE_CONTROLLING 分支返回 None 是吞事件唯一手段，Tap 没装 → MacInputBlocker 实际失效（注释说"实际屏蔽由 input_capture.rs 完成"）；③ PreemptDetector 依赖 capture 回调喂样本，hook/Tap 没装 → 物理输入抢占永远不触发。**结论**：v0.1.43 引入的"Bug #035 物理输入抢占"在被控端从未真正生效过 |
+| **修改方式** | (1) `kvm-core/src/state.rs::switch_to_remote_controlling`：事件序列追加 `StartCapture`，顺序 `StateChanged → SwitchControlAck → StartCapture → BlockInput → DecoupleCursor`（先装 hook 再屏蔽）；(2) `switch_to_idle` 的 RemoteControlling 分支追加 `StopCapture` 对称释放；(3) `src-tauri/src/sharing.rs::inject_remote_frame`：首帧到达时把 `handle_state_events_silent(evs)`（app=None 导致 StartCapture 被忽略）改为 `handle_state_events_with_emit(evs, app)`，确保事件能真实启动 capture；(4) 删除已废弃的 `handle_state_events_silent`（无人使用） |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `kvm-core/src/state.rs` 新增 `test_switch_to_remote_controlling_emits_start_capture`、`test_switch_to_remote_controlling_start_capture_before_block_input`、`test_switch_to_idle_from_remote_emits_stop_capture` |
+| **关键教训** | (1) 状态机产生的事件序列**就是契约**——遗漏一个 StartCapture 等于功能事实上不存在，但表现为"间歇性 / 平台差异" bug，极难追踪；(2) silent 版本的事件处理（不传 app）**会悄悄丢弃需要 app 的事件**（如 StartCapture / SendFrame），这种"软静默"反模式必须避免，所有事件处理必须走唯一的链路；(3) 双端共用 kvm-core 状态机 → 一个 bug 必同时影响 Mac/Win，反之单端表现差异时不要先怀疑平台层 |
+
+---
+
+## Bug #038：Mac 主控跨屏拖动到 Win 被控端松开后窗口仍处于拖动状态（v0.1.55 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | Mac 主控端按下鼠标左键拖动 → 越屏到 Win 被控端继续拖动 → Mac 物理松开左键 → Win 被控端的窗口仍处于"被拖动"状态（继续随本机鼠标移动），用户必须再点一下才能脱离 |
+| **根因** | 主控端按下左键时 pump 任务转发了 MouseDown 帧，被控端注入；跨屏拖动期间撞反向边缘（或 Preempt 抢占、断连）触发 `LocalControlling → Armed/Idle` 状态切换；切换瞬间主控端的 capture 已停止（StopCapture），即便用户随后松开左键，hook/Tap 收到的 MouseUp **不会通过 pump 转发**——但 StateMachine **没有追踪「主控端目前哪些鼠标按键还按着」**，也未在状态切换时给被控端补发 MouseUp 释放帧。结果：被控端注入的 LeftButton Down 永远没有对应的 Up，窗口拖动状态卡死 |
+| **修改方式** | (1) `kvm-core/src/state.rs::StateMachine` 新增 `pressed_mouse_buttons: u8` 位掩码字段（bit0=Left, bit1=Right, bit2=Middle, bit3=Side1, bit4=Side2），新增 `track_mouse_button_down/up`、`drain_pressed_mouse_buttons`、`has_pressed_mouse_buttons` 方法；(2) 新增 `StateEvent::ReleaseMouseButtons(Vec<MouseButton>)` 变体；(3) `local_to_armed` / `switch_to_idle` 从 LocalControlling 退出时若有按下按键，drain 后产生 `ReleaseMouseButtons` 事件（位置：StateChanged 后、ReleaseModifiers 前）；(4) `force_idle` 同步清空 pressed_mouse_buttons；(5) `src-tauri/src/sharing.rs::start_capture_and_pump` pump 任务在 `is_local` 分支收到 `KvmFrame::MouseButton{pressed}` 时调 `state.track_mouse_button_*`（含 squash 路径中的非 Move 帧）；(6) `handle_one` 与 `handle_events_on_edge_trigger` 都新增 `ReleaseMouseButtons` 分支，遍历按键发送 `KvmFrame::MouseButton{pressed: false}` 给被控端 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `kvm-core/src/state.rs` 新增 `test_track_mouse_button_down_then_up_cleared`、`test_drain_pressed_mouse_buttons_returns_all`、`test_local_to_armed_with_pressed_buttons_emits_release`、`test_local_to_armed_without_pressed_buttons_no_release`、`test_switch_to_idle_from_local_releases_pressed_buttons`、`test_on_disconnected_from_local_releases_pressed_buttons`、`test_force_idle_clears_pressed_buttons` |
+| **关键教训** | (1) 跨进程/跨主机的 Down/Up 配对必须有**主控端补偿**机制——状态切换时主控端 hook 已停，被控端的 Down 永远等不到 Up，唯一能补的就是状态机；(2) 与 `ReleaseModifiers` 设计**对称**：键盘修饰键早就有 release 机制，鼠标按键此前一直缺失，这是设计上的不对称导致的 bug；(3) pump 任务的双路径（squash 与非 squash）必须**同步追踪**所有 MouseButton，否则 squash 路径下的 Down/Up 不计入状态机就会漏发释放帧 |
+
+---
+
+## Bug #040：Win 主控→Mac 被控端 滚轮无响应 + 拖拽无中间过程 + 无法选择文字（v0.1.56 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | (1) Win 主控端滚轮操作在 Mac 被控端完全不响应；(2) 拖拽窗口时只有按下和松开有效，中间过程（窗口跟随鼠标移动）不生效；(3) 无法通过拖拽选择文字（LeftMouseDown + MouseMove 不产生选中效果） |
+| **根因** | **两个独立根因叠加**：① Mac CGEventTap 在 RemoteControlling 下对所有事件无差别吞掉（包括自注入的合成事件）—— `inject_scroll`/`inject_mouse_button`/`inject_mouse_move` post 的 CGEvent 经过同进程 tap 时全被 `return None` 吞掉，系统从未收到任何注入事件；② `handle_remote_mouse_delta` 使用 `CGWarpMouseCursorPosition` 移动光标 —— Apple 官方文档明确指出此 API "moves cursor WITHOUT generating or posting an event"，不产生 LeftMouseDragged/MouseMoved 事件，macOS WindowServer 无法感知拖拽操作。Win hook 也有同样问题：`should_swallow()` 在 RemoteControlling 下返回 true 时不区分合成/物理事件，但实际表现因 `SetCursorPos` 问题（BUG-039）先暴露 |
+| **修改方式** | **(1) Mac CGEventTap 合成事件放行**：在 tap 回调的事件吞/放决策中，将原来的 `LOCAL_CONTROLLING \| REMOTE_CONTROLLING => None` 拆分为两个独立分支—— LocalControlling 仍无差别吞（主控端不注入），RemoteControlling 先检查 `event.get_integer_value_field(K_CG_EVENT_SOURCE_USER_DATA) == KVMINI_INJECT_USER_DATA`，合成事件放行（`Some(event.to_owned())`），物理事件仍吞。**(2) handle_remote_mouse_delta 改用 executor.move_mouse**：去掉 `cursor.set_position(x, y)`（CGWarp），改为 `executor.move_mouse(x, y)`—— Mac 走 `inject_mouse_move`（自动检测左键按下→发 LeftMouseDragged，否则发 MouseMoved），Win 走 `SendInput(MOUSEEVENTF_ABSOLUTE)`（带 INJECTED flag）。**(3) Win hook 合成事件放行**：鼠标和键盘 hook 的 `should_swallow()` 分支中，如果 `is_injected && state == REMOTE_CONTROLLING` 则不吞（放行） |
+| **修改次数** | 1 |
+| **出现次数** | 1（v0.1.55 BUG-037 修复后 capture 首次启动才暴露；之前 tap/hook 从未启动，注入的事件不经过 tap，问题被掩盖） |
+| **测试用例** | `__tests__/bug040-remote-inject-passthrough.test.ts` 共 19 个用例：覆盖 Mac tap 合成事件放行、Win hook 合成事件放行、handle_remote_mouse_delta 使用 move_mouse、LeftMouseDragged 区分、tag_synthetic 链路完整性、Idle/Armed 安全兜底 |
+| **关键教训** | (1) 同进程 active CGEventTap 会拦截自己 `event.post(HID)` 注入的事件——这是 macOS 的行为（Apple 文档："event passes through any such event taps"），必须在 tap 回调中用 tag 区分放行；(2) `CGWarpMouseCursorPosition` 只改视觉位置不产生事件——对于需要系统响应的场景（拖拽、选中）必须用 CGEvent post；(3) 竞品 Input Leap/Barrier 的 `OSXScreen::fakeMouseMove` 都是用 `CGEventPost(kCGEventLeftMouseDragged/kCGEventMouseMoved)`，行业标准做法；(4) BUG-037 修复（被控端启动 capture）是正确的，但暴露了"合成事件被自己 tap 吞"这个隐藏 bug——修一个 bug 暴露另一个是正常的级联效应，关键是修复链完整 |
+
+---

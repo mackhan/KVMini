@@ -435,6 +435,29 @@ function setupEventListeners() {
             }
         }).catch(e => console.warn('控制状态事件监听注册失败:', e));
 
+        // v0.1.57 StateGuard: 监听完整状态快照（原子更新，消除事件顺序不确定性）
+        // 后端 payload: { connected: bool, control_state: string, watchdog_active: bool, timestamp_ms: u64 }
+        window.__TAURI__.event.listen('sharing-state-sync', (event) => {
+            const snapshot = event.payload || {};
+            console.log('[StateGuard] 状态快照:', JSON.stringify(snapshot));
+
+            // 原子更新连接状态
+            const wasConnected = appState.connected;
+            appState.connected = snapshot.connected;
+
+            // 更新控制状态 UI
+            if (snapshot.control_state) {
+                updateControlStateUI(snapshot.control_state);
+                updateSharingButtonForState(snapshot.control_state);
+            }
+
+            // 连接状态变化时更新 UI
+            if (wasConnected !== snapshot.connected) {
+                setConnectionStatus(snapshot.connected ? 'connected' : 'disconnected');
+                updateConnectionButtons();
+            }
+        }).catch(e => console.warn('sharing-state-sync 事件监听注册失败:', e));
+
         // BUG-035: 监听 capture 因权限失败 → 显示输入监控权限横幅（非全屏遮罩，允许用户授权后重试）
         window.__TAURI__.event.listen('sharing://capture-failed-permission', () => {
             const { t } = window.i18n;

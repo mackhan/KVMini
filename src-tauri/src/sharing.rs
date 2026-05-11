@@ -130,6 +130,8 @@ pub struct SharingManager {
     /// v0.1.40: 远端虚拟光标（RemoteControlling 态下维护"对方光标在本机屏幕上的位置"）
     /// 由 on_remote_switch_control 入态时初始化，MouseMoveDelta 帧累加，撞反向边缘触发 SwitchBack
     remote_cursor: Arc<Mutex<Option<RemoteCursorState>>>,
+    /// v0.1.57: 状态守卫（Watchdog + 状态快照推送）
+    state_guard: Arc<crate::state_guard::StateGuard>,
 }
 
 impl Default for SharingManager {
@@ -150,6 +152,7 @@ impl SharingManager {
             event_tx: Arc::new(Mutex::new(None)),
             edge_detector: Arc::new(Mutex::new(None)),
             remote_cursor: Arc::new(Mutex::new(None)),
+            state_guard: Arc::new(crate::state_guard::StateGuard::new()),
         }
     }
 
@@ -163,6 +166,9 @@ impl SharingManager {
     /// v0.1.40: MouseMoveDelta 走 RemoteCursorState（累加 → clamp → warp / SwitchBack）；
     /// 其他帧（MouseButton/MouseScroll/KeyEvent）维持原 inject_frame 路径。
     pub async fn inject_remote_frame(&self, frame: &KvmFrame, app: &tauri::AppHandle) {
+        // StateGuard: 记录最后收到远端帧的时间（喂 Watchdog 防止超时误触发）
+        self.state_guard.touch_remote_frame();
+
         // 注入前确保本端处于 RemoteControlling（首帧到达时自动切换）
         {
             let mut sm = self.state.lock().await;
@@ -170,7 +176,9 @@ impl SharingManager {
                 log::info!("[Sharing] inject_remote_frame: 首帧到达，Idle → RemoteControlling 自动切换");
                 let evs = sm.switch_to_remote_controlling();
                 drop(sm);
-                self.handle_state_events_silent(evs).await;
+                // v0.1.55 BUG-037：必须走 with_emit 让 StartCapture 事件真实启动 capture（hook/CGEventTap），
+                // 否则 BlockInput 软屏蔽失效 + PreemptDetector 收不到样本。
+                self.handle_state_events_with_emit(evs, app).await;
             }
         }
 
@@ -222,8 +230,22 @@ impl SharingManager {
 
         match action {
             RemoteCursorAction::Warp { x, y } => {
-                if let Err(e) = self.cursor.set_position(x, y) {
-                    log::warn!("[Sharing] RemoteCursor warp 失败: {}", e);
+                // v0.1.56 BUG-040 修复：
+                // 旧方案用 cursor.set_position (Mac: CGWarpMouseCursorPosition / Win: SetCursorPos)。
+                // 两个 API 都有致命问题：
+                //   - Mac: Apple 文档 "moves cursor WITHOUT generating or posting an event"
+                //          → 拖拽无效、文字选择无效
+                //   - Win: SetCursorPos 不设 LLMHF_INJECTED → preempt 误触发 (BUG-039)
+                //
+                // 新方案：统一用 executor.move_mouse：
+                //   - Mac: CGEvent::new_mouse_event(LeftMouseDragged/MouseMoved) + tag + post(HID)
+                //          按 CGEventSourceButtonState 自动感知左键 → 拖拽/选中生效
+                //   - Win: SendInput(MOUSEEVENTF_ABSOLUTE) 带 INJECTED → hook 放行
+                //
+                // 竞品 Input Leap/Barrier 的做法完全一致：
+                // OSXScreen::fakeMouseMove 用 CGEventPost(kCGEventLeftMouseDragged/kCGEventMouseMoved)
+                if let Err(e) = self.executor.move_mouse(x, y) {
+                    log::warn!("[Sharing] RemoteCursor move_mouse({},{}) 失败: {}", x, y, e);
                 }
             }
             RemoteCursorAction::SwitchBack => {
@@ -268,8 +290,9 @@ impl SharingManager {
                 "[Sharing] RemoteCursor 初始化：edge={:?}, pos_ratio={}, 入屏点=({}, {})",
                 edge, pos_ratio, state.x, state.y
             );
-            // 立即 warp 到入屏点（给用户视觉反馈：对方光标"刚进来"）
-            let _ = self.cursor.set_position(state.x, state.y);
+            // 立即移动光标到入屏点（给用户视觉反馈：对方光标"刚进来"）
+            // v0.1.56: 使用 move_mouse（Mac→CGEvent / Win→SendInput），不用 set_position
+            let _ = self.executor.move_mouse(state.x, state.y);
             *self.remote_cursor.lock().await = Some(state);
         } else {
             log::warn!("[Sharing] RemoteCursor 初始化失败（显示器读取失败）");
@@ -328,16 +351,18 @@ impl SharingManager {
     /// BUG-036 修复：增加显式兜底，确保无论事件处理链路是否异常，
     /// 键鼠屏蔽和 Hook 吞事件一定被恢复。防止 Win 端断开后键鼠锁死。
     pub async fn on_disconnected(&self, app: &tauri::AppHandle) {
-        log::info!("[Sharing] on_disconnected 开始执行");
+        log::info!("[StateGuard] 🔌 on_disconnected 开始执行 (trigger=disconnect)");
         let evs = self.state.lock().await.on_disconnected();
         self.handle_state_events_with_emit(evs, app).await;
 
         // ── BUG-036 兜底：无论上面事件处理是否正常完成，强制确保以下状态归零 ──
+        // 0. 停止 Watchdog（防止已超时但 on_disconnected 先到的竞态）
+        self.state_guard.stop_watchdog();
         // 1. Hook 层 control_state → Idle（停止吞事件）
         self.capture.set_control_state(control_state_to_u8(ControlState::Idle));
         // 2. 强制解除键鼠屏蔽
         if self.blocker.is_blocked() {
-            log::warn!("[Sharing] on_disconnected 兜底：blocker 仍处于 blocked，强制解除");
+            log::warn!("[StateGuard] on_disconnected 兜底：blocker 仍处于 blocked，强制解除");
             let _ = self.blocker.unblock_input();
         }
         // 3. 恢复物理鼠标↔光标绑定（防止 DecoupleCursor 残留）
@@ -347,7 +372,13 @@ impl SharingManager {
 
         let _ = self.capture.stop_capture();
         *self.event_tx.lock().await = None;
-        log::info!("[Sharing] on_disconnected 执行完毕（兜底保障已生效）");
+
+        // 推送最终状态快照
+        let connected = crate::state_guard::is_connected_via_app(app).await;
+        let snapshot = crate::state_guard::build_snapshot(connected, "Idle", false);
+        let _ = app.emit("sharing-state-sync", snapshot);
+
+        log::info!("[StateGuard] on_disconnected 执行完毕（兜底保障已生效）");
     }
 
     /// toggle_sharing 命令的核心逻辑
@@ -374,12 +405,6 @@ impl SharingManager {
 
     // ── 内部：处理 StateMachine 产生的事件 ──────────────────────────────────
 
-    async fn handle_state_events_silent(&self, evs: Vec<StateEvent>) {
-        for ev in evs {
-            self.handle_one(ev, None).await;
-        }
-    }
-
     async fn handle_state_events_with_emit(
         &self,
         evs: Vec<StateEvent>,
@@ -393,10 +418,20 @@ impl SharingManager {
     async fn handle_one(&self, ev: StateEvent, app: Option<&tauri::AppHandle>) {
         match ev {
             StateEvent::StateChanged { from, to } => {
-                log::info!("[Sharing] StateChanged: {} → {}", from, to);
+                log::info!("[StateGuard] STATE_CHANGE: {} → {} (trigger=state_event)", from, to);
                 // BUG-022：状态镜像到 capture 回调线程，让 CGEventTap / WinHook
                 // 按新状态决定 Some(event)（放行）或 None（吞）。
                 self.capture.set_control_state(control_state_to_u8(to));
+
+                // StateGuard: Watchdog 生命周期管理
+                if to == ControlState::RemoteControlling {
+                    if let Some(app) = app {
+                        self.state_guard.start_watchdog(app.clone());
+                    }
+                }
+                if from == ControlState::RemoteControlling {
+                    self.state_guard.stop_watchdog();
+                }
                 // BUG-030: EdgeDetector 只在 Armed 状态激活
                 // LocalControlling 下禁用（回切靠快捷键或远端 SwitchBackControl）
                 // 避免鼠标仍停在边缘区域导致回到 Armed 后立刻重新触发
@@ -455,6 +490,15 @@ impl SharingManager {
                         to: state_name(to).to_string(),
                     };
                     let _ = app.emit("control-state-changed", payload);
+
+                    // StateGuard: 推送完整状态快照（消除前端事件顺序依赖）
+                    let connected = crate::state_guard::is_connected_via_app(app).await;
+                    let snapshot = crate::state_guard::build_snapshot(
+                        connected,
+                        state_name(to),
+                        self.state_guard.is_watchdog_running(),
+                    );
+                    let _ = app.emit("sharing-state-sync", snapshot);
                 }
             }
             StateEvent::SendFrame(frame) => {
@@ -485,6 +529,25 @@ impl SharingManager {
             }
             StateEvent::ReleaseModifiers(mods) => {
                 log::debug!("[Sharing] release modifiers: bits={:#06b}", mods.bits());
+            }
+            StateEvent::ReleaseMouseButtons(btns) => {
+                // v0.1.55 BUG-038：LocalControlling 退出时给被控端补发 MouseUp，避免拖动卡死
+                log::info!("[Sharing] ReleaseMouseButtons: 释放残留按键 {:?}", btns);
+                if let Some(app) = app {
+                    let ts = now_ms();
+                    let mods = ModifierState::new();
+                    for b in btns {
+                        let frame = KvmFrame::MouseButton {
+                            button: mouse_button_to_u8(b),
+                            pressed: false,
+                            timestamp_ms: ts,
+                            modifiers: mods,
+                        };
+                        if let Err(e) = send_frame_via_app(app, &frame).await {
+                            log::warn!("[Sharing] ReleaseMouseButtons 发帧失败 btn={:?}: {}", b, e);
+                        }
+                    }
+                }
             }
             StateEvent::BlockInput => {
                 // BUG-022：被对端控制时屏蔽本地键鼠，防止本地干扰注入流
@@ -666,6 +729,19 @@ impl SharingManager {
                             .try_lock()
                             .map(|s| s.state() == ControlState::LocalControlling)
                             .unwrap_or(false);
+                        // v0.1.55 BUG-038：LocalControlling 下追踪 MouseDown/MouseUp，
+                        // 状态切换时由 StateMachine drain_pressed_mouse_buttons() 统一发释放帧。
+                        if is_local {
+                            if let KvmFrame::MouseButton { button, pressed, .. } = &frame {
+                                let btn = u8_to_mouse_button(*button);
+                                let mut sm = state_arc.lock().await;
+                                if *pressed {
+                                    sm.track_mouse_button_down(btn);
+                                } else {
+                                    sm.track_mouse_button_up(btn);
+                                }
+                            }
+                        }
                         if is_local {
                             // v0.1.50: MouseMoveDelta Squash（参照 Barrier "Squash mouse moves"）
                             // 收到 MouseMove 帧后，立即 drain channel 中积压的其余 Move 帧，
@@ -718,6 +794,16 @@ impl SharingManager {
                                         }
                                         sample_count += 1;
                                         let non_move = raw_to_frame(extra);
+                                        // v0.1.55 BUG-038：squash 路径同样追踪 MouseDown/MouseUp
+                                        if let KvmFrame::MouseButton { button, pressed, .. } = &non_move {
+                                            let btn = u8_to_mouse_button(*button);
+                                            let mut sm = state_arc.lock().await;
+                                            if *pressed {
+                                                sm.track_mouse_button_down(btn);
+                                            } else {
+                                                sm.track_mouse_button_up(btn);
+                                            }
+                                        }
                                         if let Err(e) = send_frame_via_app(&app_for_pump, &non_move).await {
                                             log::warn!("[Sharing] send_frame 失败: {}", e);
                                         }
@@ -949,6 +1035,23 @@ async fn handle_events_on_edge_trigger(
                     log::warn!("[Sharing/EdgeReturn] RecoupleCursor 失败: {}", e);
                 } else {
                     log::info!("[Sharing/EdgeReturn] RecoupleCursor 已生效（物理鼠标驱动恢复）");
+                }
+            }
+            // v0.1.55 BUG-038：边缘回切时给被控端补发 MouseUp，避免拖动卡死
+            StateEvent::ReleaseMouseButtons(btns) => {
+                log::info!("[Sharing/EdgeReturn] ReleaseMouseButtons: 释放残留按键 {:?}", btns);
+                let ts = now_ms();
+                let mods = ModifierState::new();
+                for b in btns {
+                    let frame = KvmFrame::MouseButton {
+                        button: mouse_button_to_u8(b),
+                        pressed: false,
+                        timestamp_ms: ts,
+                        modifiers: mods,
+                    };
+                    if let Err(e) = send_frame_via_app(app, &frame).await {
+                        log::warn!("[Sharing/EdgeReturn] ReleaseMouseButtons 发帧失败 btn={:?}: {}", b, e);
+                    }
                 }
             }
             other => log::debug!("[Sharing/EdgeReturn] event ignored: {:?}", other),

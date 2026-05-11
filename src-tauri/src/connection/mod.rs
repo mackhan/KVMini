@@ -259,6 +259,11 @@ impl KvmConnectionManager {
                                         NetworkEvent::ConnectionStateChanged(
                                             kvm_core::network::ConnectionState::Disconnected,
                                         ) => {
+                                            let disc_ip = peer_ip.lock().await.clone();
+                                            log::warn!(
+                                                "[StateGuard] 🔌 连接断开检测到 (peer_ip={})，正在触发 on_disconnected...",
+                                                disc_ip
+                                            );
                                             sm.on_disconnected(&app_for_sharing).await;
                                         }
                                         _ => {}

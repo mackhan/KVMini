@@ -8,3 +8,4 @@ pub mod connection;
 pub mod network_scan;
 pub mod platform;
 pub mod sharing;
+pub mod state_guard;

@@ -4,6 +4,7 @@
 //! Armed 为中间态：边缘检测已激活但尚未吞键鼠。
 //! 状态切换时通知对端同步，连接断开时自动回到 IDLE。
 
+use crate::platform::MouseButton;
 use crate::protocol::{KvmFrame, ModifierState, ScreenEdge};
 
 /// 控制权状态
@@ -69,6 +70,12 @@ pub enum StateEvent {
     RecoupleCursor,
     /// 需要释放所有修饰键
     ReleaseModifiers(ModifierState),
+    /// 需要向对端发 MouseUp 帧释放仍按下的鼠标按键
+    ///
+    /// v0.1.55 BUG-038 修复：LocalControlling 退出时（边缘回切 / 抢占 / 断连 / 快捷键）
+    /// 若 pump 已转发 MouseDown 但尚未对应 MouseUp，被控端注入的 Down 会卡死（典型：跨屏拖动后释放窗口仍处于拖动态）。
+    /// 上层在 LocalControlling 下追踪 pump 转发的按键，状态切换时由本事件统一发释放帧。
+    ReleaseMouseButtons(Vec<MouseButton>),
 }
 
 /// 控制权状态机
@@ -77,6 +84,11 @@ pub struct StateMachine {
     state: ControlState,
     /// 当前修饰键状态
     modifiers: ModifierState,
+    /// LocalControlling 下 pump 已转发但尚未释放的鼠标按键（位掩码）
+    ///
+    /// v0.1.55 BUG-038：状态切换时必须按此追踪发 MouseUp 释放，避免被控端拖动卡死。
+    /// 位定义对应 `MouseButton::from_u8(0..=4)`。
+    pressed_mouse_buttons: u8,
 }
 
 impl StateMachine {
@@ -84,6 +96,7 @@ impl StateMachine {
         Self {
             state: ControlState::Idle,
             modifiers: ModifierState::new(),
+            pressed_mouse_buttons: 0,
         }
     }
 
@@ -100,6 +113,41 @@ impl StateMachine {
     /// 更新修饰键状态
     pub fn update_modifier(&mut self, modifier: u8, pressed: bool) {
         self.modifiers.set(modifier, pressed);
+    }
+
+    /// 追踪 LocalControlling 下 pump 转发的 MouseDown
+    ///
+    /// pump 任务在 `RawInputEvent::MouseDown` → 发帧前后调用，记录哪些按键仍在按下。
+    pub fn track_mouse_button_down(&mut self, btn: MouseButton) {
+        self.pressed_mouse_buttons |= 1u8 << (btn as u8);
+    }
+
+    /// 追踪 LocalControlling 下 pump 转发的 MouseUp
+    pub fn track_mouse_button_up(&mut self, btn: MouseButton) {
+        self.pressed_mouse_buttons &= !(1u8 << (btn as u8));
+    }
+
+    /// 当前是否有鼠标按键仍按下
+    pub fn has_pressed_mouse_buttons(&self) -> bool {
+        self.pressed_mouse_buttons != 0
+    }
+
+    /// 清空并返回所有仍按下的鼠标按键，用于状态切换时统一发释放帧。
+    pub fn drain_pressed_mouse_buttons(&mut self) -> Vec<MouseButton> {
+        let bits = self.pressed_mouse_buttons;
+        self.pressed_mouse_buttons = 0;
+        if bits == 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for i in 0u8..=4u8 {
+            if (bits & (1u8 << i)) != 0 {
+                if let Some(b) = MouseButton::from_u8(i) {
+                    out.push(b);
+                }
+            }
+        }
+        out
     }
 
     // ─── 新 4 状态机转换 ─────────────────────────────────────────────
@@ -151,6 +199,11 @@ impl StateMachine {
         let mut events = vec![
             StateEvent::StateChanged { from, to: self.state },
         ];
+        // v0.1.55 BUG-038：先释放仍按下的鼠标按键（发 MouseUp 给被控端），避免拖动卡死
+        let pressed = self.drain_pressed_mouse_buttons();
+        if !pressed.is_empty() {
+            events.push(StateEvent::ReleaseMouseButtons(pressed));
+        }
         // 释放修饰键
         if self.modifiers.bits() != 0 {
             events.push(StateEvent::ReleaseModifiers(self.modifiers));
@@ -187,6 +240,12 @@ impl StateMachine {
     /// v0.1.43 Bug #034 修复：追加 `DecoupleCursor` 事件。
     /// 被控端需要断开物理鼠标↔光标绑定（保持光标可见），
     /// 这样远端通过 `CGWarpMouseCursorPosition` 落的虚拟光标才不会被物理鼠标瞬间拉回。
+    ///
+    /// v0.1.55 BUG-037 修复：追加 `StartCapture` 事件。
+    /// 被控端从 Idle 直接进入 RemoteControlling 时必须启动 capture（hook/CGEventTap），
+    /// 否则 hook 没装 → BlockInput 软屏蔽失效 + PreemptDetector 收不到样本（物理键鼠抢占失效）。
+    /// 顺序：StateChanged → SwitchControlAck → StartCapture（先装 hook） →
+    ///       BlockInput（hook 已就绪可吞事件） → DecoupleCursor。
     pub fn switch_to_remote_controlling(&mut self) -> Vec<StateEvent> {
         if self.state != ControlState::Idle {
             return vec![];
@@ -198,6 +257,7 @@ impl StateMachine {
         vec![
             StateEvent::StateChanged { from, to: self.state },
             StateEvent::SendFrame(KvmFrame::SwitchControlAck),
+            StateEvent::StartCapture,
             StateEvent::BlockInput,
             StateEvent::DecoupleCursor,
         ]
@@ -221,6 +281,11 @@ impl StateMachine {
                 // Armed → Idle：无需释放资源，边缘检测由上层关闭
             }
             ControlState::LocalControlling => {
+                // v0.1.55 BUG-038：先释放仍按下的鼠标按键（发 MouseUp 给被控端），避免拖动卡死
+                let pressed = self.drain_pressed_mouse_buttons();
+                if !pressed.is_empty() {
+                    events.push(StateEvent::ReleaseMouseButtons(pressed));
+                }
                 // 释放所有修饰键
                 if self.modifiers.bits() != 0 {
                     events.push(StateEvent::ReleaseModifiers(self.modifiers));
@@ -232,9 +297,13 @@ impl StateMachine {
             ControlState::RemoteControlling => {
                 // 清除修饰键状态
                 self.modifiers.clear();
+                // 被控端清空追踪（理论上 RemoteControlling 不追踪 pump 转发，但兜底防御）
+                self.pressed_mouse_buttons = 0;
                 events.push(StateEvent::UnblockInput);
                 // v0.1.43 Bug #034：对称地恢复物理鼠标↔光标绑定
                 events.push(StateEvent::RecoupleCursor);
+                // v0.1.55 BUG-037：对称地停止 capture，释放 hook/CGEventTap
+                events.push(StateEvent::StopCapture);
             }
             ControlState::Idle => {}
         }
@@ -253,6 +322,7 @@ impl StateMachine {
         let from = self.state;
         self.state = ControlState::Idle;
         self.modifiers.clear();
+        self.pressed_mouse_buttons = 0;
         from
     }
 
@@ -576,5 +646,151 @@ mod tests {
         assert_eq!(format!("{}", ControlState::Armed), "已激活·待边缘切换");
         assert_eq!(format!("{}", ControlState::LocalControlling), "正在控制对方");
         assert_eq!(format!("{}", ControlState::RemoteControlling), "对方正在控制本机");
+    }
+
+    // ─── v0.1.55 BUG-037 / BUG-038 回归测试 ───────────────────────────
+
+    /// BUG-037：被控端 Idle → RemoteControlling 必须包含 StartCapture，
+    /// 否则 hook/CGEventTap 没装，BlockInput 软屏蔽失效 + PreemptDetector 收不到样本
+    #[test]
+    fn test_switch_to_remote_controlling_emits_start_capture() {
+        let mut sm = StateMachine::new();
+        let events = sm.switch_to_remote_controlling();
+        assert!(
+            events.iter().any(|e| matches!(e, StateEvent::StartCapture)),
+            "RemoteControlling 入态必须包含 StartCapture（BUG-037 fix），实际 events = {:?}",
+            events
+        );
+    }
+
+    /// BUG-037 顺序约束：StartCapture 必须在 BlockInput 之前
+    #[test]
+    fn test_switch_to_remote_controlling_start_capture_before_block_input() {
+        let mut sm = StateMachine::new();
+        let events = sm.switch_to_remote_controlling();
+        let start_idx = events.iter().position(|e| matches!(e, StateEvent::StartCapture));
+        let block_idx = events.iter().position(|e| matches!(e, StateEvent::BlockInput));
+        assert!(start_idx.is_some() && block_idx.is_some());
+        assert!(
+            start_idx.unwrap() < block_idx.unwrap(),
+            "StartCapture 必须在 BlockInput 之前，否则 hook 未装时 block 无效，实际 events = {:?}",
+            events
+        );
+    }
+
+    /// BUG-037 对称：RemoteControlling → Idle 必须 StopCapture
+    #[test]
+    fn test_switch_to_idle_from_remote_emits_stop_capture() {
+        let mut sm = StateMachine::new();
+        sm.switch_to_remote_controlling();
+        let events = sm.switch_to_idle();
+        assert!(
+            events.iter().any(|e| matches!(e, StateEvent::StopCapture)),
+            "RemoteControlling → Idle 必须包含 StopCapture（BUG-037 fix），实际 events = {:?}",
+            events
+        );
+    }
+
+    /// BUG-038：track 鼠标按键，down 后 up 应清零
+    #[test]
+    fn test_track_mouse_button_down_then_up_cleared() {
+        let mut sm = StateMachine::new();
+        sm.track_mouse_button_down(MouseButton::Left);
+        assert!(sm.has_pressed_mouse_buttons());
+        sm.track_mouse_button_up(MouseButton::Left);
+        assert!(!sm.has_pressed_mouse_buttons());
+        assert_eq!(sm.drain_pressed_mouse_buttons(), Vec::<MouseButton>::new());
+    }
+
+    /// BUG-038：drain 应返回所有仍按下按键，并清空状态
+    #[test]
+    fn test_drain_pressed_mouse_buttons_returns_all() {
+        let mut sm = StateMachine::new();
+        sm.track_mouse_button_down(MouseButton::Left);
+        sm.track_mouse_button_down(MouseButton::Right);
+        sm.track_mouse_button_down(MouseButton::Side2);
+        let pressed = sm.drain_pressed_mouse_buttons();
+        assert!(pressed.contains(&MouseButton::Left));
+        assert!(pressed.contains(&MouseButton::Right));
+        assert!(pressed.contains(&MouseButton::Side2));
+        assert_eq!(pressed.len(), 3);
+        // drain 后应清空
+        assert!(!sm.has_pressed_mouse_buttons());
+    }
+
+    /// BUG-038：LocalControlling → Armed 时若有未释放按键，必须发 ReleaseMouseButtons
+    #[test]
+    fn test_local_to_armed_with_pressed_buttons_emits_release() {
+        let mut sm = StateMachine::new();
+        sm.arm();
+        sm.armed_to_local_controlling(ScreenEdge::Right, 5000);
+        sm.track_mouse_button_down(MouseButton::Left);
+        let events = sm.local_to_armed();
+        let release = events.iter().find_map(|e| match e {
+            StateEvent::ReleaseMouseButtons(btns) => Some(btns.clone()),
+            _ => None,
+        });
+        assert!(
+            release.is_some(),
+            "LocalControlling → Armed 有按下按键时必须发 ReleaseMouseButtons（BUG-038 fix），实际 events = {:?}",
+            events
+        );
+        assert!(release.unwrap().contains(&MouseButton::Left));
+    }
+
+    /// BUG-038：LocalControlling → Armed 无按下按键时不应发 ReleaseMouseButtons（保持简洁）
+    #[test]
+    fn test_local_to_armed_without_pressed_buttons_no_release() {
+        let mut sm = StateMachine::new();
+        sm.arm();
+        sm.armed_to_local_controlling(ScreenEdge::Right, 5000);
+        let events = sm.local_to_armed();
+        assert!(
+            !events.iter().any(|e| matches!(e, StateEvent::ReleaseMouseButtons(_))),
+            "无按下按键时不应发 ReleaseMouseButtons，实际 events = {:?}",
+            events
+        );
+    }
+
+    /// BUG-038：switch_to_idle 从 LocalControlling 退出时也必须释放按键
+    #[test]
+    fn test_switch_to_idle_from_local_releases_pressed_buttons() {
+        let mut sm = StateMachine::new();
+        sm.switch_to_local_controlling(ScreenEdge::Right, 5000);
+        sm.track_mouse_button_down(MouseButton::Left);
+        sm.track_mouse_button_down(MouseButton::Right);
+        let events = sm.switch_to_idle();
+        let release = events.iter().find_map(|e| match e {
+            StateEvent::ReleaseMouseButtons(btns) => Some(btns.clone()),
+            _ => None,
+        });
+        assert!(release.is_some(), "switch_to_idle 从 Local 退出必须释放按键，events = {:?}", events);
+        let btns = release.unwrap();
+        assert!(btns.contains(&MouseButton::Left));
+        assert!(btns.contains(&MouseButton::Right));
+    }
+
+    /// BUG-038：on_disconnected 从 LocalControlling 退出也必须释放按键（断连兜底）
+    #[test]
+    fn test_on_disconnected_from_local_releases_pressed_buttons() {
+        let mut sm = StateMachine::new();
+        sm.switch_to_local_controlling(ScreenEdge::Right, 5000);
+        sm.track_mouse_button_down(MouseButton::Middle);
+        let events = sm.on_disconnected();
+        assert!(
+            events.iter().any(|e| matches!(e, StateEvent::ReleaseMouseButtons(btns) if btns.contains(&MouseButton::Middle))),
+            "on_disconnected 从 Local 退出必须释放按键，events = {:?}",
+            events
+        );
+    }
+
+    /// BUG-038：force_idle 必须清空按键追踪状态
+    #[test]
+    fn test_force_idle_clears_pressed_buttons() {
+        let mut sm = StateMachine::new();
+        sm.switch_to_local_controlling(ScreenEdge::Right, 5000);
+        sm.track_mouse_button_down(MouseButton::Left);
+        sm.force_idle();
+        assert!(!sm.has_pressed_mouse_buttons());
     }
 }

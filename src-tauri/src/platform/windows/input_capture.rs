@@ -534,8 +534,14 @@ unsafe extern "system" fn mouse_hook_proc(
         }
 
         // 按状态吞事件（BUG-022 关键修复）
+        // v0.1.56 BUG-040：RemoteControlling 下合成事件（自注入）必须放行，
+        // 只吞物理事件。否则被控端 SendInput 注入的滚轮/按键/拖拽全被自己 hook 吞掉。
         if should_swallow() {
-            return 1; // 非零返回值 = 吞掉事件，不传给本机
+            if is_injected && read_control_state() == CONTROL_STATE_REMOTE_CONTROLLING {
+                // 被控端自注入事件：放行，让系统正确响应远端控制指令
+            } else {
+                return 1; // 非零返回值 = 吞掉事件，不传给本机
+            }
         }
     }
 
@@ -558,6 +564,39 @@ unsafe extern "system" fn keyboard_hook_proc(
         // LLKHF_INJECTED = 0x00000010, LLKHF_LOWER_IL_INJECTED = 0x00000002
         const LLKHF_INJECTED_MASK: u32 = 0x0000_0012;
         let is_injected = (kb_hook.flags & LLKHF_INJECTED_MASK) != 0;
+
+        // v0.1.57 StateGuard: Ctrl+Alt+S 本地强制回 Idle（安全阀）
+        // 即使处于 RemoteControlling 吞事件状态，此组合键也必须放行并触发恢复。
+        // 仅在 KeyDown 时触发，且必须是物理按键（非注入）
+        if !is_injected && vk_code == 0x53 /* VK_S */ {
+            if (w_param as u32) == WM_KEYDOWN || (w_param as u32) == WM_SYSKEYDOWN {
+                let ctrl_down = (GetAsyncKeyState(VK_CONTROL) as u16 & 0x8000) != 0;
+                let alt_down = (GetAsyncKeyState(VK_MENU) as u16 & 0x8000) != 0;
+                if ctrl_down && alt_down && read_control_state() == CONTROL_STATE_REMOTE_CONTROLLING {
+                    log::warn!(
+                        "[StateGuard] ⚡ Ctrl+Alt+S 安全恢复快捷键触发！强制回 Idle (trigger=force_recovery)"
+                    );
+                    // 立即把 control_state 设回 Idle（停止吞事件，立即恢复键鼠）
+                    HOOK_CONTROL_STATE.with(|cell| {
+                        if let Some(state) = cell.borrow().as_ref() {
+                            state.store(CONTROL_STATE_IDLE, Ordering::Relaxed);
+                        }
+                    });
+                    // 通过 preempt 通道通知 sharing 层走 on_disconnected 完整清理
+                    HOOK_PREEMPT_CALLBACK.with(|cell| {
+                        if let Some(cb_arc) = cell.borrow().as_ref() {
+                            if let Ok(guard) = cb_arc.lock() {
+                                if let Some(cb) = guard.as_ref() {
+                                    cb(PreemptCause::KeyDown);
+                                }
+                            }
+                        }
+                    });
+                    // 放行此键（不吞），让系统正常处理
+                    return CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param);
+                }
+            }
+        }
 
         // v0.1.50: VK → X11 KeySym（与 Barrier/Synergy 行业标准对齐）
         // Win 采集端发出 KeySym，Mac 被控端 keysym_to_cg_keycode() 转换注入
@@ -587,8 +626,13 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
 
         // 按状态吞事件（BUG-022 关键修复）
+        // v0.1.56 BUG-040：同鼠标 hook 逻辑，被控端合成键盘事件必须放行
         if should_swallow() {
-            return 1;
+            if is_injected && read_control_state() == CONTROL_STATE_REMOTE_CONTROLLING {
+                // 被控端自注入事件：放行
+            } else {
+                return 1;
+            }
         }
     }
 

@@ -331,7 +331,37 @@ fn start_event_tap_in_current_thread(
                 let user_data = event.get_integer_value_field(K_CG_EVENT_SOURCE_USER_DATA);
                 let is_synthetic = user_data == KVMINI_INJECT_USER_DATA;
 
+                // v0.1.57 StateGuard: Ctrl+Option+S 本地强制回 Idle（安全阀）
+                // macOS CGEvent 的 flags 位：kCGEventFlagMaskControl=0x40000, kCGEventFlagMaskAlternate=0x80000
                 if !is_synthetic {
+                    if let CGEventType::KeyDown = event_type {
+                        let cg_keycode = event.get_integer_value_field(9) as u16; // kCGKeyboardEventKeycode
+                        // CGEvent flags 通过 EventField 读取：kCGKeyboardEventKeycode=9 已知可用
+                        // CGEventFlags = CGEventGetFlags：用 get_integer_value_field(K_CG_KEYBOARD_EVENT_AUTOREPEAT=0) 不行
+                        // 正确方式：core_graphics::event::CGEvent::get_flags() 返回 CGEventFlags
+                        let flags = event.get_flags();
+                        let flags_raw = flags.bits();
+                        let ctrl_pressed = (flags_raw & 0x40000) != 0;  // kCGEventFlagMaskControl
+                        let alt_pressed = (flags_raw & 0x80000) != 0;   // kCGEventFlagMaskAlternate
+                        // macOS kVK_ANSI_S = 1
+                        if cg_keycode == 1 && ctrl_pressed && alt_pressed {
+                            log::warn!(
+                                "[StateGuard] ⚡ Ctrl+Option+S 安全恢复快捷键触发！强制回 Idle (trigger=force_recovery)"
+                            );
+                            // 立即把 control_state 设回 Idle（停止吞事件）
+                            control_state.store(CONTROL_STATE_IDLE, Ordering::Relaxed);
+                            // 通过 preempt 通道通知 sharing 层走完整清理
+                            if let Ok(guard) = preempt_callback.lock() {
+                                if let Some(cb) = guard.as_ref() {
+                                    cb(PreemptCause::KeyDown);
+                                }
+                            }
+                            // 放行此键
+                            return Some(event.to_owned());
+                        }
+                    }
+
+                    // v0.1.43 原有抢占检测逻辑
                     let sample = match event_type {
                         CGEventType::MouseMoved
                         | CGEventType::LeftMouseDragged
@@ -387,15 +417,35 @@ fn start_event_tap_in_current_thread(
 
             // 3. 根据控制状态决定是否吞事件
             match state {
-                CONTROL_STATE_LOCAL_CONTROLLING | CONTROL_STATE_REMOTE_CONTROLLING => {
-                    // 吞掉：本机不感知此事件
-                    // 用 static 变量限频日志，只打一次
+                CONTROL_STATE_LOCAL_CONTROLLING => {
+                    // 主控端本机：吞掉所有事件（转发给被控端）
                     use std::sync::atomic::AtomicBool;
-                    static LOGGED_FIRST_SWALLOW: AtomicBool = AtomicBool::new(false);
-                    if !LOGGED_FIRST_SWALLOW.swap(true, Ordering::Relaxed) {
-                        log::info!("[Mac] 首次吞掉本机输入事件（state={}）", state);
+                    static LOGGED_FIRST_SWALLOW_LOCAL: AtomicBool = AtomicBool::new(false);
+                    if !LOGGED_FIRST_SWALLOW_LOCAL.swap(true, Ordering::Relaxed) {
+                        log::info!("[Mac] 首次吞掉本机输入事件（LocalControlling）");
                     }
                     None
+                }
+                CONTROL_STATE_REMOTE_CONTROLLING => {
+                    // 被控端：吞掉物理输入（防止干扰），但放行自注入的合成事件
+                    // v0.1.56 BUG-040 修复：
+                    // inject_scroll/inject_mouse_button/inject_mouse_move 注入的 CGEvent 会经过
+                    // 同进程的 CGEventTap。如果不放行，被控端注入的滚轮/按键/拖拽事件全部被吞，
+                    // 导致滚轮不响应、拖拽无效、文字无法选择。
+                    // 通过 KVMINI_INJECT_USER_DATA magic 识别自注入事件并放行。
+                    let user_data = event.get_integer_value_field(K_CG_EVENT_SOURCE_USER_DATA);
+                    let is_synthetic = user_data == KVMINI_INJECT_USER_DATA;
+                    if is_synthetic {
+                        log::trace!("[Mac] RemoteControlling: 放行自注入合成事件 type={:?}", event_type);
+                        Some(event.to_owned())
+                    } else {
+                        use std::sync::atomic::AtomicBool;
+                        static LOGGED_FIRST_SWALLOW_REMOTE: AtomicBool = AtomicBool::new(false);
+                        if !LOGGED_FIRST_SWALLOW_REMOTE.swap(true, Ordering::Relaxed) {
+                            log::info!("[Mac] 首次吞掉物理输入事件（RemoteControlling）");
+                        }
+                        None
+                    }
                 }
                 _ => {
                     // Idle/Armed：完全放行（防误吞，是最关键的安全兜底）
