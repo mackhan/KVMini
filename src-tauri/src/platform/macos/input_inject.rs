@@ -84,6 +84,14 @@ impl InputExecutor for MacInputExecutor {
 #[cfg(target_os = "macos")]
 extern "C" {
     fn CGEventSourceButtonState(stateID: u32, button: u32) -> bool;
+    /// CGEventSourceFlagsState — 查询 HID 层当前修饰键状态 flags（CGEventFlags 格式）
+    fn CGEventSourceFlagsState(stateID: u32) -> u64;
+}
+
+/// 内部别名，避免与 extern 块中名称冲突
+#[cfg(target_os = "macos")]
+unsafe fn cg_event_source_flags_state(state_id: u32) -> u64 {
+    CGEventSourceFlagsState(state_id)
 }
 
 /// HIDSystemState (= 1) 对应 CGEventSourceStateID::HIDSystemState
@@ -177,6 +185,31 @@ fn inject_key(native_keycode: u16, pressed: bool) -> KvmResult<()> {
     let event = CGEvent::new_keyboard_event(source, cg_code as CGKeyCode, pressed)
         .map_err(|_| platform_err!("CGEvent::new_keyboard_event",
             format!("创建键盘事件失败: keysym={:#06X} cg_code={}", native_keycode, cg_code)))?;
+
+    // v0.1.57 BUG-042 修复：补充 CGEvent flags（修饰键状态）
+    // macOS 截图快捷键（Cmd+Shift+4）检测依赖 CGEvent.flags，
+    // 若只注入 KeyDown 但 flags 中没有对应修饰键位，系统不识别为快捷键组合。
+    // 方案：读取 HIDSystemState 下当前修饰键状态并设置到每个注入事件上。
+    // CGEventSource::get_type_state_id_key(HIDSystemState) 可查询 modifier flags。
+    // HIDSystemState 下读取 flagsStateID 的正确 API 是 get_integer_value_field，
+    // 但 CGEventSource 没有直接暴露 modifier flags 接口；
+    // 改用 CGEventSourceFlagsState(HIDSystemState) FFI 读取物理修饰键状态，
+    // 再设置到 event.flags。
+    {
+        use core_graphics::event::CGEventFlags;
+        let hid_flags = unsafe { cg_event_source_flags_state(CG_HID_SYSTEM_STATE) };
+        // 只保留修饰键相关位（避免带入无关 flags 破坏事件）
+        const MODIFIER_MASK: u64 = 0x000F_FFFF_0000_0000; // macOS modifier flags 掩码
+        let clean_flags = CGEventFlags::from_bits_truncate(hid_flags & MODIFIER_MASK);
+        if clean_flags.bits() != 0 {
+            log::debug!(
+                "[Mac/Inject] key keysym={:#06X} 附加 flags={:#018X}",
+                native_keycode, clean_flags.bits()
+            );
+            event.set_flags(clean_flags);
+        }
+    }
+
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);
     Ok(())

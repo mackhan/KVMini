@@ -57,6 +57,8 @@ pub enum EventType {
     SwitchBackControl = 0x32,
     /// 鼠标相对位移（v0.1.40 delta 模式：dx/dy i16，避免 grab 后绝对坐标冻结）
     MouseMoveDelta = 0x33,
+    /// v0.1.57: 远端日志同步（Mac 被控端推送日志行到 Win 主控端）
+    PeerLog = 0x80,
 }
 
 impl EventType {
@@ -78,6 +80,7 @@ impl EventType {
             0x71 => Some(Self::AuthResponse),
             0x32 => Some(Self::SwitchBackControl),
             0x33 => Some(Self::MouseMoveDelta),
+            0x80 => Some(Self::PeerLog),
             _ => None,
         }
     }
@@ -280,6 +283,12 @@ pub enum KvmFrame {
     /// 读取硬件相对位移，远端用 `RemoteCursorState` 累加后 `CGWarpMouseCursorPosition` 落点。
     /// 这是 Synergy/Barrier/ShareMouse 等竞品的标准方案，不会因 `CGAssociateMouseAndMouseCursorPosition(0)` 冻结。
     MouseMoveDelta { dx: i16, dy: i16 },
+    /// v0.1.57: 远端日志推送
+    ///
+    /// Mac 被控端通过此帧将运行时日志行实时推送到 Win 主控端，
+    /// Win 端落盘到 `%LOCALAPPDATA%\KVMini\Logs\peer-mac\runtime.log`。
+    /// level: 0=trace 1=debug 2=info 3=warn 4=error
+    PeerLog { level: u8, message: String },
 }
 
 /// 将 KvmFrame 编码为字节序列（小端序）
@@ -358,6 +367,13 @@ pub fn encode(frame: &KvmFrame) -> Vec<u8> {
             p.extend_from_slice(&dx.to_le_bytes());
             p.extend_from_slice(&dy.to_le_bytes());
             (EventType::MouseMoveDelta, p)
+        }
+        KvmFrame::PeerLog { level, message } => {
+            let msg_bytes = message.as_bytes();
+            let mut p = Vec::with_capacity(1 + msg_bytes.len());
+            p.push(*level);
+            p.extend_from_slice(msg_bytes);
+            (EventType::PeerLog, p)
         }
     };
 
@@ -499,6 +515,12 @@ pub fn decode(buf: &[u8]) -> KvmResult<(KvmFrame, usize)> {
             let dx = i16::from_le_bytes([payload[0], payload[1]]);
             let dy = i16::from_le_bytes([payload[2], payload[3]]);
             KvmFrame::MouseMoveDelta { dx, dy }
+        }
+        EventType::PeerLog => {
+            check_min_payload(payload, 1)?;
+            let level = payload[0];
+            let message = String::from_utf8_lossy(&payload[1..]).to_string();
+            KvmFrame::PeerLog { level, message }
         }
     };
 
@@ -890,5 +912,50 @@ mod tests {
         // 确认 EventType::MouseMoveDelta 枚举正确映射到 0x33
         assert_eq!(EventType::MouseMoveDelta as u8, 0x33);
         assert_eq!(EventType::from_u8(0x33), Some(EventType::MouseMoveDelta));
+    }
+
+    // ── v0.1.57 远端日志同步（PeerLog）─────────────────────────────────────
+
+    #[test]
+    fn test_encode_decode_peer_log_roundtrip() {
+        let frame = KvmFrame::PeerLog {
+            level: 2, // info
+            message: "[Mac/Inject] scroll raw(dx=0 dy=120) → lines(x=0 y=1)".to_string(),
+        };
+        let bytes = encode(&frame);
+        let (decoded, consumed) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+        assert_eq!(consumed, bytes.len());
+        // event_type 字节应为 0x80
+        assert_eq!(bytes[2], 0x80);
+    }
+
+    #[test]
+    fn test_peer_log_level_preserved() {
+        for level in [0u8, 1, 2, 3, 4] {
+            let frame = KvmFrame::PeerLog { level, message: "test".to_string() };
+            let bytes = encode(&frame);
+            let (decoded, _) = decode(&bytes).unwrap();
+            assert_eq!(decoded, frame);
+        }
+    }
+
+    #[test]
+    fn test_peer_log_empty_message() {
+        let frame = KvmFrame::PeerLog { level: 3, message: String::new() };
+        let bytes = encode(&frame);
+        let (decoded, _) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_peer_log_unicode_message() {
+        let frame = KvmFrame::PeerLog {
+            level: 2,
+            message: "注入滚轮 dy=120 lines=1".to_string(),
+        };
+        let bytes = encode(&frame);
+        let (decoded, _) = decode(&bytes).unwrap();
+        assert_eq!(decoded, frame);
     }
 }

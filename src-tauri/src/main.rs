@@ -55,6 +55,22 @@ impl std::io::Write for DualWriter {
                 let _ = f.write_all(buf);
             }
         }
+        // v0.1.57: Mac 端将日志推送到 Win 主控端（peer log 同步）
+        // buf 为 env_logger 格式化后的完整行，解析 [LEVEL] 提取级别
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(s) = std::str::from_utf8(buf) {
+                let s = s.trim_end_matches('\n').trim_end_matches('\r');
+                if !s.is_empty() {
+                    let level: u8 = if s.contains(" [ERROR] ") { 4 }
+                        else if s.contains(" [WARN] ") { 3 }
+                        else if s.contains(" [INFO] ") { 2 }
+                        else if s.contains(" [DEBUG] ") { 1 }
+                        else { 0 }; // trace 或未知
+                    try_send_peer_log(level, s);
+                }
+            }
+        }
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -69,7 +85,7 @@ impl std::io::Write for DualWriter {
 }
 
 /// 返回日志目录路径（已确保目录存在）
-fn resolve_log_dir() -> Option<std::path::PathBuf> {
+pub fn resolve_log_dir() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").ok()?;
@@ -122,6 +138,13 @@ fn init_persistent_logger() {
     // v0.1.54: 调试模式——如果日志目录下存在 debug_mode 文件，提升日志级别到 debug
     // 用法：在日志目录下 touch debug_mode，重启应用即可看到 debug 日志；
     //       rm debug_mode 后重启恢复 info 级别
+    // v0.1.57: 调试期间自动开启 debug 模式（启动时 auto-touch debug_mode）
+    if let Some(ref dir) = log_dir {
+        let flag = dir.join("debug_mode");
+        if !flag.exists() {
+            let _ = std::fs::write(&flag, b"");
+        }
+    }
     let debug_mode = log_dir.as_ref()
         .map(|d| d.join("debug_mode").exists())
         .unwrap_or(false);
@@ -217,7 +240,70 @@ fn epoch_days_to_ymd(mut days: i64) -> (i64, u32, u32) {
 }
 
 
-/// 获取本机所有局域网 IP 列表
+// ── v0.1.57: 远端日志同步（Mac 端推日志到 Win 端）─────────────────────────────────
+
+/// Mac 端专用：全局 peer log sender
+/// 连接建立后由 `set_peer_log_sender` 注入，连接断开时清除。
+/// 日志 appender 每条 log 都会尝试通过此 channel 发 PeerLog 帧。
+#[cfg(target_os = "macos")]
+static PEER_LOG_TX: std::sync::OnceLock<
+    std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<kvm_core::protocol::KvmFrame>>>
+> = std::sync::OnceLock::new();
+
+/// 设置 peer log sender（连接建立时调用）
+#[cfg(target_os = "macos")]
+pub fn set_peer_log_sender(
+    tx: tokio::sync::mpsc::UnboundedSender<kvm_core::protocol::KvmFrame>,
+) {
+    let mutex = PEER_LOG_TX.get_or_init(|| std::sync::Mutex::new(None));
+    *mutex.lock().unwrap() = Some(tx);
+    log::info!("[PeerLog] Mac 端日志转发已启动 → Win 端 peer-mac/runtime.log");
+}
+
+/// 清除 peer log sender（连接断开时调用）
+#[cfg(target_os = "macos")]
+pub fn clear_peer_log_sender() {
+    if let Some(mutex) = PEER_LOG_TX.get() {
+        *mutex.lock().unwrap() = None;
+    }
+}
+
+/// 尝试发送一条日志帧（level: 0=trace 1=debug 2=info 3=warn 4=error）
+/// 失败静默忽略（不能在日志路径上再打日志，否则递归）
+#[cfg(target_os = "macos")]
+pub fn try_send_peer_log(level: u8, message: &str) {
+    if let Some(mutex) = PEER_LOG_TX.get() {
+        if let Ok(guard) = mutex.try_lock() {
+            if let Some(ref tx) = *guard {
+                let _ = tx.send(kvm_core::protocol::KvmFrame::PeerLog {
+                    level,
+                    message: message.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// macOS 端：定时批量刷日志缓冲（避免每条都走 TCP）
+/// 启动一个后台 task，消费 rx 并通过 ConnectionManager 发帧
+#[cfg(target_os = "macos")]
+pub fn start_peer_log_flush_task(app: tauri::AppHandle) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<kvm_core::protocol::KvmFrame>();
+    set_peer_log_sender(tx);
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(frame) = rx.recv().await {
+            if let Some(state) =
+                app.try_state::<connection::KvmConnectionManager>()
+            {
+                // 只在连接状态下发，否则静默丢弃（避免累积 OOM）
+                let _ = state.inner_send_frame(&frame).await;
+            }
+        }
+    });
+}
+
+
 ///
 /// 排除法：排除 回环 / IPv6 link-local / APIPA(169.254.x) / 0.0.0.0，
 /// 保留其他所有 IPv4 地址（兼容企业内网如 30.x.x.x 等非 RFC1918 网段）。
@@ -1042,6 +1128,24 @@ fn request_admin_elevation() -> Result<(), String> {
 #[tauri::command]
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.57".to_string(),
+            date: "2026-05-11".to_string(),
+            changes: vec![
+                "修复 Win 主控端鼠标双击窗口无响应、拖动丢中间帧（BUG-041）：LL Hook 补全 WM_LBUTTONDBLCLK/WM_RBUTTONDBLCLK/WM_MBUTTONDBLCLK，映射为 MouseDown 帧，双击/拖动不再丢第二次按下事件".to_string(),
+                "修复 Mac 被控端 Win+Shift+4 组合键（Cmd+Shift+4 截图）无响应（BUG-042）：inject_key 注入时通过 CGEventSourceFlagsState(HIDSystemState) 读取当前修饰键状态并设置到 CGEvent.flags，macOS 截图快捷键检测现在能正确识别 Cmd+Shift 组合".to_string(),
+                "修复 Mac 被控端 KVMini 窗口激活时本地触摸板无法抢占（BUG-043）：RemoteControlling 状态下改为 pass-through（不吞物理事件），本地光标自由移动，PreemptDetector 继续累积位移到 40px 后触发抢占回切".to_string(),
+                "新增远端日志同步：Mac 被控端每条日志通过现有 KVM TCP 连接发 PeerLog 帧（0x80）到 Win 主控端，落盘到 %LOCALAPPDATA%\\KVMini\\Logs\\peer-mac\\runtime.log，无需远程登录即可实时调试".to_string(),
+                "调试期间自动开启 debug 模式（启动时 auto-touch debug_mode），鼠标/键盘事件 debug 日志默认可见，解决后可手动删除 debug_mode 文件".to_string(),
+            ],
+            changes_en: vec![
+                "Fix Win controller mouse double-click not responding and drag missing intermediate frames (BUG-041): LL Hook now handles WM_LBUTTONDBLCLK/WM_RBUTTONDBLCLK/WM_MBUTTONDBLCLK, mapping them to MouseDown frames so the second press event is no longer dropped".to_string(),
+                "Fix Win+Shift+4 (Cmd+Shift+4 screenshot) not working on Mac target (BUG-042): inject_key now reads current modifier state via CGEventSourceFlagsState(HIDSystemState) and sets CGEvent.flags, so macOS screenshot shortcut detection correctly recognizes Cmd+Shift combinations".to_string(),
+                "Fix Mac target local trackpad unable to preempt control when KVMini window is active (BUG-043): RemoteControlling now uses pass-through instead of swallowing physical events, local cursor moves freely while PreemptDetector accumulates 40px to trigger preempt".to_string(),
+                "Add remote log sync: Mac target streams each log line via existing KVM TCP connection as PeerLog frames (0x80) to Win controller, written to %LOCALAPPDATA%\\KVMini\\Logs\\peer-mac\\runtime.log for real-time debugging without remote access".to_string(),
+                "Auto-enable debug mode during debugging period (auto-touch debug_mode on startup), mouse/keyboard event debug logs visible by default; delete debug_mode file to restore info level".to_string(),
+            ],
+        },
         tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.56".to_string(),
             date: "2026-05-11".to_string(),
@@ -1912,6 +2016,10 @@ async fn main() {
                 env!("CARGO_PKG_VERSION"),
                 platform::platform_name()
             );
+
+            // v0.1.57: Mac 端启动远端日志推送 task
+            #[cfg(target_os = "macos")]
+            start_peer_log_flush_task(app.handle().clone());
 
             // 启动后台自动更新检查（启动后 10 秒首次检查，之后每 4 小时一次）
             start_background_update_check(app.handle().clone());

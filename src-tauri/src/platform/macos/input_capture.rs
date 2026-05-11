@@ -427,25 +427,22 @@ fn start_event_tap_in_current_thread(
                     None
                 }
                 CONTROL_STATE_REMOTE_CONTROLLING => {
-                    // 被控端：吞掉物理输入（防止干扰），但放行自注入的合成事件
-                    // v0.1.56 BUG-040 修复：
-                    // inject_scroll/inject_mouse_button/inject_mouse_move 注入的 CGEvent 会经过
-                    // 同进程的 CGEventTap。如果不放行，被控端注入的滚轮/按键/拖拽事件全部被吞，
-                    // 导致滚轮不响应、拖拽无效、文字无法选择。
-                    // 通过 KVMINI_INJECT_USER_DATA magic 识别自注入事件并放行。
-                    let user_data = event.get_integer_value_field(K_CG_EVENT_SOURCE_USER_DATA);
-                    let is_synthetic = user_data == KVMINI_INJECT_USER_DATA;
-                    if is_synthetic {
-                        log::trace!("[Mac] RemoteControlling: 放行自注入合成事件 type={:?}", event_type);
-                        Some(event.to_owned())
-                    } else {
-                        use std::sync::atomic::AtomicBool;
-                        static LOGGED_FIRST_SWALLOW_REMOTE: AtomicBool = AtomicBool::new(false);
-                        if !LOGGED_FIRST_SWALLOW_REMOTE.swap(true, Ordering::Relaxed) {
-                            log::info!("[Mac] 首次吞掉物理输入事件（RemoteControlling）");
-                        }
-                        None
-                    }
+                    // v0.1.57 BUG-043 修复：被控端不再吞物理输入事件（pass-through）
+                    //
+                    // 旧行为：RemoteControlling 时吞掉所有非合成物理事件（返回 None）。
+                    // 问题：Mac 窗口激活后用户触摸板小幅移动 < 40px 无法累积到 PreemptDetector
+                    //       阈值，且触摸板操作被吞导致用户感觉"本地控制权被锁死"。
+                    //
+                    // 新行为：完全 pass-through（返回 Some(event)），本地光标自由移动。
+                    // 根据：
+                    //   1. 被控端已通过 DecoupleCursor（CGAssociateMouseAndMouseCursorPosition(0)）
+                    //      断开物理鼠标与光标绑定，故物理移动不会干扰远端虚拟光标坐标。
+                    //   2. PreemptDetector 已在上方收到 Move/KeyDown 样本；
+                    //      pass-through 不影响抢占检测，只是让本地光标视觉上可以自由移动。
+                    //   3. 这与 Synergy/Barrier 的行为一致：被控端可以随时物理移动光标来抢占。
+                    //
+                    // 合成事件（自注入）同样 pass-through（之前已经是，保持不变）。
+                    Some(event.to_owned())
                 }
                 _ => {
                     // Idle/Armed：完全放行（防误吞，是最关键的安全兜底）
@@ -798,9 +795,10 @@ mod tests {
     #[test]
     fn test_state_to_decision_truth_table() {
         fn should_swallow(state: u8) -> bool {
+            // v0.1.57 BUG-043: RemoteControlling 改为 pass-through，不再吞物理事件
             matches!(
                 state,
-                CONTROL_STATE_LOCAL_CONTROLLING | CONTROL_STATE_REMOTE_CONTROLLING
+                CONTROL_STATE_LOCAL_CONTROLLING
             )
         }
         // Idle → 放行（返回 Some）
@@ -810,10 +808,10 @@ mod tests {
             should_swallow(CONTROL_STATE_LOCAL_CONTROLLING),
             "LocalControlling 必须吞"
         );
-        // Remote → 吞
+        // Remote → 放行（v0.1.57: pass-through，让本地触摸板自由移动）
         assert!(
-            should_swallow(CONTROL_STATE_REMOTE_CONTROLLING),
-            "RemoteControlling 必须吞"
+            !should_swallow(CONTROL_STATE_REMOTE_CONTROLLING),
+            "RemoteControlling(v0.1.57) 改为 pass-through，不能吞物理事件"
         );
         // 未知状态 → 放行（安全兜底）
         assert!(!should_swallow(255), "未知状态必须放行（安全兜底）");

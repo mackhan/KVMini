@@ -253,6 +253,10 @@ impl KvmConnectionManager {
                                                     )
                                                     .await;
                                                 }
+                                                // v0.1.57: 远端日志同步 — 落盘到 peer-mac/runtime.log
+                                                PeerLog { level, message } => {
+                                                    write_peer_log(*level, message);
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -518,4 +522,77 @@ pub async fn get_latency(
     mgr: tauri::State<'_, KvmConnectionManager>,
 ) -> Result<Option<u64>, String> {
     Ok(mgr.get_last_latency().await)
+}
+
+// ── v0.1.57: 远端日志落盘 ──────────────────────────────────────────────────
+
+/// 将远端（Mac 被控端）日志行写入 peer-mac/runtime.log
+///
+/// 日志目录：
+/// - Windows: %LOCALAPPDATA%/KVMini/Logs/peer-mac/runtime.log
+/// - macOS:   ~/Library/Logs/KVMini/peer-mac/runtime.log（主控端在 Mac 的情况）
+///
+/// 使用全局 Mutex 文件句柄，避免每行日志都 open/close 产生大量 I/O。
+fn write_peer_log(level: u8, message: &str) {
+    use std::io::Write;
+
+    let level_str = match level {
+        0 => "TRACE",
+        1 => "DEBUG",
+        2 => "INFO",
+        3 => "WARN",
+        4 => "ERROR",
+        _ => "UNKNOWN",
+    };
+
+    // 本地也打印一条 info，方便主控端调试
+    log::debug!("[PeerLog/Mac] [{}] {}", level_str, message);
+
+    static PEER_LOG_FILE: std::sync::OnceLock<std::sync::Mutex<Option<std::fs::File>>> =
+        std::sync::OnceLock::new();
+
+    let file_mutex = PEER_LOG_FILE.get_or_init(|| {
+        let file = (|| -> Option<std::fs::File> {
+            // 内联日志目录解析（与 main.rs resolve_log_dir 保持一致）
+            #[cfg(target_os = "windows")]
+            let dir = {
+                let local = std::env::var("LOCALAPPDATA").ok()?;
+                std::path::PathBuf::from(local).join("KVMini").join("Logs")
+            };
+            #[cfg(target_os = "macos")]
+            let dir = {
+                let home = std::env::var("HOME").ok()?;
+                std::path::PathBuf::from(home).join("Library").join("Logs").join("KVMini")
+            };
+            #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+            let dir = {
+                let home = std::env::var("HOME").ok()?;
+                std::path::PathBuf::from(home).join(".local").join("share").join("KVMini").join("logs")
+            };
+            let peer_dir = dir.join("peer-mac");
+            std::fs::create_dir_all(&peer_dir).ok()?;
+            let path = peer_dir.join("runtime.log");
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .map_err(|e| {
+                    log::warn!("[PeerLog] 无法打开 peer-mac/runtime.log: {}", e);
+                })
+                .ok()
+        })();
+        std::sync::Mutex::new(file)
+    });
+
+    if let Ok(mut guard) = file_mutex.lock() {
+        if let Some(ref mut f) = *guard {
+            // 简单时间戳（UTC 秒）+ 级别 + 消息
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let line = format!("{} [{}] {}\n", ts, level_str, message);
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
 }

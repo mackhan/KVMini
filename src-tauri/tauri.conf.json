@@ -1,5 +1,6 @@
 {
   "productName": "KVMini",
+  "version": "0.1.57",
   "identifier": "com.kvmini",
   "build": {
     "beforeDevCommand": "",

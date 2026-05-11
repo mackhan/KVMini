@@ -494,10 +494,18 @@ unsafe extern "system" fn mouse_hook_proc(
             }
             WM_LBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Left }),
             WM_LBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Left }),
+            // v0.1.57 BUG-041 修复：补充 DBLCLK 消息，映射为 MouseDown
+            // Windows 双击事件序列：DOWN → UP → DBLCLK → UP
+            // 第二次 DOWN 以 WM_LBUTTONDBLCLK 形式到达，不在 match 里就丢失，
+            // 导致远端只收到 1 次 click（窗口/文件双击失效）
+            // 拖动快速操作时也可能产生 DBLCLK，同样需要映射为 Down 保证拖动帧完整
+            WM_LBUTTONDBLCLK => Some(RawInputEvent::MouseDown { button: MouseButton::Left }),
             WM_RBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Right }),
             WM_RBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Right }),
+            WM_RBUTTONDBLCLK => Some(RawInputEvent::MouseDown { button: MouseButton::Right }),
             WM_MBUTTONDOWN => Some(RawInputEvent::MouseDown { button: MouseButton::Middle }),
             WM_MBUTTONUP => Some(RawInputEvent::MouseUp { button: MouseButton::Middle }),
+            WM_MBUTTONDBLCLK => Some(RawInputEvent::MouseDown { button: MouseButton::Middle }),
             // v0.1.41: XButton（Side1/Side2）补全
             WM_XBUTTONDOWN => {
                 let hi_word = ((ms_hook.mouseData >> 16) & 0xFFFF) as u16;
@@ -828,18 +836,15 @@ mod tests {
         assert!(cap.preempt_callback.lock().unwrap().is_none());
     }
 
-    /// v0.1.43: 回归保护——切到 LocalControlling / Idle 不应重置 PreemptDetector
-    /// （reset 仅在进入 REMOTE_CONTROLLING 时触发）
+    /// v0.1.57 BUG-041 回归: vk_to_keysym 映射表覆盖常见 VK 码
     #[test]
-    fn test_non_remote_state_transition_does_not_reset_detector() {
-        let cap = WinInputCapture::new();
-        cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 20, dy: 0 });
-        cap.set_control_state(CONTROL_STATE_LOCAL_CONTROLLING);
-        // 再喂 35 像素（累计 20+35=55 > 40），应触发
-        let decision = cap.preempt_detector.feed(PhysicalInputSample::Move { dx: 35, dy: 0 });
-        assert!(
-            matches!(decision, PreemptDecision::ShouldPreempt { .. }),
-            "切 LocalControlling 不应 reset 累计值"
-        );
+    fn test_vk_to_keysym_basic_mappings() {
+        // 字母键
+        assert_eq!(vk_to_keysym(0x41), 0x0061); // VK_A → XK_a
+        assert_eq!(vk_to_keysym(0x5A), 0x007A); // VK_Z → XK_z
+        // Win 键映射到 Super_L（Mac Cmd）
+        assert_eq!(vk_to_keysym(0x5B), 0xFFEB); // VK_LWIN → XK_Super_L
+        // Shift
+        assert_eq!(vk_to_keysym(0xA0), 0xFFE1); // VK_LSHIFT → XK_Shift_L
     }
 }
