@@ -253,6 +253,160 @@ impl Default for CommandKeyMapping {
     }
 }
 
+/// Windows VirtualKey → X11 KeySym 转换（Win 主控端采集时调用）
+///
+/// 与 `keysym_to_vk`（Win 被控端注入时用）互为逆向。
+/// 采用与 Barrier/Deskflow 相同的 X11 KeySym 作为协议中间层。
+///
+/// 键位映射统一模式（key_mapping_unified=true）：
+///   VK_LCONTROL / VK_RCONTROL → XK_Super_L / XK_Super_R
+///   即 Win 端 Ctrl+C → Mac 被控端收到 Cmd+C（实现统一复制快捷键）
+pub fn vk_to_keysym(vk: u16, unified: bool) -> u16 {
+    // 统一模式：Ctrl → Cmd（Super）
+    if unified {
+        match vk {
+            0xA2 => return 0xFFEB, // VK_LCONTROL → XK_Super_L
+            0xA3 => return 0xFFEC, // VK_RCONTROL → XK_Super_R
+            0x11 => return 0xFFEB, // VK_CONTROL  → XK_Super_L（泛化 Ctrl）
+            _ => {}
+        }
+    }
+    match vk {
+        // ── 字母键 ──────────────────────────────────────────────────────
+        0x41 => 0x0061, // VK_A → XK_a
+        0x42 => 0x0062, // VK_B → XK_b
+        0x43 => 0x0063, // VK_C → XK_c
+        0x44 => 0x0064, // VK_D → XK_d
+        0x45 => 0x0065, // VK_E → XK_e
+        0x46 => 0x0066, // VK_F → XK_f
+        0x47 => 0x0067, // VK_G → XK_g
+        0x48 => 0x0068, // VK_H → XK_h
+        0x49 => 0x0069, // VK_I → XK_i
+        0x4A => 0x006A, // VK_J → XK_j
+        0x4B => 0x006B, // VK_K → XK_k
+        0x4C => 0x006C, // VK_L → XK_l
+        0x4D => 0x006D, // VK_M → XK_m
+        0x4E => 0x006E, // VK_N → XK_n
+        0x4F => 0x006F, // VK_O → XK_o
+        0x50 => 0x0070, // VK_P → XK_p
+        0x51 => 0x0071, // VK_Q → XK_q
+        0x52 => 0x0072, // VK_R → XK_r
+        0x53 => 0x0073, // VK_S → XK_s
+        0x54 => 0x0074, // VK_T → XK_t
+        0x55 => 0x0075, // VK_U → XK_u
+        0x56 => 0x0076, // VK_V → XK_v
+        0x57 => 0x0077, // VK_W → XK_w
+        0x58 => 0x0078, // VK_X → XK_x
+        0x59 => 0x0079, // VK_Y → XK_y
+        0x5A => 0x007A, // VK_Z → XK_z
+        // ── 数字键 ──────────────────────────────────────────────────────
+        0x30 => 0x0030, // VK_0 → XK_0
+        0x31 => 0x0031, // VK_1 → XK_1
+        0x32 => 0x0032, // VK_2 → XK_2
+        0x33 => 0x0033, // VK_3 → XK_3
+        0x34 => 0x0034, // VK_4 → XK_4
+        0x35 => 0x0035, // VK_5 → XK_5
+        0x36 => 0x0036, // VK_6 → XK_6
+        0x37 => 0x0037, // VK_7 → XK_7
+        0x38 => 0x0038, // VK_8 → XK_8
+        0x39 => 0x0039, // VK_9 → XK_9
+        // ── 空格 / 退格 / Tab / Esc / Enter ─────────────────────────────
+        0x08 => 0xFF08, // VK_BACK    → XK_BackSpace
+        0x09 => 0xFF09, // VK_TAB     → XK_Tab
+        0x0D => 0xFF0D, // VK_RETURN  → XK_Return
+        0x1B => 0xFF1B, // VK_ESCAPE  → XK_Escape
+        0x20 => 0x0020, // VK_SPACE   → XK_space
+        // ── 符号键 ──────────────────────────────────────────────────────
+        0xBB => 0x003D, // VK_OEM_PLUS         → XK_equal
+        0xBD => 0x002D, // VK_OEM_MINUS        → XK_minus
+        0xDB => 0x005B, // VK_OEM_4            → XK_bracketleft
+        0xDD => 0x005D, // VK_OEM_6            → XK_bracketright
+        0xDE => 0x0027, // VK_OEM_7            → XK_apostrophe
+        0xBA => 0x003B, // VK_OEM_1            → XK_semicolon
+        0xDC => 0x005C, // VK_OEM_5            → XK_backslash
+        0xBC => 0x002C, // VK_OEM_COMMA        → XK_comma
+        0xBF => 0x002F, // VK_OEM_2            → XK_slash
+        0xBE => 0x002E, // VK_OEM_PERIOD       → XK_period
+        0xC0 => 0x0060, // VK_OEM_3            → XK_grave
+        // ── 方向键 ──────────────────────────────────────────────────────
+        0x25 => 0xFF51, // VK_LEFT  → XK_Left
+        0x26 => 0xFF52, // VK_UP    → XK_Up
+        0x27 => 0xFF53, // VK_RIGHT → XK_Right
+        0x28 => 0xFF54, // VK_DOWN  → XK_Down
+        // ── 功能键 F1-F15 ────────────────────────────────────────────────
+        0x70 => 0xFFBE, // VK_F1
+        0x71 => 0xFFBF, // VK_F2
+        0x72 => 0xFFC0, // VK_F3
+        0x73 => 0xFFC1, // VK_F4
+        0x74 => 0xFFC2, // VK_F5
+        0x75 => 0xFFC3, // VK_F6
+        0x76 => 0xFFC4, // VK_F7
+        0x77 => 0xFFC5, // VK_F8
+        0x78 => 0xFFC6, // VK_F9
+        0x79 => 0xFFC7, // VK_F10
+        0x7A => 0xFFC8, // VK_F11
+        0x7B => 0xFFC9, // VK_F12
+        0x7C => 0xFFCA, // VK_F13
+        0x7D => 0xFFCB, // VK_F14
+        0x7E => 0xFFCC, // VK_F15
+        // ── 修饰键 ──────────────────────────────────────────────────────
+        0xA0 => 0xFFE1, // VK_LSHIFT   → XK_Shift_L
+        0xA1 => 0xFFE2, // VK_RSHIFT   → XK_Shift_R
+        0xA2 => 0xFFE3, // VK_LCONTROL → XK_Control_L（透明模式）
+        0xA3 => 0xFFE4, // VK_RCONTROL → XK_Control_R
+        0x10 => 0xFFE1, // VK_SHIFT    → XK_Shift_L
+        0x11 => 0xFFE3, // VK_CONTROL  → XK_Control_L
+        0xA4 => 0xFFE9, // VK_LMENU    → XK_Alt_L
+        0xA5 => 0xFFEA, // VK_RMENU    → XK_Alt_R
+        0x12 => 0xFFE9, // VK_MENU     → XK_Alt_L
+        0x5B => 0xFFEB, // VK_LWIN     → XK_Super_L (= Mac Cmd_L)
+        0x5C => 0xFFEC, // VK_RWIN     → XK_Super_R (= Mac Cmd_R)
+        0x14 => 0xFFE5, // VK_CAPITAL  → XK_Caps_Lock
+        // ── 扩展键 ──────────────────────────────────────────────────────
+        0x2D => 0xFF63, // VK_INSERT    → XK_Insert
+        0x2E => 0xFFFF, // VK_DELETE    → XK_Delete
+        0x24 => 0xFF50, // VK_HOME      → XK_Home
+        0x23 => 0xFF57, // VK_END       → XK_End
+        0x21 => 0xFF55, // VK_PRIOR     → XK_Page_Up
+        0x22 => 0xFF56, // VK_NEXT      → XK_Page_Down
+        // ── 数字键盘 ────────────────────────────────────────────────────
+        0x60 => 0xFFB0, // VK_NUMPAD0   → XK_KP_0
+        0x61 => 0xFFB1, // VK_NUMPAD1   → XK_KP_1
+        0x62 => 0xFFB2, // VK_NUMPAD2   → XK_KP_2
+        0x63 => 0xFFB3, // VK_NUMPAD3   → XK_KP_3
+        0x64 => 0xFFB4, // VK_NUMPAD4   → XK_KP_4
+        0x65 => 0xFFB5, // VK_NUMPAD5   → XK_KP_5
+        0x66 => 0xFFB6, // VK_NUMPAD6   → XK_KP_6
+        0x67 => 0xFFB7, // VK_NUMPAD7   → XK_KP_7
+        0x68 => 0xFFB8, // VK_NUMPAD8   → XK_KP_8
+        0x69 => 0xFFB9, // VK_NUMPAD9   → XK_KP_9
+        0x6A => 0xFFAA, // VK_MULTIPLY  → XK_KP_Multiply
+        0x6B => 0xFFAB, // VK_ADD       → XK_KP_Add
+        0x6D => 0xFFAD, // VK_SUBTRACT  → XK_KP_Subtract
+        0x6E => 0xFFAE, // VK_DECIMAL   → XK_KP_Decimal
+        0x6F => 0xFFAF, // VK_DIVIDE    → XK_KP_Divide
+        0x90 => 0xFF7F, // VK_NUMLOCK   → XK_Num_Lock
+        // ── 未映射：透传 ────────────────────────────────────────────────
+        other => {
+            log::debug!("[KeyMap/Win→KeySym] 未知 VK {:#06X}, 透传", other);
+            other
+        }
+    }
+}
+
+/// Mac CGKeyCode 采集时的键位统一模式转换（Mac 主控端采集时调用）
+///
+/// 统一模式（key_mapping_unified=true）：
+///   LEFT_CMD / RIGHT_CMD → Ctrl KeySym（即发 XK_Control_L/R）
+///   让 Mac 端 Cmd+C 在 Win 被控端注入为 Ctrl+C
+pub fn cg_cmd_to_keysym_unified(cg_keycode: u16) -> Option<u16> {
+    match cg_keycode {
+        55 => Some(0xFFE3), // LEFT_CMD  → XK_Control_L
+        54 => Some(0xFFE4), // RIGHT_CMD → XK_Control_R
+        _ => None,
+    }
+}
+
 /// 键码映射器
 pub struct KeycodeMapper {
     cg_to_vk: HashMap<u16, u16>,
@@ -448,5 +602,70 @@ mod tests {
         assert_eq!(m.cg_to_vk(cg_key::DELETE), Some(vk::BACK));
         assert_eq!(m.cg_to_vk(cg_key::FORWARD_DELETE), Some(vk::DELETE));
         assert_eq!(m.cg_to_vk(cg_key::ESCAPE), Some(vk::ESCAPE));
+    }
+
+    // ── vk_to_keysym 双向完整性测试 ────────────────────────────────────────
+
+    #[test]
+    fn test_vk_to_keysym_alpha_transparent() {
+        // 透明模式：字母键 VK→KeySym
+        assert_eq!(vk_to_keysym(0x41, false), 0x0061); // VK_A → XK_a
+        assert_eq!(vk_to_keysym(0x5A, false), 0x007A); // VK_Z → XK_z
+        assert_eq!(vk_to_keysym(0x43, false), 0x0063); // VK_C → XK_c
+    }
+
+    #[test]
+    fn test_vk_to_keysym_special_transparent() {
+        assert_eq!(vk_to_keysym(0x08, false), 0xFF08); // VK_BACK  → XK_BackSpace
+        assert_eq!(vk_to_keysym(0x0D, false), 0xFF0D); // VK_RETURN → XK_Return
+        assert_eq!(vk_to_keysym(0x20, false), 0x0020); // VK_SPACE → XK_space
+        assert_eq!(vk_to_keysym(0x1B, false), 0xFF1B); // VK_ESCAPE → XK_Escape
+    }
+
+    #[test]
+    fn test_vk_to_keysym_modifiers_transparent() {
+        // 透明模式：Ctrl→Ctrl，Win键→Super
+        assert_eq!(vk_to_keysym(0xA2, false), 0xFFE3); // VK_LCONTROL → XK_Control_L
+        assert_eq!(vk_to_keysym(0x5B, false), 0xFFEB); // VK_LWIN → XK_Super_L
+        assert_eq!(vk_to_keysym(0xA0, false), 0xFFE1); // VK_LSHIFT → XK_Shift_L
+        assert_eq!(vk_to_keysym(0xA4, false), 0xFFE9); // VK_LMENU → XK_Alt_L
+    }
+
+    #[test]
+    fn test_vk_to_keysym_unified_ctrl_becomes_cmd() {
+        // 统一模式：Ctrl → Cmd(Super)
+        assert_eq!(vk_to_keysym(0xA2, true), 0xFFEB); // VK_LCONTROL → XK_Super_L
+        assert_eq!(vk_to_keysym(0xA3, true), 0xFFEC); // VK_RCONTROL → XK_Super_R
+        assert_eq!(vk_to_keysym(0x11, true), 0xFFEB); // VK_CONTROL  → XK_Super_L
+    }
+
+    #[test]
+    fn test_vk_to_keysym_unified_other_keys_unchanged() {
+        // 统一模式：其他键不变
+        assert_eq!(vk_to_keysym(0x41, true), 0x0061); // VK_A 不变
+        assert_eq!(vk_to_keysym(0x5B, true), 0xFFEB); // VK_LWIN → XK_Super_L
+        assert_eq!(vk_to_keysym(0xA0, true), 0xFFE1); // VK_LSHIFT 不变
+    }
+
+    #[test]
+    fn test_cg_cmd_to_keysym_unified() {
+        // Mac 统一模式：Cmd→Ctrl
+        assert_eq!(cg_cmd_to_keysym_unified(55), Some(0xFFE3)); // LEFT_CMD → XK_Control_L
+        assert_eq!(cg_cmd_to_keysym_unified(54), Some(0xFFE4)); // RIGHT_CMD → XK_Control_R
+        assert_eq!(cg_cmd_to_keysym_unified(0), None);           // 非 Cmd 键
+    }
+
+    #[test]
+    fn test_vk_to_keysym_arrows() {
+        assert_eq!(vk_to_keysym(0x25, false), 0xFF51); // VK_LEFT → XK_Left
+        assert_eq!(vk_to_keysym(0x26, false), 0xFF52); // VK_UP   → XK_Up
+        assert_eq!(vk_to_keysym(0x27, false), 0xFF53); // VK_RIGHT → XK_Right
+        assert_eq!(vk_to_keysym(0x28, false), 0xFF54); // VK_DOWN  → XK_Down
+    }
+
+    #[test]
+    fn test_vk_to_keysym_fn_keys() {
+        assert_eq!(vk_to_keysym(0x70, false), 0xFFBE); // VK_F1 → XK_F1
+        assert_eq!(vk_to_keysym(0x7B, false), 0xFFC9); // VK_F12 → XK_F12
     }
 }

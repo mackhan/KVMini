@@ -1958,6 +1958,7 @@ async fn main() {
             // 键鼠共享（Bug 2 / BUG-019）
             sharing::toggle_sharing,
             sharing::get_control_state,
+            sharing::apply_sharing_settings,
             // v0.1.41: Windows 权限检测
             check_admin_permission,
             request_admin_elevation,

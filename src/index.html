@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="0.1.56">
+    <meta name="app-version" content="0.1.58">
     <title data-i18n="pageTitle">KVMini - 跨平台键鼠共享</title>
     <link rel="stylesheet" href="styles.css">
     <!-- 主题防闪烁：在页面渲染前立即应用已保存的主题 -->
@@ -408,6 +408,19 @@
                                     </label>
                                 </div>
                                 <p class="feature-hint" data-i18n="hintClipboardSync">开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）</p>
+                            </div>
+
+                            <!-- 键位映射 -->
+                            <div class="settings-section">
+                                <h4 data-i18n="settingsKeyMapping">键位映射</h4>
+                                <div class="settings-item">
+                                    <label data-i18n="labelKeyMappingUnified">统一 Cmd/Ctrl 快捷键:</label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="key-mapping-unified" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p class="feature-hint" data-i18n="hintKeyMappingUnified">开启后，Mac 的 Command 键与 Windows 的 Ctrl 键互相对应（如 Mac 端 Cmd+C 在 Windows 被控端执行为 Ctrl+C）</p>
                             </div>
                         </div>
 

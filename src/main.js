@@ -166,6 +166,8 @@ async function initApp() {
         themeSelect: document.getElementById('theme-select'),
         // 剪贴板共享
         clipboardSync: document.getElementById('clipboard-sync'),
+        // 键位映射
+        keyMappingUnified: document.getElementById('key-mapping-unified'),
         // KVM 键鼠切换（plan v0.1.38 BUG-022）
         edgeTriggerToggle: document.getElementById('edge-trigger-toggle'),
         edgeThresholdInput: document.getElementById('edge-threshold-input'),
@@ -1483,6 +1485,10 @@ function loadSettingsToUI() {
     if (elements.clipboardSync) {
         elements.clipboardSync.checked = appState.settings.clipboardSync !== false;
     }
+    // 键位映射统一模式（v0.1.58）
+    if (elements.keyMappingUnified) {
+        elements.keyMappingUnified.checked = appState.settings.keyMappingUnified !== false;
+    }
     // 键鼠切换（plan v0.1.38 BUG-022）：兼容两种键名
     //  - appState.settings.edgeTrigger / edgeThreshold（前端 camelCase）
     //  - appState.settings.edge_trigger / edge_threshold（后端 snake_case）
@@ -1531,6 +1537,7 @@ async function saveSettings() {
         autoStart: elements.autoStart.checked,
         startMinimized: elements.startMinimized.checked,
         clipboardSync: elements.clipboardSync ? elements.clipboardSync.checked : true,
+        keyMappingUnified: elements.keyMappingUnified ? elements.keyMappingUnified.checked : true,
         // 键鼠切换（plan v0.1.38 BUG-022）：camelCase 供前端消费
         edgeTrigger: elements.edgeTriggerToggle ? elements.edgeTriggerToggle.checked : true,
         edgeThreshold: elements.edgeThresholdInput
@@ -1576,11 +1583,21 @@ async function saveSettings() {
                 edge_threshold: Math.max(1, Math.min(50,
                     parseInt(appState.settings.edgeThreshold, 10) || 5)),
                 clipboard_sync: appState.settings.clipboardSync !== false,
+                key_mapping_unified: appState.settings.keyMappingUnified !== false,
                 autostart: appState.settings.autoStart === true,
                 enable_tls: appState.settings.enableTls !== false,
                 auto_reconnect: appState.settings.autoReconnect !== false,
             };
             await invoke('save_settings', { config: backendPayload });
+            // v0.1.58: 同步运行时剪贴板开关和键位映射设置（无需重启）
+            try {
+                await invoke('apply_sharing_settings', {
+                    clipboardSync: appState.settings.clipboardSync !== false,
+                    keyMappingUnified: appState.settings.keyMappingUnified !== false,
+                });
+            } catch (e) {
+                console.warn('[Settings] apply_sharing_settings 失败（可能未连接）:', e);
+            }
         } catch (e) {
             // 显示后端错误（如开机自启动注册失败）
             showError(window.i18n.t('errSettingsSavePrefix') + e);

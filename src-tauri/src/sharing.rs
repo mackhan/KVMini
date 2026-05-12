@@ -34,10 +34,11 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kvm_core::clipboard::ClipboardSync;
 use kvm_core::config::ScreenLayout;
 use kvm_core::edge_logic::{EdgeConfig, EdgeDetectResult, EdgeDetector};
 use kvm_core::error::KvmResult;
-use kvm_core::platform::{CursorController, FocusKeeper, InputBlocker, InputCapture, InputExecutor, MouseButton, RawInputEvent, VirtualDesktop};
+use kvm_core::platform::{ClipboardProvider, CursorController, FocusKeeper, InputBlocker, InputCapture, InputExecutor, MouseButton, RawInputEvent, VirtualDesktop};
 use kvm_core::preempt::PreemptCause;
 use kvm_core::protocol::{KvmFrame, ModifierState, ScreenEdge};
 use kvm_core::remote_cursor::{RemoteCursorAction, RemoteCursorState};
@@ -61,6 +62,8 @@ type PlatformBlocker = crate::platform::macos::input_block::MacInputBlocker;
 type PlatformCursor = crate::platform::macos::cursor::MacCursorController;
 #[cfg(target_os = "macos")]
 type PlatformFocusKeeper = crate::platform::macos::focus_keeper::MacFocusKeeper;
+#[cfg(target_os = "macos")]
+type PlatformClipboard = crate::platform::macos::clipboard::MacClipboardProvider;
 
 #[cfg(target_os = "windows")]
 type PlatformCapture = crate::platform::windows::input_capture::WinInputCapture;
@@ -72,6 +75,8 @@ type PlatformBlocker = crate::platform::windows::input_block::WinInputBlocker;
 type PlatformCursor = crate::platform::windows::cursor::WinCursorController;
 #[cfg(target_os = "windows")]
 type PlatformFocusKeeper = crate::platform::windows::focus_keeper::WinFocusKeeper;
+#[cfg(target_os = "windows")]
+type PlatformClipboard = crate::platform::windows::clipboard::WinClipboardProvider;
 
 // ── 控制状态 → u8（与 platform::*::input_capture 的 CONTROL_STATE_* 常量对齐） ──
 
@@ -132,6 +137,10 @@ pub struct SharingManager {
     remote_cursor: Arc<Mutex<Option<RemoteCursorState>>>,
     /// v0.1.57: 状态守卫（Watchdog + 状态快照推送）
     state_guard: Arc<crate::state_guard::StateGuard>,
+    /// v0.1.58: 剪贴板提供者
+    clipboard_provider: Arc<PlatformClipboard>,
+    /// v0.1.58: 剪贴板同步去重状态
+    clipboard_sync: Arc<Mutex<ClipboardSync>>,
 }
 
 impl Default for SharingManager {
@@ -142,9 +151,16 @@ impl Default for SharingManager {
 
 impl SharingManager {
     pub fn new() -> Self {
+        let cfg = crate::config::load_config();
+        let clipboard_enabled = cfg.clipboard_sync;
+        let key_mapping_unified = cfg.key_mapping_unified;
+
+        let capture = Arc::new(PlatformCapture::new());
+        capture.set_key_mapping_unified(key_mapping_unified);
+
         Self {
             state: Arc::new(Mutex::new(StateMachine::new())),
-            capture: Arc::new(PlatformCapture::new()),
+            capture,
             executor: Arc::new(PlatformExecutor::new()),
             blocker: Arc::new(PlatformBlocker::new()),
             cursor: Arc::new(PlatformCursor::new()),
@@ -153,6 +169,8 @@ impl SharingManager {
             edge_detector: Arc::new(Mutex::new(None)),
             remote_cursor: Arc::new(Mutex::new(None)),
             state_guard: Arc::new(crate::state_guard::StateGuard::new()),
+            clipboard_provider: Arc::new(PlatformClipboard::new()),
+            clipboard_sync: Arc::new(Mutex::new(ClipboardSync::new(clipboard_enabled))),
         }
     }
 
@@ -290,8 +308,6 @@ impl SharingManager {
                 "[Sharing] RemoteCursor 初始化：edge={:?}, pos_ratio={}, 入屏点=({}, {})",
                 edge, pos_ratio, state.x, state.y
             );
-            // 立即移动光标到入屏点（给用户视觉反馈：对方光标"刚进来"）
-            // v0.1.56: 使用 move_mouse（Mac→CGEvent / Win→SendInput），不用 set_position
             let _ = self.executor.move_mouse(state.x, state.y);
             *self.remote_cursor.lock().await = Some(state);
         } else {
@@ -299,6 +315,59 @@ impl SharingManager {
         }
 
         self.handle_state_events_with_emit(evs, app).await;
+
+        // v0.1.58: 切换控制权时同步本机剪贴板到对端（竞品标准行为）
+        self.sync_clipboard_to_remote(app).await;
+    }
+
+    /// v0.1.58: 收到对端 Clipboard 帧，写入本机剪贴板
+    pub async fn on_remote_clipboard(&self, text: String) {
+        let should_write = {
+            let mut sync = self.clipboard_sync.lock().await;
+            // mark_received 防止回环（写入后本机变化监听不再重复发给对端）
+            if sync.is_enabled() {
+                sync.mark_received(&text);
+                true
+            } else {
+                false
+            }
+        };
+        if should_write {
+            if let Err(e) = self.clipboard_provider.set_text(&text) {
+                log::warn!("[Clipboard] 写入本机剪贴板失败: {}", e);
+            } else {
+                log::info!("[Clipboard] 远端剪贴板已同步到本机（{}字节）", text.len());
+            }
+        }
+    }
+
+    /// v0.1.58: 读取本机剪贴板并发送给对端（去重）
+    pub async fn sync_clipboard_to_remote(&self, app: &tauri::AppHandle) {
+        let text = match self.clipboard_provider.get_text() {
+            Ok(Some(t)) if !t.is_empty() => t,
+            _ => return,
+        };
+        let should_send = {
+            let mut sync = self.clipboard_sync.lock().await;
+            sync.should_sync(&text)
+        };
+        if should_send {
+            log::info!("[Clipboard] 发送本机剪贴板到对端（{}字节）", text.len());
+            if let Err(e) = send_frame_via_app(app, &KvmFrame::Clipboard { text }).await {
+                log::warn!("[Clipboard] 发送剪贴板帧失败: {}", e);
+            }
+        }
+    }
+
+    /// v0.1.58: 更新剪贴板同步开关（来自设置页）
+    pub async fn set_clipboard_sync_enabled(&self, enabled: bool) {
+        self.clipboard_sync.lock().await.set_enabled(enabled);
+        log::info!("[Clipboard] 剪贴板同步 → {}", enabled);
+    }
+
+    /// v0.1.58: 更新键位映射统一模式（来自设置页）
+    pub fn set_key_mapping_unified(&self, enabled: bool) {
+        self.capture.set_key_mapping_unified(enabled);
     }
 
     /// 由 connection 事件循环调用：远端 SwitchControlAck（对端确认已进入 RemoteControlling）
@@ -373,12 +442,43 @@ impl SharingManager {
         let _ = self.capture.stop_capture();
         *self.event_tx.lock().await = None;
 
+        // v0.1.58: 停止剪贴板变化监听
+        let _ = self.clipboard_provider.stop_watching();
+
         // 推送最终状态快照
         let connected = crate::state_guard::is_connected_via_app(app).await;
         let snapshot = crate::state_guard::build_snapshot(connected, "Idle", false);
         let _ = app.emit("sharing-state-sync", snapshot);
 
         log::info!("[StateGuard] on_disconnected 执行完毕（兜底保障已生效）");
+    }
+
+    /// v0.1.58: 连接建立后调用 — 立刻同步本机剪贴板一次，并启动本机剪贴板变化监听
+    pub async fn on_connected(&self, app: &tauri::AppHandle) {
+        // 立刻同步一次（让连上就能粘贴）
+        self.sync_clipboard_to_remote(app).await;
+
+        // 启动本机剪贴板变化监听：LocalControlling 期间复制内容立即推送
+        let clipboard_sync = Arc::clone(&self.clipboard_sync);
+        let app_clone = app.clone();
+        let provider = Arc::clone(&self.clipboard_provider);
+        let _ = provider.on_change(Box::new(move |text| {
+            let sync = Arc::clone(&clipboard_sync);
+            let app2 = app_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                let should_send = {
+                    let mut s = sync.lock().await;
+                    s.should_sync(&text)
+                };
+                if should_send {
+                    log::info!("[Clipboard] 本机剪贴板变化，实时推送到对端（{}字节）", text.len());
+                    if let Err(e) = send_frame_via_app(&app2, &KvmFrame::Clipboard { text }).await {
+                        log::warn!("[Clipboard] 实时推送失败: {}", e);
+                    }
+                }
+            });
+        }));
+        log::info!("[Clipboard] 连接建立，剪贴板同步已激活");
     }
 
     /// toggle_sharing 命令的核心逻辑
@@ -951,6 +1051,117 @@ async fn build_edge_detector_for_local() -> Option<EdgeDetector> {
 }
 
 /// 边缘触发后对状态机产生的 events 做最小闭环处理
+/// 统一状态事件派发器（v0.1.58 重构，消除 handle_events_on_edge_trigger 与 handle_one 重复）
+///
+/// target_state: 当前批次中将要切换到的目标状态（用于 StopCapture/StartCapture 的 Armed 守卫逻辑）
+/// is_edge_path: true=边缘/抢占触发路径（无 Watchdog/EdgeDetector 控制，StartCapture 跳过）
+async fn dispatch_state_event(
+    ev: StateEvent,
+    app: &tauri::AppHandle,
+    capture: &Arc<PlatformCapture>,
+    blocker: &Arc<PlatformBlocker>,
+    cursor: &Arc<PlatformCursor>,
+    focus_keeper: &Arc<PlatformFocusKeeper>,
+    target_state: Option<ControlState>,
+) {
+    match ev {
+        StateEvent::StateChanged { from, to } => {
+            log::info!("[Sharing] StateChanged: {} → {}", from, to);
+            capture.set_control_state(control_state_to_u8(to));
+            let _ = app.emit("control-state-changed", ControlStateChange {
+                from: state_name(from).to_string(),
+                to: state_name(to).to_string(),
+            });
+        }
+        StateEvent::SendFrame(frame) => {
+            if let Err(e) = send_frame_via_app(app, &frame).await {
+                log::warn!("[Sharing] send_frame 失败: {}", e);
+            }
+        }
+        StateEvent::StopCapture => {
+            // BUG-028: 目标是 Armed 时，保持 capture 运行以继续监听边缘
+            if target_state == Some(ControlState::Armed) {
+                log::info!("[Sharing] StopCapture 跳过（Armed 保持 capture 运行以监听边缘）");
+            } else {
+                let _ = capture.stop_capture();
+                log::info!("[Sharing] capture 已停止");
+            }
+        }
+        StateEvent::StartCapture => {
+            // 边缘/抢占路径：capture 已在运行，跳过重启
+            log::info!("[Sharing] StartCapture 跳过（边缘路径，capture 已在运行）");
+        }
+        StateEvent::BlockInput => {
+            if let Err(e) = blocker.block_input() {
+                log::warn!("[Sharing] BlockInput 失败: {}", e);
+            } else {
+                log::info!("[Sharing] BlockInput 已生效");
+            }
+        }
+        StateEvent::UnblockInput => {
+            if let Err(e) = blocker.unblock_input() {
+                log::warn!("[Sharing] UnblockInput 失败: {}", e);
+            } else {
+                log::info!("[Sharing] UnblockInput 已生效");
+            }
+        }
+        StateEvent::HideCursor => {
+            if let Err(e) = cursor.grab() {
+                log::warn!("[Sharing] HideCursor(grab) 失败: {}", e);
+            } else {
+                log::info!("[Sharing] HideCursor(grab) 已生效");
+            }
+            if let Err(e) = focus_keeper.start() {
+                log::warn!("[Sharing] FocusKeeper.start() 失败: {}", e);
+            }
+        }
+        StateEvent::ShowCursor => {
+            if let Err(e) = focus_keeper.stop() {
+                log::warn!("[Sharing] FocusKeeper.stop() 失败: {}", e);
+            }
+            if let Err(e) = cursor.release() {
+                log::warn!("[Sharing] ShowCursor(release) 失败: {}", e);
+            } else {
+                log::info!("[Sharing] ShowCursor(release) 已生效");
+            }
+        }
+        StateEvent::DecoupleCursor => {
+            if let Err(e) = cursor.decouple_physical_mouse() {
+                log::warn!("[Sharing] DecoupleCursor 失败: {}", e);
+            } else {
+                log::info!("[Sharing] DecoupleCursor 已生效");
+            }
+        }
+        StateEvent::RecoupleCursor => {
+            if let Err(e) = cursor.recouple_physical_mouse() {
+                log::warn!("[Sharing] RecoupleCursor 失败: {}", e);
+            } else {
+                log::info!("[Sharing] RecoupleCursor 已生效");
+            }
+        }
+        StateEvent::ReleaseModifiers(mods) => {
+            log::debug!("[Sharing] ReleaseModifiers bits={:#06b}", mods.bits());
+        }
+        StateEvent::ReleaseMouseButtons(btns) => {
+            log::info!("[Sharing] ReleaseMouseButtons: {:?}", btns);
+            let ts = now_ms();
+            let mods = ModifierState::new();
+            for b in btns {
+                let frame = KvmFrame::MouseButton {
+                    button: mouse_button_to_u8(b),
+                    pressed: false,
+                    timestamp_ms: ts,
+                    modifiers: mods,
+                };
+                if let Err(e) = send_frame_via_app(app, &frame).await {
+                    log::warn!("[Sharing] ReleaseMouseButtons 发帧失败 btn={:?}: {}", b, e);
+                }
+            }
+        }
+    }
+}
+
+/// 边缘/抢占触发路径：批量派发状态事件（内部用 dispatch_state_event）
 /// BUG-028 改造：Armed 状态下 capture 常驻运行，边缘触发时不重启/不停止 capture
 async fn handle_events_on_edge_trigger(
     events: Vec<StateEvent>,
@@ -960,102 +1171,11 @@ async fn handle_events_on_edge_trigger(
     cursor: &Arc<PlatformCursor>,
     focus_keeper: &Arc<PlatformFocusKeeper>,
 ) {
-    // 先扫一遍确定目标状态（用于判断是否保持 capture 运行）
-    let mut target_state = None;
-    for ev in &events {
-        if let StateEvent::StateChanged { to, .. } = ev {
-            target_state = Some(*to);
-        }
-    }
-
+    let target_state = events.iter().find_map(|ev| {
+        if let StateEvent::StateChanged { to, .. } = ev { Some(*to) } else { None }
+    });
     for ev in events {
-        match ev {
-            StateEvent::StateChanged { from, to } => {
-                log::info!("[Sharing/EdgeReturn] StateChanged: {} → {}", from, to);
-                capture.set_control_state(control_state_to_u8(to));
-                let payload = ControlStateChange {
-                    from: state_name(from).to_string(),
-                    to: state_name(to).to_string(),
-                };
-                let _ = app.emit("control-state-changed", payload);
-            }
-            StateEvent::SendFrame(frame) => {
-                if let Err(e) = send_frame_via_app(app, &frame).await {
-                    log::warn!("[Sharing/EdgeReturn] send_frame 失败: {}", e);
-                }
-            }
-            StateEvent::StopCapture => {
-                // BUG-028: 如果目标是 Armed，不停止 capture（继续监听边缘）
-                if target_state == Some(ControlState::Armed) {
-                    log::info!("[Sharing/EdgeReturn] StopCapture 跳过（Armed 保持 capture 运行）");
-                } else {
-                    let _ = capture.stop_capture();
-                }
-            }
-            StateEvent::StartCapture => {
-                // BUG-028: capture 已经在 Armed 阶段运行，无需重新启动
-                log::info!("[Sharing/EdgeReturn] StartCapture 跳过（capture 已在运行）");
-            }
-            StateEvent::UnblockInput => {
-                let _ = blocker.unblock_input();
-            }
-            StateEvent::HideCursor => {
-                if let Err(e) = cursor.grab() {
-                    log::warn!("[Sharing/EdgeReturn] HideCursor(grab) 失败: {}", e);
-                } else {
-                    log::info!("[Sharing/EdgeReturn] HideCursor(grab) 已生效");
-                }
-                // v0.1.41 fix: 边缘触发路径也需要启动 FocusKeeper
-                if let Err(e) = focus_keeper.start() {
-                    log::warn!("[Sharing/EdgeReturn] FocusKeeper.start() 失败: {}", e);
-                }
-            }
-            StateEvent::ShowCursor => {
-                // v0.1.41 fix: 先停止 FocusKeeper
-                if let Err(e) = focus_keeper.stop() {
-                    log::warn!("[Sharing/EdgeReturn] FocusKeeper.stop() 失败: {}", e);
-                }
-                if let Err(e) = cursor.release() {
-                    log::warn!("[Sharing/EdgeReturn] ShowCursor(release) 失败: {}", e);
-                } else {
-                    log::info!("[Sharing/EdgeReturn] ShowCursor(release) 已生效");
-                }
-            }
-            // v0.1.43 Bug #034：被控端入 RemoteControlling 时断开物理鼠标驱动
-            StateEvent::DecoupleCursor => {
-                if let Err(e) = cursor.decouple_physical_mouse() {
-                    log::warn!("[Sharing/EdgeReturn] DecoupleCursor 失败: {}", e);
-                } else {
-                    log::info!("[Sharing/EdgeReturn] DecoupleCursor 已生效（远端虚拟光标模式）");
-                }
-            }
-            // v0.1.43 Bug #034：被控端离开 RemoteControlling 时恢复物理鼠标驱动
-            StateEvent::RecoupleCursor => {
-                if let Err(e) = cursor.recouple_physical_mouse() {
-                    log::warn!("[Sharing/EdgeReturn] RecoupleCursor 失败: {}", e);
-                } else {
-                    log::info!("[Sharing/EdgeReturn] RecoupleCursor 已生效（物理鼠标驱动恢复）");
-                }
-            }
-            // v0.1.55 BUG-038：边缘回切时给被控端补发 MouseUp，避免拖动卡死
-            StateEvent::ReleaseMouseButtons(btns) => {
-                log::info!("[Sharing/EdgeReturn] ReleaseMouseButtons: 释放残留按键 {:?}", btns);
-                let ts = now_ms();
-                let mods = ModifierState::new();
-                for b in btns {
-                    let frame = KvmFrame::MouseButton {
-                        button: mouse_button_to_u8(b),
-                        pressed: false,
-                        timestamp_ms: ts,
-                        modifiers: mods,
-                    };
-                    if let Err(e) = send_frame_via_app(app, &frame).await {
-                        log::warn!("[Sharing/EdgeReturn] ReleaseMouseButtons 发帧失败 btn={:?}: {}", b, e);
-                    }
-                }
-            }
-            other => log::debug!("[Sharing/EdgeReturn] event ignored: {:?}", other),
-        }
+        dispatch_state_event(ev, app, capture, blocker, cursor, focus_keeper, target_state).await;
     }
 }
 
@@ -1194,6 +1314,22 @@ pub async fn get_control_state(
     sm: tauri::State<'_, Arc<SharingManager>>,
 ) -> Result<String, String> {
     Ok(state_name(sm.current_state().await).to_string())
+}
+
+/// v0.1.58: 设置保存后，同步运行时状态（剪贴板开关 + 键位映射模式）
+#[tauri::command]
+pub async fn apply_sharing_settings(
+    clipboard_sync: bool,
+    key_mapping_unified: bool,
+    sm: tauri::State<'_, Arc<SharingManager>>,
+) -> Result<(), String> {
+    sm.set_clipboard_sync_enabled(clipboard_sync).await;
+    sm.set_key_mapping_unified(key_mapping_unified);
+    log::info!(
+        "[Sharing] apply_sharing_settings: clipboard_sync={}, key_mapping_unified={}",
+        clipboard_sync, key_mapping_unified
+    );
+    Ok(())
 }
 
 // ── 单元测试 ───────────────────────────────────────────────────────────────

@@ -60,6 +60,8 @@ pub struct MacInputCapture {
     /// 持有捕获子线程的 RunLoop 引用，用于 stop 时唤醒
     #[cfg(target_os = "macos")]
     run_loop: Arc<Mutex<Option<RunLoopHandle>>>,
+    /// v0.1.58: 键位映射统一模式（Cmd→Ctrl），0=关闭 1=开启，默认 1
+    key_mapping_unified: Arc<AtomicU8>,
 }
 
 /// 跨线程持有的 CFRunLoop 句柄（CFRunLoop 本身就是引用计数对象）
@@ -81,7 +83,18 @@ impl MacInputCapture {
             preempt_callback: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "macos")]
             run_loop: Arc::new(Mutex::new(None)),
+            key_mapping_unified: Arc::new(AtomicU8::new(1)), // 默认开启
         }
+    }
+
+    /// v0.1.58: 设置键位映射统一模式（true=Cmd→Ctrl，false=透明）
+    pub fn set_key_mapping_unified(&self, enabled: bool) {
+        self.key_mapping_unified.store(if enabled { 1 } else { 0 }, Ordering::Relaxed);
+        log::info!("[Mac] key_mapping_unified → {}", enabled);
+    }
+
+    pub fn key_mapping_unified_arc(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.key_mapping_unified)
     }
 
     /// 由 SharingManager 在状态切换时调用，推送新状态到 CGEventTap 回调。
@@ -166,6 +179,7 @@ impl InputCapture for MacInputCapture {
             let control_state = Arc::clone(&self.control_state);
             let preempt_detector = Arc::clone(&self.preempt_detector);
             let preempt_callback = Arc::clone(&self.preempt_callback);
+            let key_mapping_unified = Arc::clone(&self.key_mapping_unified);
             let (started_tx, started_rx) = std::sync::mpsc::sync_channel::<KvmResult<()>>(1);
 
             // 专用子线程：创建 Tap → 注册到本线程 RunLoop → CFRunLoopRun() 阻塞
@@ -178,6 +192,7 @@ impl InputCapture for MacInputCapture {
                         control_state,
                         preempt_detector,
                         preempt_callback,
+                        key_mapping_unified,
                     ) {
                         Ok(_) => {
                             // 把当前线程的 RunLoop 引用回传给主控制端
@@ -263,6 +278,7 @@ fn start_event_tap_in_current_thread(
     control_state: Arc<AtomicU8>,
     preempt_detector: Arc<PreemptDetector>,
     preempt_callback: Arc<Mutex<Option<PreemptCallback>>>,
+    key_mapping_unified: Arc<AtomicU8>,
 ) -> KvmResult<()> {
     // 克隆 capturing 给守护线程使用（退出条件）
     let capturing_for_guard = Arc::clone(&capturing);
@@ -407,7 +423,8 @@ fn start_event_tap_in_current_thread(
             // 2. 先把事件送给 sender（无论最后是否吞）——
             //    只有 LocalControlling 状态下这些事件才有意义转发给对端，
             //    其他状态日志里 sender 会被静默丢弃（event_tx 已被 take）。
-            if let Some(raw_event) = cg_event_to_raw(event_type, event) {
+            let unified = key_mapping_unified.load(Ordering::Relaxed) != 0;
+            if let Some(raw_event) = cg_event_to_raw(event_type, event, unified) {
                 if let Ok(guard) = callback.lock() {
                     if let Some(cb) = guard.as_ref() {
                         cb(raw_event);
@@ -506,9 +523,11 @@ fn start_event_tap_in_current_thread(
 fn cg_event_to_raw(
     event_type: core_graphics::event::CGEventType,
     event: &core_graphics::event::CGEvent,
+    unified: bool,
 ) -> Option<RawInputEvent> {
     use core_graphics::event::CGEventType;
     use kvm_core::platform::MouseButton;
+    use kvm_core::protocol::keycode_map::cg_cmd_to_keysym_unified;
 
     match event_type {
         CGEventType::MouseMoved
@@ -586,14 +605,23 @@ fn cg_event_to_raw(
         }
         CGEventType::KeyDown => {
             let cg_code = event.get_integer_value_field(9) as u16;
-            let keysym = cg_keycode_to_keysym(cg_code);
+            // v0.1.58: 统一模式下 Cmd(54/55) → XK_Control_L/R（Mac 控 Win 时 Cmd+C = Win端 Ctrl+C）
+            let keysym = if unified {
+                cg_cmd_to_keysym_unified(cg_code).unwrap_or_else(|| cg_keycode_to_keysym(cg_code))
+            } else {
+                cg_keycode_to_keysym(cg_code)
+            };
             Some(RawInputEvent::KeyDown {
                 native_keycode: keysym,
             })
         }
         CGEventType::KeyUp => {
             let cg_code = event.get_integer_value_field(9) as u16;
-            let keysym = cg_keycode_to_keysym(cg_code);
+            let keysym = if unified {
+                cg_cmd_to_keysym_unified(cg_code).unwrap_or_else(|| cg_keycode_to_keysym(cg_code))
+            } else {
+                cg_keycode_to_keysym(cg_code)
+            };
             Some(RawInputEvent::KeyUp {
                 native_keycode: keysym,
             })

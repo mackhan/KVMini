@@ -56,6 +56,13 @@ pub struct AppConfig {
     /// 自动重连间隔（秒）
     #[serde(default = "default_reconnect_interval")]
     pub reconnect_interval_secs: u64,
+
+    /// 键位映射统一模式（默认开启）
+    ///
+    /// 开启：Mac 控 Win 时 Cmd→Ctrl，Win 控 Mac 时 Ctrl→Cmd（统一快捷键体验）
+    /// 关闭：透明模式，Cmd→Win键，Ctrl→Ctrl（保留各平台原始习惯）
+    #[serde(default = "default_true")]
+    pub key_mapping_unified: bool,
 }
 
 fn default_port() -> u16 { 23456 }
@@ -81,6 +88,7 @@ impl Default for AppConfig {
             auto_reconnect: true,
             reconnect_max_attempts: default_reconnect_max(),
             reconnect_interval_secs: default_reconnect_interval(),
+            key_mapping_unified: true,
         }
     }
 }

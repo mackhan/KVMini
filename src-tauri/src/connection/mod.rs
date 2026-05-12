@@ -257,8 +257,17 @@ impl KvmConnectionManager {
                                                 PeerLog { level, message } => {
                                                     write_peer_log(*level, message);
                                                 }
+                                                // v0.1.58: 剪贴板同步
+                                                Clipboard { text } => {
+                                                    sm.on_remote_clipboard(text.clone()).await;
+                                                }
                                                 _ => {}
                                             }
+                                        }
+                                        NetworkEvent::ConnectionStateChanged(
+                                            kvm_core::network::ConnectionState::Connected,
+                                        ) => {
+                                            sm.on_connected(&app_for_sharing).await;
                                         }
                                         NetworkEvent::ConnectionStateChanged(
                                             kvm_core::network::ConnectionState::Disconnected,

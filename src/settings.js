@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = {
     autoStart: false,
     startMinimized: false,
     clipboardSync: true,
+    keyMappingUnified: true,
     enableTls: true,
     language: 'zh',
     theme: 'auto',
@@ -66,6 +67,7 @@ function loadSettingsToUI(settings, elements) {
     if (elements.autoStart) elements.autoStart.checked = settings.autoStart;
     if (elements.startMinimized) elements.startMinimized.checked = settings.startMinimized;
     if (elements.clipboardSync) elements.clipboardSync.checked = settings.clipboardSync !== false;
+    if (elements.keyMappingUnified) elements.keyMappingUnified.checked = settings.keyMappingUnified !== false;
     if (elements.enableTls) elements.enableTls.checked = settings.enableTls !== false;
     if (elements.languageSelect) elements.languageSelect.value = settings.language || 'zh';
     if (elements.themeSelect) elements.themeSelect.value = settings.theme || 'auto';
@@ -86,6 +88,7 @@ function collectSettingsFromUI(elements, currentSettings) {
         autoStart: elements.autoStart?.checked ?? false,
         startMinimized: elements.startMinimized?.checked ?? false,
         clipboardSync: elements.clipboardSync ? elements.clipboardSync.checked : true,
+        keyMappingUnified: elements.keyMappingUnified ? elements.keyMappingUnified.checked : true,
         enableTls: elements.enableTls ? elements.enableTls.checked : true,
         language: elements.languageSelect?.value || (currentSettings?.language || 'zh'),
         theme: elements.themeSelect?.value || (currentSettings?.theme || 'auto'),

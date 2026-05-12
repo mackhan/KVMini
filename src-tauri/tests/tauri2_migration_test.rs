@@ -94,6 +94,7 @@ mod config_tests {
             edge_threshold: 10,
             edge_overshoot_px: 5,
             clipboard_sync: false,
+            key_mapping_unified: true,
             autostart: true,
             auto_reconnect: false,
             reconnect_max_attempts: 5,

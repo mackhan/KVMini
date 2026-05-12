@@ -241,6 +241,11 @@ const MESSAGES = {
     labelClipboardSync: '跨设备剪贴板同步:',
     hintClipboardSync: '开启后，在一台设备上复制的文本可直接粘贴到另一台设备（仅支持纯文本，超过 1MB 自动截断）',
 
+    // 键位映射
+    settingsKeyMapping: '键位映射',
+    labelKeyMappingUnified: '统一 Cmd/Ctrl 快捷键:',
+    hintKeyMappingUnified: '开启后，Mac 的 Command 键与 Windows 的 Ctrl 键互相对应（如 Mac 端 Cmd+C 在 Windows 被控端执行为 Ctrl+C）',
+
 
     // 安全与加密
     settingsSecurity: '安全与加密',
@@ -658,6 +663,11 @@ const MESSAGES = {
     settingsClipboard: 'Clipboard Sharing',
     labelClipboardSync: 'Cross-device clipboard sync:',
     hintClipboardSync: 'When enabled, text copied on one device can be pasted on the other (plain text only, truncated at 1MB)',
+
+    // Key mapping
+    settingsKeyMapping: 'Key Mapping',
+    labelKeyMappingUnified: 'Unify Cmd/Ctrl shortcuts:',
+    hintKeyMappingUnified: 'When enabled, Mac Command key maps to Windows Ctrl key (e.g. Cmd+C on Mac performs Ctrl+C on Windows)',
 
 
     // Security & Encryption
