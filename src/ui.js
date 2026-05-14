@@ -163,17 +163,15 @@ function showReconnectToast(message, elements) {
 // ─── 按钮状态 ────────────────────────────────────────────────────────────────
 
 /**
- * 更新断开/重连按钮显示状态
+ * v0.1.59 BUG-042: 单按钮三态（dead code，保留签名兼容性）
+ * 主路径在 main.js updateConnectButton(phase)
  * @param {boolean} connected
  * @param {object} elements - DOM 元素引用
  */
 function updateConnectionButtons(connected, elements) {
-    if (elements?.disconnectBtn) {
-        elements.disconnectBtn.disabled = !connected;
-        elements.disconnectBtn.classList.toggle('hidden', !connected);
-    }
-    if (elements?.reconnectBtn) {
-        elements.reconnectBtn.classList.toggle('hidden', connected);
+    const btn = elements?.connectBtn || elements?.disconnectBtn;
+    if (btn) {
+        btn.setAttribute('data-state', connected ? 'connected' : 'disconnected');
     }
 }
 

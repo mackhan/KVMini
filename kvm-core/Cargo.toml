@@ -17,3 +17,5 @@ bincode = { workspace = true }
 rcgen = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# v0.1.59 BUG-043: TCP 层 Keepalive 纵深防御
+socket2 = { workspace = true }

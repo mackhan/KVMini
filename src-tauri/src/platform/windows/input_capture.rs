@@ -542,10 +542,19 @@ unsafe extern "system" fn mouse_hook_proc(
             WM_MOUSEWHEEL => {
                 // v0.1.41: 正确使用 i32 as i16 表达负向滚动
                 let delta = (ms_hook.mouseData as i32) >> 16;
+                // v0.1.59 M1：F1 滚轮诊断埋点（采集端）
+                log::debug!(
+                    "[Win/Capture] WM_MOUSEWHEEL delta={} is_injected={} state={}",
+                    delta, is_injected, read_control_state()
+                );
                 Some(RawInputEvent::Scroll { dx: 0, dy: delta })
             }
             WM_MOUSEHWHEEL => {
                 let delta = (ms_hook.mouseData as i32) >> 16;
+                log::debug!(
+                    "[Win/Capture] WM_MOUSEHWHEEL delta={} is_injected={} state={}",
+                    delta, is_injected, read_control_state()
+                );
                 Some(RawInputEvent::Scroll { dx: delta, dy: 0 })
             }
             _ => None,
@@ -570,6 +579,16 @@ unsafe extern "system" fn mouse_hook_proc(
             if is_injected && read_control_state() == CONTROL_STATE_REMOTE_CONTROLLING {
                 // 被控端自注入事件：放行，让系统正确响应远端控制指令
             } else {
+                // v0.1.59 M1：吞事件采样日志（每 200 次 swallow 打 1 条，避免日志风暴）
+                use std::sync::atomic::AtomicU64;
+                static SWALLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+                let n = SWALLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+                if n % 200 == 0 {
+                    log::trace!(
+                        "[Win/Capture] swallow mouse event #{} wparam={:#X} state={} is_injected={}",
+                        n, w_param, read_control_state(), is_injected
+                    );
+                }
                 return 1; // 非零返回值 = 吞掉事件，不传给本机
             }
         }

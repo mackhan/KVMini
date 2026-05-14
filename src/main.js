@@ -2,6 +2,8 @@
 let appState = {
     connected: false,
     connectionType: null,
+    // v0.1.59 BUG-042: 连接按钮三态（disconnected / connecting / connected）
+    connectionPhase: 'disconnected',
     devices: [],
     currentDevice: null,
     scanning: false,
@@ -121,7 +123,10 @@ async function initApp() {
         connectionStatus: document.getElementById('connection-status'),
         connectionType: document.getElementById('connection-type'),
         latency: document.getElementById('latency'),
-        disconnectBtn: document.getElementById('disconnect-btn'),
+        // v0.1.59 BUG-042: 单按钮三态（disconnected / connecting / connected）
+        connectBtn: document.getElementById('connect-btn'),
+        // 兼容字段：保留 disconnectBtn 别名（部分旧代码引用），实际指向同一按钮
+        disconnectBtn: document.getElementById('connect-btn'),
         startSharingBtn: document.getElementById('start-sharing-btn'),
         permissionWarning: document.getElementById('permission-warning'),
         settingsBtn: document.getElementById('settings-btn'),
@@ -180,8 +185,7 @@ async function initApp() {
         // 版本号
         appVersion: document.getElementById('app-version'),
         settingsVersion: document.getElementById('settings-version'),
-        // 重连相关
-        reconnectBtn: document.getElementById('reconnect-btn'),
+        // 重连相关（v0.1.59 BUG-042: reconnectBtn 已合并到 connect-btn 单按钮三态）
         reconnectStatusRow: document.getElementById('reconnect-status-row'),
         reconnectStatusText: document.getElementById('reconnect-status-text'),
         reconnectToast: document.getElementById('reconnect-toast'),
@@ -254,14 +258,15 @@ function prefillDefaultIp() {
 
 // 设置事件监听器
 function setupEventListeners() {
-    if (!elements.disconnectBtn) {
-        console.error('[KVMini] 严重错误：disconnect-btn 元素不存在，事件绑定失败！');
+    if (!elements.connectBtn) {
+        console.error('[KVMini] 严重错误：connect-btn 元素不存在，事件绑定失败！');
         return;
     }
-    elements.disconnectBtn.addEventListener('click', handleDisconnect);
-    if (elements.reconnectBtn) {
-        elements.reconnectBtn.addEventListener('click', handleReconnect);
-    }
+    // v0.1.59 BUG-042: 单按钮三态分发器
+    // disconnected → 触发重连（沿用历史 IP）
+    // connecting   → 禁用，无操作
+    // connected    → 断开
+    elements.connectBtn.addEventListener('click', handleConnectButtonClick);
     if (elements.startSharingBtn) {
         elements.startSharingBtn.addEventListener('click', handleToggleSharing);
     }
@@ -569,10 +574,17 @@ function setupEventListeners() {
                 // 重连中（BUG-032 根因修复 v0.1.40）：
                 // 不修改 appState.connected ——TCP socket 仍可能活着，仅心跳波动而已
                 // 只有 'disconnected' 事件才是真正断开
-                // 这样 updateConnectionButtons 读 appState.connected 仍为 true，按钮保持"断开"
-                setConnectionStatus('connecting');
+                //
+                // v0.1.59 BUG-042：reconnecting 不切按钮文案
+                // 按钮保持当前 phase（已连接则显示"断开"），只更新状态徽章和 reconnectStatusRow
+                // 不调用 setConnectionStatus('connecting')，避免按钮闪到"连接中…"
+                if (elements.connectionStatus) {
+                    const { t } = window.i18n;
+                    elements.connectionStatus.textContent = t('statusConnecting');
+                    elements.connectionStatus.className = 'status-connecting';
+                }
                 showReconnectStatus(message, attempt);
-                updateConnectionButtons();
+                // 不调 updateConnectionButtons，按钮 phase 维持原状
 
             } else if (eventType === 'tls_mismatch') {
                 // TLS 配置不一致：一端开了一端没开
@@ -651,6 +663,33 @@ function setupEventListeners() {
                 }
             }
         }).catch(e => console.warn('连接状态事件监听注册失败:', e));
+
+        // v0.1.60 BUG-046: 监听布局同步事件（被动方布局被自动镜像后触发）
+        window.__TAURI__.event.listen('layout-synced', (event) => {
+            const payload = event.payload || {};
+            const newLayout = payload.new_layout || '';
+            const wasChanged = payload.was_changed === true;
+            console.log('[KVMini] layout-synced:', newLayout, 'wasChanged:', wasChanged);
+
+            // 更新本地 layout 状态
+            if (newLayout) {
+                window._currentLayout = newLayout;
+                // 刷新布局 UI（如果已初始化）
+                if (window.LayoutModule && typeof window.LayoutModule.updateLayoutPreview === 'function') {
+                    const preview = document.getElementById('display-layout-preview');
+                    const hintEdge = document.getElementById('trigger-edge-text');
+                    if (preview && hintEdge) {
+                        window.LayoutModule.updateLayoutPreview(newLayout, preview, hintEdge);
+                    }
+                }
+            }
+
+            // 如果布局确实被改变，显示 Toast 通知用户
+            if (wasChanged) {
+                const { t } = window.i18n;
+                showSuccess(t('layoutAutoSynced'));
+            }
+        }).catch(e => console.warn('布局同步事件监听注册失败:', e));
     }
 }
 
@@ -759,19 +798,75 @@ async function handleReconnect() {
     }
 }
 
-// 更新断开/重连按钮显示状态
-// BUG-032 修复：以 appState.connected 为单一真相源
-// 不再依赖外部传入的 connected 参数（心跳波动可能触发 reconnecting 事件导致误传 false）
-function updateConnectionButtons(connected) {
-    // 以 appState.connected 为准，忽略参数 connected（保留参数签名兼容旧调用点）
-    const isConnected = appState.connected;
-    if (elements.disconnectBtn) {
-        elements.disconnectBtn.disabled = !isConnected;
-        elements.disconnectBtn.classList.toggle('hidden', !isConnected);
+// v0.1.59 BUG-042: 连接按钮单按钮三态状态机
+// 唯一真相源：appState.connected + appState.connectionPhase
+// 不再依赖外部传入参数（心跳波动 reconnecting 事件不切按钮文案，只更新状态徽章）
+//
+// data-state 取值：
+//   disconnected → 文案 "连接 / Connect"，可点击触发重连历史
+//   connecting   → 文案 "连接中… / Connecting…"，禁用 + spinner
+//   connected    → 文案 "断开 / Disconnect"，可点击触发断开
+function updateConnectButton(phase) {
+    const btn = elements.connectBtn;
+    if (!btn) return;
+    // 节流：相同状态连续多次调用直接跳过
+    const currentState = btn.getAttribute('data-state');
+    const targetState = phase || appState.connectionPhase || (appState.connected ? 'connected' : 'disconnected');
+    if (currentState === targetState && btn.dataset.lastApplied === targetState) {
+        return;
     }
-    if (elements.reconnectBtn) {
-        elements.reconnectBtn.classList.toggle('hidden', isConnected);
+    btn.dataset.lastApplied = targetState;
+    btn.setAttribute('data-state', targetState);
+    appState.connectionPhase = targetState;
+
+    const { t } = window.i18n || { t: (k) => k };
+    let label;
+    let cls;
+    let disabled = false;
+    switch (targetState) {
+        case 'connecting':
+            label = t('btnConnecting') || 'Connecting…';
+            cls = 'btn btn-secondary';
+            disabled = true;
+            break;
+        case 'connected':
+            label = t('btnDisconnect') || 'Disconnect';
+            cls = 'btn btn-secondary';
+            break;
+        case 'disconnected':
+        default:
+            label = t('btnConnect') || 'Connect';
+            cls = 'btn btn-primary';
+            break;
     }
+    btn.textContent = label;
+    btn.className = cls;
+    btn.disabled = disabled;
+    // 移除 hidden（兼容旧逻辑），按钮始终可见
+    btn.classList.remove('hidden');
+    console.log('[ConnectBtn] state →', targetState, 'label=', label);
+}
+
+// 兼容封装：旧调用点全部走新 updateConnectButton
+function updateConnectionButtons(_connectedIgnored) {
+    const phase = appState.connected ? 'connected' : (appState.connectionPhase === 'connecting' ? 'connecting' : 'disconnected');
+    updateConnectButton(phase);
+}
+
+// v0.1.59 BUG-042: 单按钮 click 分发器
+async function handleConnectButtonClick() {
+    const state = appState.connectionPhase || (elements.connectBtn?.getAttribute('data-state')) || 'disconnected';
+    console.log('[ConnectBtn] click in state=', state);
+    if (state === 'connecting') {
+        // 连接中：忽略点击
+        return;
+    }
+    if (state === 'connected') {
+        // 已连接：触发断开
+        return handleDisconnect();
+    }
+    // disconnected：尝试用历史 IP 重连
+    return handleReconnect();
 }
 
 // 显示重连状态（状态面板中）
@@ -799,6 +894,12 @@ function hideReconnectStatus() {
 let reconnectToastTimer = null;
 function showReconnectToast(message) {
     if (!elements.reconnectToast) return;
+    // v0.1.60 BUG-045: Toast 互斥 — 弹橙色时关掉绿色和红色
+    if (elements.successToast) elements.successToast.classList.add('hidden');
+    if (successTimer) { clearTimeout(successTimer); successTimer = null; }
+    if (elements.errorToast) elements.errorToast.classList.add('hidden');
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
+
     if (elements.reconnectToastMessage) {
         elements.reconnectToastMessage.textContent = message;
     }
@@ -2077,7 +2178,9 @@ function setConnectionStatus(status) {
         elements.connectionType.textContent = '-';
     }
 
-    elements.disconnectBtn.disabled = status !== 'connected';
+    // v0.1.59 BUG-042: 单按钮三态由 connectionPhase 驱动
+    appState.connectionPhase = status;
+    updateConnectButton(status);
 }
 
 // 启动延迟检查（含警告色和断线重连）
@@ -2302,6 +2405,12 @@ let errorTimer = null;
 // 显示错误提示（替代 alert）
 function showError(message) {
     console.error('Error:', message);
+    // v0.1.60 BUG-045: Toast 互斥 — 弹红色时关掉绿色和橙色
+    if (elements.successToast) elements.successToast.classList.add('hidden');
+    if (successTimer) { clearTimeout(successTimer); successTimer = null; }
+    if (elements.reconnectToast) elements.reconnectToast.classList.add('hidden');
+    if (reconnectToastTimer) { clearTimeout(reconnectToastTimer); reconnectToastTimer = null; }
+
     elements.errorMessage.textContent = message;
     elements.errorToast.classList.remove('hidden');
     if (errorTimer) clearTimeout(errorTimer);
@@ -2316,6 +2425,14 @@ function hideError() {
 let successTimer = null;
 // 显示成功提示
 function showSuccess(message) {
+    // v0.1.60 BUG-045: Toast 互斥 — 弹绿色时关掉橙色和红色
+    if (elements.reconnectToast) elements.reconnectToast.classList.add('hidden');
+    if (reconnectToastTimer) { clearTimeout(reconnectToastTimer); reconnectToastTimer = null; }
+    if (elements.errorToast) elements.errorToast.classList.add('hidden');
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
+    // 清除重连进度行
+    hideReconnectStatus();
+
     elements.successMessage.textContent = message;
     elements.successToast.classList.remove('hidden');
     if (successTimer) clearTimeout(successTimer);

@@ -12,8 +12,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 use tauri::Manager;
 
-/// Watchdog 超时阈值（毫秒）：被控端连续 3s 无远端帧 → 自动回 Idle
-const WATCHDOG_TIMEOUT_MS: u64 = 3000;
+/// Watchdog 超时阈值（毫秒）：被控端连续 10s 无远端帧 → 自动回 Idle
+///
+/// v0.1.59 BUG-043 F3 纵深防御：
+/// - TCP Keepalive 在 OS 层 ~11s 感知断线（idle 5s + interval 3s × retries 2）
+/// - Watchdog 在应用层 10s 兜底，防止 read_loop 异常路径未触发 on_disconnected
+/// - 心跳超时阈值 = HEARTBEAT_INTERVAL_SECS(5) × HEARTBEAT_TIMEOUT_COUNT(3) = 15s
+/// - 三层在 5~15s 内逐级生效，确保任意一条链路失效仍能恢复键鼠
+const WATCHDOG_TIMEOUT_MS: u64 = 10_000;
 
 /// Watchdog 检查间隔（毫秒）
 const WATCHDOG_CHECK_INTERVAL_MS: u64 = 500;

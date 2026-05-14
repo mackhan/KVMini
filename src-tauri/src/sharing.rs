@@ -400,16 +400,24 @@ impl SharingManager {
         );
         self.handle_state_events_with_emit(evs, app).await;
 
+        // v0.1.59 BUG-044 RC#3：EdgeReturn 场景也需要静默期，防止主控端鼠标仍贴着边缘导致立即乒乓回切
+        // 同时 reset_overshoot 清零累计 hit count（之前 LocalControlling 期间 squash 路径可能仍喂 detect）
+        {
+            let mut slot = self.edge_detector.lock().await;
+            if let Some(d) = slot.as_mut() {
+                d.reset_overshoot();
+                d.enter_silence(800);
+                log::info!(
+                    "[Sharing] on_remote_switch_back ({:?}) 后 EdgeDetector reset_overshoot + 进入 800ms 静默期",
+                    reason
+                );
+            }
+        }
+
         // v0.1.52: Preempt 场景——主控端回 Armed 后，设置 EdgeDetector 静默期（800ms）
         // 防止主控端鼠标微动立即重新触发 LocalControlling，给远端用户留操作时间
         // 参照 Barrier "focus time" / Logitech Flow "switch cooldown" 设计
         if let kvm_core::protocol::SwitchBackReason::Preempt = reason {
-            let mut slot = self.edge_detector.lock().await;
-            if let Some(d) = slot.as_mut() {
-                d.enter_silence(800);
-                log::info!("[Sharing] Preempt 后 EdgeDetector 进入 800ms 静默期（防止立即重新触发）");
-            }
-            drop(slot);
             log::info!("[Sharing] 远端物理输入抢占，emit kvm://preempted 供前端 toast");
             let _ = app.emit("kvm://preempted", ());
         }
@@ -479,6 +487,24 @@ impl SharingManager {
             });
         }));
         log::info!("[Clipboard] 连接建立，剪贴板同步已激活");
+    }
+
+    /// v0.1.60 BUG-046: 布局同步后重建 EdgeDetector（使用最新 layout.json）
+    pub async fn rebuild_edge_detector(&self) {
+        let mut edge_detector = build_edge_detector_for_local().await;
+        // 防御性编程：根据当前状态设置 active，仅 Armed 态激活
+        let current_state = self.state.lock().await.state();
+        if let Some(ref mut d) = edge_detector {
+            let should_active = current_state == ControlState::Armed;
+            d.set_active(should_active);
+            log::info!(
+                "[Sharing][LayoutSync] EdgeDetector 已重建（布局同步后），active={} (state={:?})",
+                should_active, current_state
+            );
+        } else {
+            log::warn!("[Sharing][LayoutSync] EdgeDetector 重建失败");
+        }
+        *self.edge_detector.lock().await = edge_detector;
     }
 
     /// toggle_sharing 命令的核心逻辑
@@ -759,6 +785,9 @@ impl SharingManager {
         let cursor_arc: Arc<PlatformCursor> = Arc::clone(&self.cursor);
         let focus_keeper_arc: Arc<PlatformFocusKeeper> = Arc::clone(&self.focus_keeper);
         let remote_cursor_arc: Arc<Mutex<Option<RemoteCursorState>>> = Arc::clone(&self.remote_cursor);
+        // v0.1.59 BUG-044 RC#1：state_guard 在 pump 上下文也需要，让边缘/抢占路径与 handle_one 对称
+        let state_guard_arc = Arc::clone(&self.state_guard);
+        let edge_detector_for_dispatch = Arc::clone(&self.edge_detector);
         // 无锁状态读取：直接从 capture 的 AtomicU8 读，避免热路径每帧 lock().await
         let control_state_atomic = self.capture.control_state_arc();
         let app_for_edge = app.clone();
@@ -804,6 +833,8 @@ impl SharingManager {
                                         &blocker_arc,
                                         &cursor_arc,
                                         &focus_keeper_arc,
+                                        &edge_detector_for_dispatch,
+                                        &state_guard_arc,
                                     )
                                     .await;
                                 }
@@ -879,6 +910,8 @@ impl SharingManager {
                                                     &blocker_arc,
                                                     &cursor_arc,
                                                     &focus_keeper_arc,
+                                                    &edge_detector_for_dispatch,
+                                                    &state_guard_arc,
                                                 )
                                                 .await;
                                             }
@@ -922,12 +955,16 @@ impl SharingManager {
                             };
 
                             if !already_sent {
+                                // v0.1.59 M1：F1 滚轮诊断 — Scroll 帧每帧都打 debug（不受 sample 限制）
+                                if let KvmFrame::MouseScroll { dx, dy, .. } = &send_frame {
+                                    log::debug!("[Sharing] pump 发送 MouseScroll dx={} dy={}", dx, dy);
+                                }
                                 if sample_count % 100 == 0 {
                                     log::debug!("[Sharing] pump frame sample #{}: {:?}", sample_count, send_frame);
                                 }
                                 sample_count += 1;
                                 if let Err(e) = send_frame_via_app(&app_for_pump, &send_frame).await {
-                                    log::warn!("[Sharing] send_frame 失败: {}", e);
+                                    log::warn!("[Sharing] send_frame 失败: {} (frame={:?})", e, send_frame);
                                 }
                             }
                         }
@@ -981,6 +1018,8 @@ impl SharingManager {
                             &blocker_arc,
                             &cursor_arc,
                             &focus_keeper_arc,
+                            &edge_detector_for_dispatch,
+                            &state_guard_arc,
                         )
                         .await;
                     }
@@ -1063,15 +1102,53 @@ async fn dispatch_state_event(
     cursor: &Arc<PlatformCursor>,
     focus_keeper: &Arc<PlatformFocusKeeper>,
     target_state: Option<ControlState>,
+    edge_detector: &Arc<Mutex<Option<EdgeDetector>>>,
+    state_guard: &Arc<crate::state_guard::StateGuard>,
 ) {
     match ev {
         StateEvent::StateChanged { from, to } => {
-            log::info!("[Sharing] StateChanged: {} → {}", from, to);
+            log::info!("[Sharing] StateChanged: {} → {} (path=edge/preempt)", from, to);
             capture.set_control_state(control_state_to_u8(to));
+
+            // v0.1.59 BUG-044 RC#1：与 handle_one::StateChanged 行为对称
+            // Watchdog 生命周期管理（被控端 RemoteControlling 入态启动，离态停止）
+            if to == ControlState::RemoteControlling {
+                state_guard.start_watchdog(app.clone());
+            }
+            if from == ControlState::RemoteControlling {
+                state_guard.stop_watchdog();
+            }
+
+            // BUG-030 + RC#2：EdgeDetector 仅在 Armed 状态激活；非 Armed 入态时 reset_overshoot
+            // 防止 LocalControlling 期间 squash 路径继续累计 hit count，造成回切乒乓
+            {
+                let mut slot = edge_detector.lock().await;
+                if let Some(d) = slot.as_mut() {
+                    d.set_active(to == ControlState::Armed);
+                    if to != ControlState::Armed {
+                        d.reset_overshoot();
+                    } else {
+                        // 回到 Armed：清零 hit count，让用户必须重新撞够 overshoot 阈值才再次触发
+                        d.reset_overshoot();
+                        // RC#3：进入静默期 800ms（Barrier 默认值，与 Win on_remote_switch_back Preempt 对称）
+                        d.enter_silence(800);
+                    }
+                }
+            }
+
             let _ = app.emit("control-state-changed", ControlStateChange {
                 from: state_name(from).to_string(),
                 to: state_name(to).to_string(),
             });
+
+            // 推送完整状态快照（消除前端事件顺序依赖）
+            let connected = crate::state_guard::is_connected_via_app(app).await;
+            let snapshot = crate::state_guard::build_snapshot(
+                connected,
+                state_name(to),
+                state_guard.is_watchdog_running(),
+            );
+            let _ = app.emit("sharing-state-sync", snapshot);
         }
         StateEvent::SendFrame(frame) => {
             if let Err(e) = send_frame_via_app(app, &frame).await {
@@ -1170,12 +1247,17 @@ async fn handle_events_on_edge_trigger(
     blocker: &Arc<PlatformBlocker>,
     cursor: &Arc<PlatformCursor>,
     focus_keeper: &Arc<PlatformFocusKeeper>,
+    edge_detector: &Arc<Mutex<Option<EdgeDetector>>>,
+    state_guard: &Arc<crate::state_guard::StateGuard>,
 ) {
     let target_state = events.iter().find_map(|ev| {
         if let StateEvent::StateChanged { to, .. } = ev { Some(*to) } else { None }
     });
     for ev in events {
-        dispatch_state_event(ev, app, capture, blocker, cursor, focus_keeper, target_state).await;
+        dispatch_state_event(
+            ev, app, capture, blocker, cursor, focus_keeper, target_state,
+            edge_detector, state_guard,
+        ).await;
     }
 }
 

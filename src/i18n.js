@@ -43,6 +43,7 @@ const MESSAGES = {
     // 控制按钮
     btnScanDevices: '扫描设备',
     btnDisconnect: '断开连接',
+    btnConnecting: '连接中…',
     btnStartSharing: '▶ 开始共享',
     btnStopSharing: '■ 停止共享',
     btnArmedWaiting: '⏳ 待切换',
@@ -338,6 +339,8 @@ const MESSAGES = {
     captureFailedPermission: '⚠️ 启动共享失败：缺少输入监控权限。请在系统设置中授权后重试"开始共享"。',
     // v0.1.43 Bug #035: 远端用户物理输入抢占回切 toast（Synergy/Logitech Flow 风格）
     preempt_resume_toast: '远端用户恢复了本机控制',
+    // v0.1.60 BUG-046: 布局同步
+    layoutAutoSynced: '已根据对方配置自动调整显示器布局',
 
     // 分页导航
     tabGeneral: '通用',
@@ -466,6 +469,7 @@ const MESSAGES = {
     // Control buttons
     btnScanDevices: 'Scan Devices',
     btnDisconnect: 'Disconnect',
+    btnConnecting: 'Connecting…',
     btnStartSharing: '▶ Start Sharing',
     btnStopSharing: '■ Stop Sharing',
     btnArmedWaiting: '⏳ Waiting',
@@ -761,6 +765,8 @@ const MESSAGES = {
     captureFailedPermission: '⚠️ Failed to start sharing: Input Monitoring permission required. Please authorize in System Settings and try "Start Sharing" again.',
     // v0.1.43 Bug #035: Remote physical input preemption toast (Synergy / Logitech Flow style)
     preempt_resume_toast: 'Remote user resumed control',
+    // v0.1.60 BUG-046: Layout sync
+    layoutAutoSynced: 'Display layout auto-adjusted based on peer configuration',
 
     // Tab navigation
     tabGeneral: 'General',

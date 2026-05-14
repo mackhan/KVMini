@@ -45,6 +45,48 @@ pub const RECONNECT_INTERVAL_SECS: u64 = 3;
 /// 最大重连次数
 pub const MAX_RECONNECT_RETRIES: u32 = 5;
 
+// ── TCP Keepalive 配置（v0.1.59 BUG-043 F3 纵深防御）────────────────────────
+
+/// TCP Keepalive idle 时间（秒）：连接空闲多久后开始发探测包
+pub const TCP_KEEPALIVE_IDLE_SECS: u64 = 5;
+
+/// TCP Keepalive 探测间隔（秒）
+pub const TCP_KEEPALIVE_INTERVAL_SECS: u64 = 3;
+
+/// TCP Keepalive 失败重试次数
+pub const TCP_KEEPALIVE_RETRIES: u32 = 2;
+
+/// 给已建立的 TcpStream 应用 OS 级 keepalive 配置。
+///
+/// 作用：让远端进程被 kill -9 / 拔网线 / crash 时，本端的 read_loop 能在
+/// `idle + interval * retries ≈ 11s` 内通过 TCP RST/超时感知断线，
+/// 配合应用层 Watchdog（10s 超时）形成双保险。
+///
+/// 平台支持：
+/// - macOS / Linux / Windows 10+ 均支持（socket2 内部封装 setsockopt）
+/// - Windows 7/Server 2008 旧系统会忽略 interval/retries 字段，回退为系统默认 keepalive，不报错
+///
+/// 失败处理：
+/// 该函数失败不应阻塞连接建立流程；调用方仅打 warn 日志即可。
+pub fn apply_tcp_keepalive(stream: &TcpStream) -> std::io::Result<()> {
+    use socket2::{SockRef, TcpKeepalive};
+    use std::time::Duration as StdDuration;
+
+    let sock_ref = SockRef::from(stream);
+    let ka = TcpKeepalive::new()
+        .with_time(StdDuration::from_secs(TCP_KEEPALIVE_IDLE_SECS))
+        .with_interval(StdDuration::from_secs(TCP_KEEPALIVE_INTERVAL_SECS))
+        .with_retries(TCP_KEEPALIVE_RETRIES);
+    sock_ref.set_tcp_keepalive(&ka)?;
+    log::debug!(
+        "[Network] TCP Keepalive 已应用：idle={}s, interval={}s, retries={}",
+        TCP_KEEPALIVE_IDLE_SECS,
+        TCP_KEEPALIVE_INTERVAL_SECS,
+        TCP_KEEPALIVE_RETRIES,
+    );
+    Ok(())
+}
+
 // ── 发现的设备信息 ──────────────────────────────────────────────────────────
 
 /// 发现的设备信息
@@ -117,6 +159,10 @@ pub(crate) struct HandshakePayload {
     pub desktop: VirtualDesktop,
     #[serde(default)]
     pub tls_enabled: bool,
+    /// v0.1.60 BUG-046: 握手时携带布局方向（发起方为准，被动方自动镜像）
+    /// 旧版本无此字段，反序列化时默认 None → 不触发布局同步
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_direction: Option<String>,
 }
 
 /// 握手信息（连接建立时交换）
@@ -133,6 +179,10 @@ pub struct HandshakeInfo {
     /// 如果本机开启了 TLS 但对端是旧版本，会触发 tls_mismatch 提示，这是预期行为。
     #[serde(default)]
     pub tls_enabled: bool,
+    /// v0.1.60 BUG-046: 对端的布局方向字符串（如 "LocalLeftOfRemote"）
+    /// 旧版本无此字段，默认 None → 不触发布局同步
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_direction: Option<String>,
 }
 
 impl HandshakeInfo {
@@ -142,6 +192,7 @@ impl HandshakeInfo {
             platform,
             screen_info,
             tls_enabled: false,
+            layout_direction: None,
         }
     }
 
@@ -152,6 +203,23 @@ impl HandshakeInfo {
             platform,
             screen_info,
             tls_enabled,
+            layout_direction: None,
+        }
+    }
+
+    /// 创建携带 TLS 状态和布局方向的握手信息（v0.1.60 BUG-046）
+    pub fn new_with_tls_and_layout(
+        platform: Platform,
+        screen_info: VirtualDesktop,
+        tls_enabled: bool,
+        layout_direction: Option<String>,
+    ) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            platform,
+            screen_info,
+            tls_enabled,
+            layout_direction,
         }
     }
 
@@ -167,13 +235,14 @@ impl HandshakeInfo {
         let payload = HandshakePayload {
             desktop: self.screen_info.clone(),
             tls_enabled: self.tls_enabled,
+            layout_direction: self.layout_direction.clone(),
         };
         serde_json::to_vec(&payload).unwrap_or_default()
     }
 
     /// 从字节反序列化屏幕信息（仅 desktop，向后兼容旧调用方）
     pub fn parse_screen_info(bytes: &[u8]) -> Option<VirtualDesktop> {
-        let (desktop, _) = Self::parse_payload(bytes);
+        let (desktop, _, _) = Self::parse_payload(bytes);
         if desktop.total_width == 0 && desktop.total_height == 0 && bytes.is_empty() {
             None
         } else {
@@ -186,8 +255,10 @@ impl HandshakeInfo {
     /// 解析顺序：
     /// 1. 优先按新版 HandshakePayload 解析
     /// 2. 失败则按旧版 VirtualDesktop 解析（tls_enabled 默认 false）
-    /// 3. 都失败返回默认 desktop + false
-    pub fn parse_payload(bytes: &[u8]) -> (VirtualDesktop, bool) {
+    /// 3. 都失败返回默认 desktop + false + None
+    ///
+    /// 返回 (VirtualDesktop, tls_enabled, layout_direction)
+    pub fn parse_payload(bytes: &[u8]) -> (VirtualDesktop, bool, Option<String>) {
         // 新版优先
         if let Ok(payload) = serde_json::from_slice::<HandshakePayload>(bytes) {
             // HandshakePayload 反序列化对完全空的 JSON 也成功（全用 default），
@@ -195,15 +266,15 @@ impl HandshakeInfo {
             if bytes.windows(b"desktop".len()).any(|w| w == b"desktop")
                 || bytes.windows(b"tls_enabled".len()).any(|w| w == b"tls_enabled")
             {
-                return (payload.desktop, payload.tls_enabled);
+                return (payload.desktop, payload.tls_enabled, payload.layout_direction);
             }
         }
         // 旧版回退
         if let Ok(desktop) = serde_json::from_slice::<VirtualDesktop>(bytes) {
-            return (desktop, false);
+            return (desktop, false, None);
         }
         // 全部失败
-        (VirtualDesktop::from_monitors(vec![]), false)
+        (VirtualDesktop::from_monitors(vec![]), false, None)
     }
 }
 
@@ -222,6 +293,13 @@ pub enum NetworkEvent {
     LatencyUpdated(u64),
     /// 网络延迟过高警告（>500ms）
     HighLatencyWarning(u64),
+    /// v0.1.60 BUG-046: 布局方向同步完成（被动方镜像后触发）
+    LayoutSynced {
+        /// 镜像后的新布局方向字符串（如 "LocalRightOfRemote"）
+        new_layout: String,
+        /// 本端布局是否被改变（true = 之前不互补，已自动调整）
+        was_changed: bool,
+    },
     /// 错误
     Error(String),
 }
@@ -538,6 +616,10 @@ impl ConnectionManager {
         .map_err(|e| KvmError::from_io_with_context(&e, peer_ip, peer_port))?;
 
         stream.set_nodelay(true).ok();
+        // v0.1.59 BUG-043: 应用 TCP Keepalive（失败不阻塞，仅 warn）
+        if let Err(e) = apply_tcp_keepalive(&stream) {
+            log::warn!("[Network] connect_to 应用 TCP Keepalive 失败（降级为系统默认）: {}", e);
+        }
 
         *self.peer_addr.lock().await = Some(addr.clone());
 
@@ -570,12 +652,14 @@ impl ConnectionManager {
                         remote_version: version,
                     });
                 }
-                let (desktop, tls_enabled) = HandshakeInfo::parse_payload(&screen_info);
+                let (desktop, tls_enabled, layout_direction) = HandshakeInfo::parse_payload(&screen_info);
                 log::info!(
-                    "[Handshake] 主动方收到 HandshakeAck: peer_platform={:?}, peer_tls={}",
-                    platform, tls_enabled
+                    "[Handshake] 主动方收到 HandshakeAck: peer_platform={:?}, peer_tls={}, peer_layout={:?}",
+                    platform, tls_enabled, layout_direction
                 );
-                HandshakeInfo { version, platform, screen_info: desktop, tls_enabled }
+                HandshakeInfo {
+                    version, platform, screen_info: desktop, tls_enabled, layout_direction,
+                }
             }
             other => {
                 return Err(KvmError::HandshakeFailed {
@@ -709,6 +793,10 @@ async fn handle_stream(
     local_info: &HandshakeInfo,
 ) {
     stream.set_nodelay(true).ok();
+    // v0.1.59 BUG-043: 应用 TCP Keepalive（失败不阻塞，仅 warn）
+    if let Err(e) = apply_tcp_keepalive(&stream) {
+        log::warn!("[Network] handle_stream 应用 TCP Keepalive 失败（降级为系统默认）: {}", e);
+    }
 
     let (mut reader, mut writer) = tokio::io::split(stream);
 
@@ -755,19 +843,50 @@ async fn handle_stream(
             // SAFETY: writer 在探测分支已 return，此处独占所有权
             ConnectionManager::start_write_task(writer, rx);
 
-            let (desktop, peer_tls) = HandshakeInfo::parse_payload(&screen_info);
+            let (desktop, peer_tls, peer_layout) = HandshakeInfo::parse_payload(&screen_info);
             log::info!(
-                "[Handshake] 被动方收到 Handshake: peer_platform={:?}, peer_tls={}, local_tls={}",
-                platform, peer_tls, local_info.tls_enabled
+                "[Handshake] 被动方收到 Handshake: peer_platform={:?}, peer_tls={}, local_tls={}, peer_layout={:?}",
+                platform, peer_tls, local_info.tls_enabled, peer_layout
             );
+
+            // v0.1.60 BUG-046: 被动方自动镜像布局方向
+            // 发起连接方的布局为准，被动方强制接受镜像值
+            let mut layout_was_changed = false;
+            let mut new_layout_str: Option<String> = None;
+            if let Some(ref peer_layout_str) = peer_layout {
+                let peer_layout_enum = crate::config::ScreenLayout::from_layout_string(peer_layout_str);
+                let mirrored = peer_layout_enum.mirror();
+                let mirrored_str = mirrored.to_layout_string().to_string();
+                // 读取本端当前布局
+                let local_layout_enum = crate::config::ScreenLayout::from_layout_string(
+                    &local_info.layout_direction.clone().unwrap_or_default()
+                );
+                if local_layout_enum != mirrored {
+                    log::info!(
+                        "[Handshake][LayoutSync] 被动方布局自动镜像: {:?} → {:?} (对端={:?})",
+                        local_layout_enum, mirrored, peer_layout_enum
+                    );
+                    layout_was_changed = true;
+                } else {
+                    log::info!(
+                        "[Handshake][LayoutSync] 被动方布局已互补，无需调整: local={:?}, peer={:?}",
+                        local_layout_enum, peer_layout_enum
+                    );
+                }
+                new_layout_str = Some(mirrored_str);
+            }
+
             (
                 HandshakeInfo {
                     version,
                     platform,
                     screen_info: desktop,
                     tls_enabled: peer_tls,
+                    layout_direction: peer_layout,
                 },
                 tx,
+                layout_was_changed,
+                new_layout_str,
             )
         }
         _ => {
@@ -776,8 +895,16 @@ async fn handle_stream(
         }
     };
 
-    let (peer_handshake_info, write_tx) = peer_info;
+    let (peer_handshake_info, write_tx, layout_was_changed, new_layout_str) = peer_info;
     let _ = event_tx.send(NetworkEvent::PeerHandshake(peer_handshake_info));
+
+    // v0.1.60 BUG-046: 如果布局被镜像调整，发送 LayoutSynced 事件
+    if let Some(layout_str) = new_layout_str {
+        let _ = event_tx.send(NetworkEvent::LayoutSynced {
+            new_layout: layout_str,
+            was_changed: layout_was_changed,
+        });
+    }
 
     *state.lock().await = ConnectionState::Connected;
     let _ = event_tx.send(NetworkEvent::ConnectionStateChanged(ConnectionState::Connected));
@@ -919,7 +1046,7 @@ mod tests {
             true, // ← TLS 开启
         );
         let bytes = info.screen_info_bytes();
-        let (_, tls_enabled) = HandshakeInfo::parse_payload(&bytes);
+        let (_, tls_enabled, _) = HandshakeInfo::parse_payload(&bytes);
         assert!(tls_enabled, "wire payload 必须携带 tls_enabled=true");
     }
 
@@ -931,7 +1058,7 @@ mod tests {
             false,
         );
         let bytes = info.screen_info_bytes();
-        let (_, tls_enabled) = HandshakeInfo::parse_payload(&bytes);
+        let (_, tls_enabled, _) = HandshakeInfo::parse_payload(&bytes);
         assert!(!tls_enabled);
     }
 
@@ -945,17 +1072,49 @@ mod tests {
             offset_x: 0, offset_y: 0, is_primary: true,
         }]);
         let legacy_bytes = serde_json::to_vec(&legacy_desktop).unwrap();
-        let (desktop, tls_enabled) = HandshakeInfo::parse_payload(&legacy_bytes);
+        let (desktop, tls_enabled, layout_dir) = HandshakeInfo::parse_payload(&legacy_bytes);
         assert_eq!(desktop.total_width, legacy_desktop.total_width);
         assert!(!tls_enabled, "旧格式 wire 默认 tls_enabled=false");
+        assert!(layout_dir.is_none(), "旧格式无 layout_direction");
     }
 
     #[test]
     fn test_handshake_payload_garbage_returns_default() {
         // 完全无法解析的字节，返回默认 desktop + false
         let garbage = b"not a valid json";
-        let (_desktop, tls_enabled) = HandshakeInfo::parse_payload(garbage);
+        let (_desktop, tls_enabled, layout_dir) = HandshakeInfo::parse_payload(garbage);
         assert!(!tls_enabled);
+        assert!(layout_dir.is_none());
+    }
+
+    #[test]
+    fn test_handshake_payload_carries_layout_direction() {
+        // v0.1.60 BUG-046: 握手 payload 正确携带并还原 layout_direction
+        let info = HandshakeInfo::new_with_tls_and_layout(
+            Platform::MacOS,
+            VirtualDesktop::from_monitors(vec![]),
+            true,
+            Some("LocalLeftOfRemote".to_string()),
+        );
+        let bytes = info.screen_info_bytes();
+        let (_, tls_enabled, layout_dir) = HandshakeInfo::parse_payload(&bytes);
+        assert!(tls_enabled);
+        assert_eq!(layout_dir, Some("LocalLeftOfRemote".to_string()));
+    }
+
+    #[test]
+    fn test_handshake_payload_layout_direction_none_compat() {
+        // layout_direction = None 时，序列化不包含该字段（skip_serializing_if）
+        // 反序列化旧版 payload 应得 None
+        let info = HandshakeInfo::new_with_tls(
+            Platform::Windows,
+            VirtualDesktop::from_monitors(vec![]),
+            false,
+        );
+        assert!(info.layout_direction.is_none());
+        let bytes = info.screen_info_bytes();
+        let (_, _, layout_dir) = HandshakeInfo::parse_payload(&bytes);
+        assert!(layout_dir.is_none(), "None 不应序列化，反序列化也应得 None");
     }
 
     #[tokio::test]
@@ -971,6 +1130,29 @@ mod tests {
         assert!(result.is_ok());
         // 没有其他设备响应，应该返回空列表
         assert!(result.unwrap().is_empty());
+    }
+
+    // ── BUG-043 (v0.1.59) F3 纵深防御回归测试 ──────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_apply_tcp_keepalive_succeeds_on_live_stream() {
+        // 起一个临时监听器，建立真实 TcpStream 后调 apply_tcp_keepalive，必须返回 Ok
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let res = apply_tcp_keepalive(&stream);
+        assert!(res.is_ok(), "apply_tcp_keepalive 在真实 TcpStream 上应成功，得到 {:?}", res);
+    }
+
+    #[test]
+    fn test_keepalive_constants_match_plan_spec() {
+        // plan 要求 idle=5s / interval=3s / retries=2，硬编码守门
+        assert_eq!(TCP_KEEPALIVE_IDLE_SECS, 5);
+        assert_eq!(TCP_KEEPALIVE_INTERVAL_SECS, 3);
+        assert_eq!(TCP_KEEPALIVE_RETRIES, 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

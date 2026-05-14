@@ -648,3 +648,87 @@
 | **关键教训** | (1) 同进程 active CGEventTap 会拦截自己 `event.post(HID)` 注入的事件——这是 macOS 的行为（Apple 文档："event passes through any such event taps"），必须在 tap 回调中用 tag 区分放行；(2) `CGWarpMouseCursorPosition` 只改视觉位置不产生事件——对于需要系统响应的场景（拖拽、选中）必须用 CGEvent post；(3) 竞品 Input Leap/Barrier 的 `OSXScreen::fakeMouseMove` 都是用 `CGEventPost(kCGEventLeftMouseDragged/kCGEventMouseMoved)`，行业标准做法；(4) BUG-037 修复（被控端启动 capture）是正确的，但暴露了"合成事件被自己 tap 吞"这个隐藏 bug——修一个 bug 暴露另一个是正常的级联效应，关键是修复链完整 |
 
 ---
+
+## Bug #041：Win 主控→Mac 被控 滚轮无响应（v0.1.59 修复，BUG-040 残留路径补强）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | v0.1.58 中 Win 主控端鼠标拖动可用、中键点击可用，但**滚动鼠标滚轮 Mac 被控端窗口完全不响应** |
+| **根因** | 静态代码层面 v0.1.57 已对 ScrollWheel 在 RemoteControlling 状态做合成事件 pass-through，链路看似正确。但缺少 `dx == 0 && dy == 0` 的早返回保险（极端边界场景下 Win 滚轮 hook 可能上报 0 delta），且全链路（Win 采集 / sharing 转换 / Mac 注入 / Mac CGEventTap pass-through / 协议编解码）缺少诊断日志，运行时一旦失败无定位手段 |
+| **修改方式** | (1) `src-tauri/src/platform/macos/input_inject.rs::inject_scroll` 入口加 `if dx == 0 && dy == 0 { return Ok(()); }` 保险；(2) M1 全链路日志埋点：Win `WM_MOUSEWHEEL/WM_MOUSEHWHEEL` 分支加 debug 日志（delta、is_injected、state），sharing pump 路径专门给 `MouseScroll` 帧加 debug 日志（不受 sample_count%100 限制），SendInput 失败附返回值校验，Mac inject_scroll 加 trace 日志确认 post 已调用；(3) 新增 `__tests__/bug041-scroll-inject.test.ts` 17 个端到端 invariant 守恒测试覆盖 5 层链路 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/bug041-scroll-inject.test.ts` 17 个 |
+| **关键教训** | (1) 即使代码静态层面正确，缺乏运行时观测能力的链路 bug 极难定位；(2) 注入函数 entrypoint 必须有 noop 早返回保险，避免上游意外 0 delta 导致的边界 bug；(3) 全链路 invariant 守恒测试是 squash/conversion 路径回归的最强保护 |
+
+---
+
+## Bug #042：连接成功后按钮显示「重连」而非「断开」（v0.1.59 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 连接成功后主界面按钮显示「重连 / Reconnect」而非「断开 / Disconnect」；远端主动断开后按钮文案仍显示「断开」需手动刷新 |
+| **根因** | (1) HTML 双按钮模型 `#disconnect-btn` + `#reconnect-btn` 的 hidden 切换由 `connection-status` 事件驱动，`reconnecting` 中间态错误地把 `disconnect-btn` 隐藏并显示 `reconnect-btn`；(2) 后端心跳波动事件 `reconnecting` 触发后 setConnectionStatus 误改按钮文案；(3) 前后端按钮状态没有 single-source-of-truth |
+| **修改方式** | 参考 Synergy 3 / Deskflow，重构为单按钮三态：(1) `src/index.html` 删除 disconnect-btn + reconnect-btn 双按钮，改为单一 `#connect-btn[data-state="disconnected"]`；(2) `src/i18n.js` zh/en 都新增 `btnConnecting: '连接中…' / 'Connecting…'`；(3) `src/main.js` appState 新增 `connectionPhase` 字段，新增 `updateConnectButton(phase)` 三态切换函数和 `handleConnectButtonClick` 分发器；setConnectionStatus 末尾同步 connectionPhase + 调 updateConnectButton；(4) reconnecting 事件块只更新状态徽章 className+textContent，**不调** setConnectionStatus 也**不调** updateConnectButton |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/bug042-connect-button-tri-state.test.ts` 18 个 + 重写后的 `bug-032-reconnect-button.test.js` 4 个静态断言 |
+| **关键教训** | (1) UI 状态机要做单一真相源：后端 `sharing-state-sync` snapshot 才是按钮状态唯一驱动；(2) 临时性事件（reconnecting）不能误改持久状态；(3) 按钮模型从双按钮 hidden 切换到单按钮 data-state 三态，遵循奥卡姆剃刀，比维护 hidden 互斥逻辑简单一个数量级 |
+
+---
+
+## Bug #043：Win 被控端杀进程后键鼠锁死（v0.1.59 修复，第3次复发）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | Mac 远端 KVMini 进程被 kill 后（强杀 / crash / 拔网线 / 关闭窗口），Win 被控端无法使用本机键鼠输入，连 Ctrl+Alt+Tab 安全恢复都无响应 |
+| **根因** | 此前修复（BUG-036/037 等）只在 `on_disconnected` 事件路径做兜底，但实际 read_loop 在远端进程被 kill -9 时不一定能立即收到 EOF（特别是 NAT 环境），心跳超时（HEARTBEAT_INTERVAL_SECS × HEARTBEAT_TIMEOUT_COUNT = 5×3 = 15s）窗口太长，期间状态机仍处于 RemoteControlling 完全吞物理输入；StateGuard 应用层 Watchdog 超时阈值 3s 偏短经常误触发被禁用，且无 OS 层兜底 |
+| **修改方式** | 纵深防御三层链路：(1) **OS 层 TCP Keepalive**：`kvm-core/src/network.rs` 新增 `apply_tcp_keepalive(stream)` 工具函数（idle 5s + interval 3s × retries 2，约 11s 内 RST），`connect_to` 和 `handle_stream` 双向都应用，失败仅 warn 不阻塞；(2) **应用层 Watchdog**：`src-tauri/src/state_guard.rs` 把 WATCHDOG_TIMEOUT_MS 从 3000 调到 10_000，超时后 trigger_force_idle 调 sm.on_disconnected 触发完整 force_recovery（停 Hook、解 blocker、recouple cursor、清虚拟光标、推送 disconnected snapshot）；(3) **心跳 + 人肉安全阀** 保留作为 L3/L4。三层在 5/10/15s 内逐级生效；(4) 新增 `__tests__/bug043-watchdog-recovery.test.ts` 21 个静态断言 + 2 个 cargo 单元测试 |
+| **修改次数** | 4（v0.1.55/56/57 各试过一次，本次 v0.1.59 改为纵深防御） |
+| **出现次数** | 4 |
+| **测试用例** | `__tests__/bug043-watchdog-recovery.test.ts` + `kvm-core/src/network.rs::test_apply_tcp_keepalive_succeeds_on_live_stream` + `test_keepalive_constants_match_plan_spec` |
+| **关键教训** | (1) 安全恢复链路必须有多层独立的兜底，不能依赖单一路径——任何一层失效都不能锁死用户键鼠；(2) TCP Keepalive 是 OS 内核实现，零用户态开销，应作为分布式系统断线感知的标配；(3) Watchdog 超时不能太短（误触发）也不能太长（用户体验差）——10s 是项目实测平衡点；(4) 反复出现 3 次以上的 bug 必须从架构层面解决，不能再"哪里漏了补哪里" |
+
+---
+
+## Bug #044：Win⇄Mac 跨端鼠标切换异常（v0.1.59 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | Win 主控端鼠标移到 Mac 被控端后无法切回 Win 控制本机；Mac 端鼠标也无法移动到 Win 切换控制端；整体状态切换乒乓异常 |
+| **根因** | (1) **dispatch_state_event 与 handle_one 不对称**：pump 内的边缘触发/抢占路径走 `dispatch_state_event::StateChanged` 分支，缺失 EdgeDetector active 切换 / Watchdog 生命周期管理 / sharing-state-sync snapshot 推送，状态切换"半成品"；(2) **EdgeDetector 累计 hit_count 未清零**：进入 LocalControlling 时 reset_overshoot 缺失，LocalControlling 期间 squash 路径仍喂 detect 累计 hit count，回切到 Armed 后立即触发乒乓；(3) **on_remote_switch_back EdgeReturn 路径无静默期**：v0.1.52 只对 Preempt 加了 800ms 静默期，EdgeReturn 路径主控端鼠标可能仍贴着边缘，回 Armed 瞬间立即重新触发 LocalControlling |
+| **修改方式** | (1) `dispatch_state_event` 增加 `edge_detector` + `state_guard` 参数，StateChanged 分支补齐 Watchdog start/stop（被控端 RemoteControlling 入态/离态）+ EdgeDetector::set_active(to == Armed) + reset_overshoot + 入 Armed 时 enter_silence(800) + 推送完整 sharing-state-sync 快照，与 handle_one::StateChanged 行为完全对称；(2) `handle_events_on_edge_trigger` 透传新参数，3 个调用点都更新；(3) pump 入口新增 `state_guard_arc` 和 `edge_detector_for_dispatch` Arc::clone；(4) `on_remote_switch_back` 把 enter_silence(800) + reset_overshoot 从"仅 Preempt"扩展到"所有 reason 通用"；(5) 新增 `__tests__/bug044-cross-end-switch.test.ts` 20 个静态断言覆盖 RC#1/RC#2/RC#3 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/bug044-cross-end-switch.test.ts` 20 个 |
+| **关键教训** | (1) 多入口（handle_one + dispatch_state_event）共用同一类 StateEvent 时，**两条路径的副作用必须对称**，否则边缘路径就是隐藏 bug 温床；(2) EdgeDetector 这种带累计计数的状态对象，在状态切换时必须同时考虑 active 开关 + 计数清零 + 静默期三件套，缺一会乒乓；(3) 静默期不能只针对 Preempt——任何回切场景（自然回切 EdgeReturn / 抢占回切 Preempt）的物理鼠标都可能仍贴边，必须通用化 |
+
+---
+
+## Bug #045：Toast 互斥缺失 —— "未连接"和"已连接"同时显示（v0.1.60 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | 截图中橙色"未连接"（#reconnect-toast）和绿色"已连接到 30.19.32.36"（#success-toast）同时可见，状态矛盾 |
+| **根因** | `showSuccess()` 弹绿色 Toast 时没有清除已显示的橙色 `#reconnect-toast`，反之亦然。两个 Toast 有各自独立的定时器（4s/3s），在网络抖动（先 disconnected 后立即 connected）时会重叠共存 |
+| **修改方式** | 三个 Toast 函数（`showSuccess`/`showReconnectToast`/`showError`）入口处统一互斥：弹出自己前先隐藏其他两个 Toast + clearTimeout 对方定时器。`showSuccess` 还额外调 `hideReconnectStatus()` 清除重连进度行。同一时间最多只显示一个 Toast |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `__tests__/bug045-toast-mutex.test.ts` 8 个 |
+| **关键教训** | 多个独立的浮层/Toast 元素之间如果表达互斥的语义状态（连接/断连/错误），必须在代码层面做互斥守卫，不能依赖"定时器恰好错开"的运气 |
+
+---
+
+## Bug #046：显示器布局两端不同步 —— 鼠标切过去回不来（v0.1.60 修复）
+
+| 字段 | 内容 |
+|------|------|
+| **现象** | Mac 作为远端移动到右侧后 Win 没有出现鼠标且无法移动回来；Win 作为远端移动到 Mac 之后无法移动回去 |
+| **根因** | 两端的显示器布局（edge direction）完全独立配置（各自读 layout.json），握手时不交换 layout direction。如果两端都配了 LocalLeftOfRemote，鼠标切过去后被控端的 EdgeDetector detect_remote_return() 方向也反了，永远撞不到反向边缘。协议帧中没有 LayoutSync 类型消息 |
+| **修改方式** | 类似 Logitech Flow 的方案：(1) `kvm-core/config.rs` 新增 `ScreenLayout::mirror()`（确定性映射 LocalLeft↔LocalRight, LocalAbove↔LocalBelow）+ `to_layout_string()`/`from_layout_string()` 转换函数；(2) `HandshakePayload` 新增 `layout_direction: Option<String>` 字段（`#[serde(default)]` 向后兼容旧版）；(3) `local_handshake_info()` 读取 layout.json 携带到握手包中；(4) 被动方 `handle_stream()` 收到对端 layout 后自动计算镜像值；(5) `NetworkEvent` 新增 `LayoutSynced` 变体；(6) `connection/mod.rs` 事件循环捕获 LayoutSynced → 保存 layout.json + 重建 EdgeDetector + emit `layout-synced` 前端事件；(7) `SharingManager::rebuild_edge_detector()` 用新布局重建边缘检测器；(8) 前端 `main.js` 监听 `layout-synced` 事件，刷新 UI + Toast 提示"已根据对方配置自动调整显示器布局"；(9) i18n 新增 `layoutAutoSynced` 中英文案 |
+| **修改次数** | 1 |
+| **出现次数** | 1 |
+| **测试用例** | `kvm-core/config::tests::test_screen_layout_mirror` + `test_screen_layout_round_trip` + `test_screen_layout_to/from_layout_string` (Rust 9 个) + `network::tests::test_handshake_payload_carries_layout_direction` + `test_handshake_payload_layout_direction_none_compat` (Rust 2 个) + `__tests__/bug046-layout-sync.test.ts` (前端 24 个) = 共 35 个 |
+| **关键教训** | (1) P2P 架构下，任何需要"两端一致"的配置都必须在握手时交换/同步，不能依赖用户手动保证；(2) 2 台机器 + 左右方向只有 1 个自由度，镜像是确定性计算（对合映射），不存在冲突；(3) 竞品分析很重要——Logitech Flow 的"发起方为准+自动镜像"方案完美匹配 KVMini 的 P2P 两端模型；(4) `#[serde(default, skip_serializing_if)]` 是协议向后兼容的标准技巧 |
+
+---

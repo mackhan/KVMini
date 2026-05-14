@@ -220,6 +220,12 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
+    // v0.1.59 BUG-041 增强：dx==0 && dy==0 时早返回，避免空 ScrollWheel 事件
+    if dx == 0 && dy == 0 {
+        log::trace!("[Mac/Inject] scroll skip dx=dy=0");
+        return Ok(());
+    }
+
     // v0.1.52: 改回 SCROLL_UNIT_LINE(=1) + 除以 120（Barrier 行业标准方案）
     // 协议层滚轮单位为 ±120（与 WM_MOUSEWHEEL WHEEL_DELTA 一致），
     // macOS LINE 单位 = 1 行；传入 ±1 为自然一格；传 ±120 = 滚 120 行（过快）。
@@ -241,6 +247,7 @@ fn inject_scroll(dx: i32, dy: i32) -> KvmResult<()> {
         .map_err(|_| platform_err!("CGEvent::new_scroll_event", "创建滚轮事件失败"))?;
     tag_synthetic(&event);
     event.post(core_graphics::event::CGEventTapLocation::HID);
+    log::trace!("[Mac/Inject] scroll posted lines(x={} y={})", lines_x, lines_y);
     Ok(())
 }
 

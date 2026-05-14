@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.58"
+version = "0.1.60"
 edition = "2021"
 authors = ["KVMini Team"]
 license = "MIT"
@@ -22,6 +22,8 @@ bincode = "1.3"
 rcgen = "0.13"
 sha2 = "0.10"
 hex = "0.4"
+# v0.1.59 BUG-043 F3 纵深防御：TCP 层 Keepalive（idle=5s, interval=3s, retries=2）
+socket2 = { version = "0.5", features = ["all"] }
 
 # 修复 macOS 26 (Tahoe) beta 启动崩溃问题
 # 根因：objc2-0.6.4 的 MainThreadMarker::new() 使用 pthread_main_np() == 1 检测主线程

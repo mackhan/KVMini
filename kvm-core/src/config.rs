@@ -38,6 +38,40 @@ impl ScreenLayout {
     pub fn remote_entry_edge(&self) -> crate::protocol::ScreenEdge {
         self.trigger_edge().opposite()
     }
+
+    /// 镜像：返回对端应该使用的互补布局方向
+    ///
+    /// BUG-046 修复核心函数。2 台机器 + 左右/上下方向 = 确定性映射，不可能冲突。
+    /// - LocalLeft ↔ LocalRight
+    /// - LocalAbove ↔ LocalBelow
+    pub fn mirror(&self) -> Self {
+        match self {
+            Self::LocalLeft => Self::LocalRight,
+            Self::LocalRight => Self::LocalLeft,
+            Self::LocalAbove => Self::LocalBelow,
+            Self::LocalBelow => Self::LocalAbove,
+        }
+    }
+
+    /// 转为前端 layout 字符串（与 src-tauri/src/config.rs LayoutConfig.layout 一致）
+    pub fn to_layout_string(&self) -> &'static str {
+        match self {
+            Self::LocalLeft => "LocalLeftOfRemote",
+            Self::LocalRight => "LocalRightOfRemote",
+            Self::LocalAbove => "LocalAboveRemote",
+            Self::LocalBelow => "LocalBelowRemote",
+        }
+    }
+
+    /// 从前端 layout 字符串解析（兼容两种命名风格）
+    pub fn from_layout_string(s: &str) -> Self {
+        match s {
+            "LocalRightOfRemote" | "LocalRight" => Self::LocalRight,
+            "LocalAboveRemote" | "LocalAbove" => Self::LocalAbove,
+            "LocalBelowRemote" | "LocalBelow" => Self::LocalBelow,
+            _ => Self::LocalLeft, // 默认 + "LocalLeftOfRemote" 兼容
+        }
+    }
 }
 
 /// 日志级别
@@ -160,5 +194,52 @@ mod tests {
         assert_eq!(ScreenLayout::LocalRight.remote_entry_edge(), ScreenEdge::Right);
         assert_eq!(ScreenLayout::LocalAbove.remote_entry_edge(), ScreenEdge::Top);
         assert_eq!(ScreenLayout::LocalBelow.remote_entry_edge(), ScreenEdge::Bottom);
+    }
+
+    #[test]
+    fn test_screen_layout_mirror() {
+        // BUG-046: 镜像是确定性映射
+        assert_eq!(ScreenLayout::LocalLeft.mirror(), ScreenLayout::LocalRight);
+        assert_eq!(ScreenLayout::LocalRight.mirror(), ScreenLayout::LocalLeft);
+        assert_eq!(ScreenLayout::LocalAbove.mirror(), ScreenLayout::LocalBelow);
+        assert_eq!(ScreenLayout::LocalBelow.mirror(), ScreenLayout::LocalAbove);
+        // 双重镜像 = 原值（对合性）
+        assert_eq!(ScreenLayout::LocalLeft.mirror().mirror(), ScreenLayout::LocalLeft);
+        assert_eq!(ScreenLayout::LocalRight.mirror().mirror(), ScreenLayout::LocalRight);
+        assert_eq!(ScreenLayout::LocalAbove.mirror().mirror(), ScreenLayout::LocalAbove);
+        assert_eq!(ScreenLayout::LocalBelow.mirror().mirror(), ScreenLayout::LocalBelow);
+    }
+
+    #[test]
+    fn test_screen_layout_to_layout_string() {
+        assert_eq!(ScreenLayout::LocalLeft.to_layout_string(), "LocalLeftOfRemote");
+        assert_eq!(ScreenLayout::LocalRight.to_layout_string(), "LocalRightOfRemote");
+        assert_eq!(ScreenLayout::LocalAbove.to_layout_string(), "LocalAboveRemote");
+        assert_eq!(ScreenLayout::LocalBelow.to_layout_string(), "LocalBelowRemote");
+    }
+
+    #[test]
+    fn test_screen_layout_from_layout_string() {
+        // 长格式
+        assert_eq!(ScreenLayout::from_layout_string("LocalLeftOfRemote"), ScreenLayout::LocalLeft);
+        assert_eq!(ScreenLayout::from_layout_string("LocalRightOfRemote"), ScreenLayout::LocalRight);
+        assert_eq!(ScreenLayout::from_layout_string("LocalAboveRemote"), ScreenLayout::LocalAbove);
+        assert_eq!(ScreenLayout::from_layout_string("LocalBelowRemote"), ScreenLayout::LocalBelow);
+        // 短格式
+        assert_eq!(ScreenLayout::from_layout_string("LocalLeft"), ScreenLayout::LocalLeft);
+        assert_eq!(ScreenLayout::from_layout_string("LocalRight"), ScreenLayout::LocalRight);
+        assert_eq!(ScreenLayout::from_layout_string("LocalAbove"), ScreenLayout::LocalAbove);
+        assert_eq!(ScreenLayout::from_layout_string("LocalBelow"), ScreenLayout::LocalBelow);
+        // 未知字符串 → 默认 LocalLeft
+        assert_eq!(ScreenLayout::from_layout_string("unknown"), ScreenLayout::LocalLeft);
+        assert_eq!(ScreenLayout::from_layout_string(""), ScreenLayout::LocalLeft);
+    }
+
+    #[test]
+    fn test_screen_layout_round_trip() {
+        // to_layout_string → from_layout_string 往返一致
+        for layout in &[ScreenLayout::LocalLeft, ScreenLayout::LocalRight, ScreenLayout::LocalAbove, ScreenLayout::LocalBelow] {
+            assert_eq!(ScreenLayout::from_layout_string(layout.to_layout_string()), *layout);
+        }
     }
 }

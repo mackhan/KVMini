@@ -279,6 +279,38 @@ impl KvmConnectionManager {
                                             );
                                             sm.on_disconnected(&app_for_sharing).await;
                                         }
+                                        // v0.1.60 BUG-046: 布局同步 → 保存 layout.json + emit 前端事件 + 重建 EdgeDetector
+                                        NetworkEvent::LayoutSynced { new_layout, was_changed } => {
+                                            log::info!(
+                                                "[LayoutSync] 收到布局同步事件: new_layout={}, was_changed={}",
+                                                new_layout, was_changed
+                                            );
+                                            // 仅当布局实际变化时才保存 + 重建
+                                            if *was_changed {
+                                                // 保存到 layout.json
+                                                let mut layout_cfg = crate::config::load_layout_config();
+                                                layout_cfg.layout = new_layout.clone();
+                                                if let Err(e) = crate::config::save_layout_config(&layout_cfg) {
+                                                    log::error!("[LayoutSync] 保存 layout.json 失败: {}", e);
+                                                } else {
+                                                    log::info!("[LayoutSync] layout.json 已更新: {}", new_layout);
+                                                }
+                                                // 重建 EdgeDetector（使用新布局方向）
+                                                sm.rebuild_edge_detector().await;
+                                            } else {
+                                                log::info!("[LayoutSync] 布局已互补，无需保存/重建");
+                                            }
+                                            // emit 前端事件（无论是否变化，前端自行判断是否弹 Toast）
+                                            #[derive(serde::Serialize, Clone)]
+                                            struct LayoutSyncedPayload {
+                                                new_layout: String,
+                                                was_changed: bool,
+                                            }
+                                            let _ = app_for_sharing.emit("layout-synced", LayoutSyncedPayload {
+                                                new_layout: new_layout.clone(),
+                                                was_changed: *was_changed,
+                                            });
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -382,6 +414,16 @@ pub fn network_event_to_connection_event(
                 local_tls,
                 remote_tls,
             })
+        }
+        NetworkEvent::LayoutSynced { new_layout, was_changed } => {
+            // v0.1.60 BUG-046: 布局同步事件 → 单独推送 layout-synced 前端事件
+            // 不走 connection-status 通道，返回 None；
+            // 实际推送由 start_event_loop 中的专用分支处理
+            log::info!(
+                "[Connection] LayoutSynced: new_layout={}, was_changed={}",
+                new_layout, was_changed
+            );
+            None
         }
         NetworkEvent::LatencyUpdated(ms) => {
             Some(ConnectionEvent {

@@ -41,6 +41,12 @@ impl InputExecutor for WinInputExecutor {
                 let abs_x = if vscreen_w > 0 { (rel_x as i64 * 65535 / vscreen_w as i64) as i32 } else { 0 };
                 let abs_y = if vscreen_h > 0 { (rel_y as i64 * 65535 / vscreen_h as i64) as i32 } else { 0 };
 
+                // v0.1.59 M1：注入路径全链路日志（trace 级别，不影响 release 性能）
+                log::trace!(
+                    "[Win/Inject] move_mouse x={} y={} → vscreen({},{},{}x{}) abs=({},{})",
+                    x, y, vscreen_x, vscreen_y, vscreen_w, vscreen_h, abs_x, abs_y
+                );
+
                 let mut input: INPUT = std::mem::zeroed();
                 input.type_ = INPUT_MOUSE;
                 let mi = input.u.mi_mut();
@@ -48,7 +54,10 @@ impl InputExecutor for WinInputExecutor {
                 mi.dy = abs_y;
                 // MOUSEEVENTF_VIRTUALDESK: 坐标相对于整个虚拟桌面（多显示器）
                 mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                if n != 1 {
+                    log::warn!("[Win/Inject] move_mouse SendInput 返回 {}（期望 1）", n);
+                }
             }
         }
         Ok(())
@@ -59,6 +68,8 @@ impl InputExecutor for WinInputExecutor {
         {
             use winapi::um::winuser::*;
             unsafe {
+                // v0.1.59 M1：按键注入日志
+                log::debug!("[Win/Inject] mouse_down {:?}", button);
                 let mut input: INPUT = std::mem::zeroed();
                 input.type_ = INPUT_MOUSE;
                 let mi = input.u.mi_mut();
@@ -76,7 +87,10 @@ impl InputExecutor for WinInputExecutor {
                         mi.mouseData = XBUTTON2 as u32;
                     }
                 }
-                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                if n != 1 {
+                    log::warn!("[Win/Inject] mouse_down SendInput 返回 {}（期望 1）", n);
+                }
             }
         }
         Ok(())
@@ -87,6 +101,7 @@ impl InputExecutor for WinInputExecutor {
         {
             use winapi::um::winuser::*;
             unsafe {
+                log::debug!("[Win/Inject] mouse_up {:?}", button);
                 let mut input: INPUT = std::mem::zeroed();
                 input.type_ = INPUT_MOUSE;
                 let mi = input.u.mi_mut();
@@ -104,7 +119,10 @@ impl InputExecutor for WinInputExecutor {
                         mi.mouseData = XBUTTON2 as u32;
                     }
                 }
-                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                if n != 1 {
+                    log::warn!("[Win/Inject] mouse_up SendInput 返回 {}（期望 1）", n);
+                }
             }
         }
         Ok(())
@@ -117,12 +135,16 @@ impl InputExecutor for WinInputExecutor {
             unsafe {
                 // v0.1.50: native_keycode 是 X11 KeySym，转换为 VK 后注入
                 let vk = keysym_to_vk(native_keycode);
+                log::debug!("[Win/Inject] key_down keysym={:#06X} vk={:#04X}", native_keycode, vk);
                 let mut input: INPUT = std::mem::zeroed();
                 input.type_ = INPUT_KEYBOARD;
                 let ki = input.u.ki_mut();
                 ki.wVk = vk;
                 ki.dwFlags = 0;
-                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                if n != 1 {
+                    log::warn!("[Win/Inject] key_down SendInput 返回 {}（期望 1）", n);
+                }
             }
         }
         Ok(())
@@ -135,12 +157,16 @@ impl InputExecutor for WinInputExecutor {
             unsafe {
                 // v0.1.50: native_keycode 是 X11 KeySym，转换为 VK 后注入
                 let vk = keysym_to_vk(native_keycode);
+                log::debug!("[Win/Inject] key_up keysym={:#06X} vk={:#04X}", native_keycode, vk);
                 let mut input: INPUT = std::mem::zeroed();
                 input.type_ = INPUT_KEYBOARD;
                 let ki = input.u.ki_mut();
                 ki.wVk = vk;
                 ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                if n != 1 {
+                    log::warn!("[Win/Inject] key_up SendInput 返回 {}（期望 1）", n);
+                }
             }
         }
         Ok(())
@@ -151,6 +177,10 @@ impl InputExecutor for WinInputExecutor {
         {
             use winapi::um::winuser::*;
             unsafe {
+                // v0.1.59 M1：F1 滚轮诊断的核心埋点
+                // 协议层 dx/dy 已是 ±120 的 wheel delta（与 WHEEL_DELTA 一致），
+                // SendInput MOUSEEVENTF_WHEEL/HWHEEL 期望 mouseData = WHEEL_DELTA 倍数。
+                log::debug!("[Win/Inject] scroll dx={} dy={}", dx, dy);
                 if dy != 0 {
                     let mut input: INPUT = std::mem::zeroed();
                     input.type_ = INPUT_MOUSE;
@@ -158,7 +188,12 @@ impl InputExecutor for WinInputExecutor {
                     // v0.1.41: 正确使用 i32 as u32 保留符号位（负值滚动方向）
                     mi.mouseData = dy as u32;
                     mi.dwFlags = MOUSEEVENTF_WHEEL;
-                    SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                    let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                    if n != 1 {
+                        log::warn!("[Win/Inject] scroll(WHEEL) SendInput 返回 {}（期望 1，dy={}）", n, dy);
+                    } else {
+                        log::trace!("[Win/Inject] scroll(WHEEL) 注入成功 dy={}", dy);
+                    }
                 }
                 if dx != 0 {
                     let mut input: INPUT = std::mem::zeroed();
@@ -166,7 +201,12 @@ impl InputExecutor for WinInputExecutor {
                     let mi = input.u.mi_mut();
                     mi.mouseData = dx as u32;
                     mi.dwFlags = MOUSEEVENTF_HWHEEL;
-                    SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                    let n = SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+                    if n != 1 {
+                        log::warn!("[Win/Inject] scroll(HWHEEL) SendInput 返回 {}（期望 1，dx={}）", n, dx);
+                    } else {
+                        log::trace!("[Win/Inject] scroll(HWHEEL) 注入成功 dx={}", dx);
+                    }
                 }
             }
         }

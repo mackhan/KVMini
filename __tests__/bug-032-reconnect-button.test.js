@@ -1,100 +1,59 @@
 /**
- * BUG-032 回归测试
- * 
- * 现象：连接成功后按钮正确显示"断开"，但后续 reconnecting 事件导致按钮错误切换为"重连"
- * 根因：reconnecting 事件处理器 (L454-459) 无条件调用 updateConnectionButtons(false)，
- *       即使 appState.connected 实际上仍为 true（心跳波动触发 reconnecting 但连接未真正断开）
- * 修复：updateConnectionButtons 内部读取 appState.connected 作为单一真相源，忽略外部参数
+ * BUG-032 回归测试（v0.1.59 适配单按钮三态新模型）
+ *
+ * 历史：旧测试基于"disconnect-btn + reconnect-btn 双按钮 hidden 切换"模型，
+ *       已在 v0.1.59 BUG-042 单按钮重构后过时。
+ *
+ * 新模型下 BUG-032 的等价不变量：
+ *   - reconnecting 事件不能把按钮 phase 切到 disconnected
+ *   - 已连接状态下心跳波动只更新状态徽章，按钮保持 connected
+ *
+ * 这里通过静态断言保护，main.js 不能在 reconnecting 块里调 setConnectionStatus('connecting')
+ * 或直接重置 connectionPhase 为非 connected 值。
  */
 
-describe('BUG-032: reconnecting 事件不应导致已连接状态下按钮误显示', () => {
-    let disconnectBtn, reconnectBtn;
+const fs = require('fs');
+const path = require('path');
 
-    beforeEach(() => {
-        // 模拟 DOM 元素
-        disconnectBtn = document.createElement('button');
-        disconnectBtn.id = 'disconnect-btn';
-        disconnectBtn.classList.add('hidden');
-        document.body.appendChild(disconnectBtn);
+describe('BUG-032 (v0.1.59 新模型): reconnecting 事件不应改变按钮 phase', () => {
+    const main = () => fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
 
-        reconnectBtn = document.createElement('button');
-        reconnectBtn.id = 'reconnect-btn';
-        reconnectBtn.classList.add('hidden');
-        document.body.appendChild(reconnectBtn);
-
-        // 模拟 elements 对象
-        global.elements = {
-            disconnectBtn,
-            reconnectBtn,
-        };
-
-        // 模拟 appState
-        global.appState = {
-            connected: true,
-        };
-
-        // 加载 main.js 并注入 mock
-        const main = require('../src/main.js');
-        main.__setElements(global.elements);
-        main.__setAppState(global.appState);
+    test('reconnecting 块内不调用 setConnectionStatus("connecting") 或 setConnectionStatus("disconnected")', () => {
+        const src = main();
+        const idx = src.search(/eventType\s*===\s*['"]reconnecting['"]/);
+        expect(idx).toBeGreaterThan(0);
+        // 截到下个 } else if 或 } else {
+        const slice = src.slice(idx, idx + 1500);
+        const endIdx = slice.search(/\n\s+\}\s+else\s+if|\n\s+\}\s+else\s*\{/);
+        const block = endIdx > 0 ? slice.slice(0, endIdx) : slice;
+        // 排除注释
+        const codeOnly = block.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+        expect(/setConnectionStatus\(['"]connecting['"]\)/.test(codeOnly)).toBe(false);
+        expect(/setConnectionStatus\(['"]disconnected['"]\)/.test(codeOnly)).toBe(false);
     });
 
-    afterEach(() => {
-        document.body.innerHTML = '';
-        delete global.elements;
-        delete global.appState;
+    test('reconnecting 块内不调用 updateConnectButton(...)（按钮 phase 维持原状）', () => {
+        const src = main();
+        const idx = src.search(/eventType\s*===\s*['"]reconnecting['"]/);
+        const slice = src.slice(idx, idx + 1500);
+        const endIdx = slice.search(/\n\s+\}\s+else\s+if|\n\s+\}\s+else\s*\{/);
+        const block = endIdx > 0 ? slice.slice(0, endIdx) : slice;
+        const codeOnly = block.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+        expect(/updateConnectButton\s*\(/.test(codeOnly)).toBe(false);
     });
 
-    test('updateConnectionButtons 应以 appState.connected 为准，忽略参数', () => {
-        // 加载被测函数 —— updateConnectionButtons 将从 appState.connected 读取状态
-        const { updateConnectionButtons } = require('../src/main.js');
-
-        // appState.connected = true 时，即使传入 false 也应该显示断开按钮
-        appState.connected = true;
-        updateConnectionButtons(false); // 模拟 reconnecting 事件传入 false
-
-        expect(disconnectBtn.classList.contains('hidden')).toBe(false);
-        expect(reconnectBtn.classList.contains('hidden')).toBe(true);
+    test('disconnected 事件块内必须调 setConnectionStatus("disconnected")（确保真正断开时按钮回到 connect 文案）', () => {
+        const src = main();
+        const idx = src.search(/eventType\s*===\s*['"]disconnected['"]/);
+        expect(idx).toBeGreaterThan(0);
+        const slice = src.slice(idx, idx + 1500);
+        const endIdx = slice.search(/\n\s+\}\s+else\s+if|\n\s+\}\s+else\s*\{/);
+        const block = endIdx > 0 ? slice.slice(0, endIdx) : slice;
+        expect(/setConnectionStatus\(['"]disconnected['"]\)/.test(block)).toBe(true);
     });
 
-    test('appState.connected = false 时应正确显示重连按钮', () => {
-        const { updateConnectionButtons } = require('../src/main.js');
-
-        appState.connected = false;
-        updateConnectionButtons(false);
-
-        expect(disconnectBtn.classList.contains('hidden')).toBe(true);
-        expect(reconnectBtn.classList.contains('hidden')).toBe(false);
-    });
-
-    test('多次 reconnecting 事件后按钮状态不变（connected=true 场景）', () => {
-        const { updateConnectionButtons } = require('../src/main.js');
-
-        appState.connected = true;
-
-        // 模拟多次心跳波动引发的 reconnecting 事件
-        for (let i = 0; i < 5; i++) {
-            updateConnectionButtons(false);
-        }
-
-        // 按钮必须仍显示"断开连接"
-        expect(disconnectBtn.classList.contains('hidden')).toBe(false);
-        expect(disconnectBtn.disabled).toBe(false);
-        expect(reconnectBtn.classList.contains('hidden')).toBe(true);
-    });
-
-    test('真正断连后按钮应切换为重连', () => {
-        const { updateConnectionButtons } = require('../src/main.js');
-
-        // 先连接状态
-        appState.connected = true;
-        updateConnectionButtons(true);
-        expect(disconnectBtn.classList.contains('hidden')).toBe(false);
-
-        // 真正断连
-        appState.connected = false;
-        updateConnectionButtons(false);
-        expect(disconnectBtn.classList.contains('hidden')).toBe(true);
-        expect(reconnectBtn.classList.contains('hidden')).toBe(false);
+    test('updateConnectButton 必须存在（单按钮三态实现的核心）', () => {
+        const src = main();
+        expect(/function\s+updateConnectButton\s*\(\s*phase\s*\)/.test(src)).toBe(true);
     });
 });

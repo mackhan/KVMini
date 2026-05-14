@@ -1129,6 +1129,36 @@ fn request_admin_elevation() -> Result<(), String> {
 fn get_changelog() -> Vec<tauri_commerce::changelog::ChangelogEntry> {
     vec![
         tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.60".to_string(),
+            date: "2026-05-14".to_string(),
+            changes: vec![
+                "修复 Toast 提示互斥问题（BUG-045）：showSuccess / showReconnectToast / showError 三个 Toast 入口互斥，弹出新 Toast 前先隐藏其他两个并清除其定时器，避免多个提示叠加遮挡".to_string(),
+                "显示器布局握手自动同步（BUG-046）：连接握手时发起方携带 layout_direction，被动方自动镜像对齐；HandshakePayload 扩展 layout_direction 字段（serde(default) 向后兼容）；新增 NetworkEvent::LayoutSynced 事件驱动前端 UI 刷新 + Toast 提示".to_string(),
+            ],
+            changes_en: vec![
+                "Fix Toast notification mutual exclusion (BUG-045): showSuccess / showReconnectToast / showError are now mutually exclusive — showing a new toast hides the others and clears their timers, preventing overlapping notifications".to_string(),
+                "Auto-sync display layout during handshake (BUG-046): initiator sends layout_direction in handshake, passive side auto-mirrors to align; HandshakePayload extended with layout_direction field (serde(default) for backward compat); added NetworkEvent::LayoutSynced event driving frontend UI refresh + Toast notification".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
+            version: "0.1.59".to_string(),
+            date: "2026-05-14".to_string(),
+            changes: vec![
+                "修复 Win 主控端鼠标滚轮无法滚动 Mac 被控端窗口（BUG-041）：补全 Mac inject_scroll dx==0&&dy==0 早返回保险，新增 Win 采集到 Mac 注入端到端 17 项 invariant 守恒测试，全链路埋入诊断日志".to_string(),
+                "重构连接按钮为单按钮三态（BUG-042）：参考 Synergy 3 / Deskflow，废弃旧的「断开+重连」双按钮，统一为 Connect/Connecting/Disconnect 三态切换；reconnecting 事件不再误改按钮文案，状态完全由后端 sharing-state-sync 驱动".to_string(),
+                "Win 被控端杀进程键鼠锁死纵深防御（BUG-043）：新增 OS 层 TCP Keepalive (idle 5s + interval 3s × retries 2)，应用层 Watchdog 超时阈值从 3s 提升到 10s 触发 force_recovery，三层链路（5s/10s/15s）逐级生效，远端任意方式下线后本机键鼠 ≤12s 完全恢复，Ctrl+Alt+S 安全阀立即可用".to_string(),
+                "修复跨端鼠标切换异常（BUG-044）：dispatch_state_event 与 handle_one 行为对称（补齐 Watchdog 生命周期、EdgeDetector active 切换、sharing-state-sync 推送）；on_remote_switch_back 在 EdgeReturn/Preempt 任意场景都进入 800ms 静默期 + reset_overshoot 防止鼠标贴边导致的乒乓回切".to_string(),
+                "F5 全链路诊断日志基础设施：Win/Mac 双端 capture/inject/sharing/connection/state_guard 关键路径埋点（trace/debug/info/warn 分级），可通过 RUST_LOG=kvmini=debug 打开".to_string(),
+            ],
+            changes_en: vec![
+                "Fix Win controller mouse wheel not scrolling on Mac target (BUG-041): added dx==0 && dy==0 early-return guard in Mac inject_scroll, added 17 invariant end-to-end tests covering Win capture → Mac inject pipeline, instrumented full chain with diagnostic logs".to_string(),
+                "Refactor connection button to single button tri-state (BUG-042): inspired by Synergy 3 / Deskflow, deprecated the old Disconnect + Reconnect dual buttons, unified to Connect / Connecting / Disconnect tri-state; reconnecting event no longer corrupts button text, state fully driven by backend sharing-state-sync".to_string(),
+                "Win target killed-process keyboard/mouse lockup defense in depth (BUG-043): added OS-layer TCP Keepalive (idle 5s + interval 3s × retries 2), raised application-layer Watchdog timeout from 3s to 10s with force_recovery, three-layer chain (5s/10s/15s) cascades; local input restores within 12s after remote dies in any way, Ctrl+Alt+S safety valve always available".to_string(),
+                "Fix cross-end mouse switching anomalies (BUG-044): dispatch_state_event now symmetric with handle_one (Watchdog lifecycle, EdgeDetector active toggle, sharing-state-sync push); on_remote_switch_back now enters 800ms silence period + reset_overshoot for both EdgeReturn and Preempt to prevent edge-bouncing ping-pong".to_string(),
+                "F5 full-chain diagnostic log infrastructure: instrumented Win/Mac capture/inject/sharing/connection/state_guard hot paths (trace/debug/info/warn levels), enable via RUST_LOG=kvmini=debug".to_string(),
+            ],
+        },
+        tauri_commerce::changelog::ChangelogEntry {
             version: "0.1.57".to_string(),
             date: "2026-05-11".to_string(),
             changes: vec![
